@@ -19,6 +19,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 
 	"monitor/internal/config"
+	"monitor/internal/identity"
 	"monitor/internal/monitor"
 )
 
@@ -146,8 +147,9 @@ func main() {
 		}
 	}
 
-	// 变量注入：替换模板占位符
-	probeURL, probeBody, probeHeaders, probeSuccessContains, _, _ := monitor.InjectVariables(target, nil)
+	// 变量注入：替换模板占位符（使用真实 UserIDManager，确保 device_id 等字段非空）
+	uidMgr := identity.NewUserIDManager()
+	probeURL, probeBody, probeHeaders, probeSuccessContains, _, _ := monitor.InjectVariables(target, uidMgr)
 
 	// 构建输出标识
 	var targetInfo string

@@ -161,13 +161,13 @@ export function useAdmin() {
   }, [token, authHeaders, fetchList]);
 
   // Publish
-  const publishSubmission = useCallback(async (publicId: string) => {
+  const publishSubmission = useCallback(async (publicId: string, board = 'hot') => {
     if (!token) return;
     setError(null);
     setSuggestedChannel('');
 
     try {
-      await apiPost(`/api/admin/submissions/${publicId}/publish`, {}, { headers: authHeaders() });
+      await apiPost(`/api/admin/submissions/${publicId}/publish`, { board }, { headers: authHeaders() });
       fetchList();
       setSelectedSubmission(null);
     } catch (e) {

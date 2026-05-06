@@ -107,6 +107,8 @@ func InjectVariables(cfg *config.ServiceConfig, uidMgr *identity.UserIDManager) 
 		"{{USER_ID}}", userID,
 		"{{USER_ID_HASH}}", userIDHash,
 		"{{RAND_UUID}}", uuid.New().String(),
+		"{{RAND_UUID2}}", uuid.New().String(),
+		"{{USER_ACCOUNT_UUID}}", identity.DeriveUUID(userIDHash, "account_uuid"),
 		"{{PROMPT}}", prompt,
 		"{{EXPECTED_ANSWER}}", expectedAnswer,
 		"{{ARITH_A}}", strconv.Itoa(a),

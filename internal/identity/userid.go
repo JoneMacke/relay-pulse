@@ -95,3 +95,9 @@ func uuidFromHash(hash string) string {
 	s := hash[:32]
 	return fmt.Sprintf("%s-%s-%s-%s-%s", s[0:8], s[8:12], s[12:16], s[16:20], s[20:32])
 }
+
+// DeriveUUID 用 hash + salt 派生一个稳定的 UUID，不同 salt 产生不同结果。
+func DeriveUUID(hash, salt string) string {
+	salted := sha256Hex(hash + salt)
+	return uuidFromHash(salted)
+}

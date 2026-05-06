@@ -108,7 +108,7 @@ export default function AdminPage() {
                     onTest={() => testSubmission(selectedSubmission.public_id)}
                     onReject={(note) => rejectSubmission(selectedSubmission.public_id, note)}
                     onDelete={() => deleteSubmission(selectedSubmission.public_id)}
-                    onPublish={() => publishSubmission(selectedSubmission.public_id)}
+                    onPublish={(board) => publishSubmission(selectedSubmission.public_id, board)}
                     suggestedChannel={suggestedChannel}
                     onBack={() => setSelectedSubmission(null)}
                   />

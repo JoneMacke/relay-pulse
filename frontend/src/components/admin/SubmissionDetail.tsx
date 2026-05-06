@@ -33,7 +33,7 @@ interface SubmissionDetailProps {
   onTest: () => Promise<OnboardingTestResult | null>;
   onReject: (note: string) => void;
   onDelete: () => void;
-  onPublish: () => void;
+  onPublish: (board: string) => void;
   suggestedChannel?: string;
   onBack: () => void;
 }
@@ -83,6 +83,7 @@ export const SubmissionDetail: React.FC<SubmissionDetailProps> = ({
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<OnboardingTestResult | null>(null);
 
+  const [publishBoard, setPublishBoard] = useState('hot');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const canPublish = submission.status === 'pending' || submission.status === 'approved';
@@ -409,14 +410,26 @@ export const SubmissionDetail: React.FC<SubmissionDetailProps> = ({
         </button>
 
         {canPublish && (
-          <button
-            onClick={onPublish}
-            className="px-4 py-2 text-sm font-medium rounded-md border
-                       bg-success/10 border-success/30 text-success
-                       hover:bg-success/20 transition-colors"
-          >
-            {t('admin.detail.publish')}
-          </button>
+          <>
+            <SelectField
+              label="发布版块"
+              value={publishBoard}
+              onChange={setPublishBoard}
+              options={[
+                { value: 'hot', label: '主板' },
+                { value: 'secondary', label: '备板' },
+                { value: 'cold', label: '冷板' },
+              ]}
+            />
+            <button
+              onClick={() => onPublish(publishBoard)}
+              className="px-4 py-2 text-sm font-medium rounded-md border
+                         bg-success/10 border-success/30 text-success
+                         hover:bg-success/20 transition-colors"
+            >
+              {t('admin.detail.publish')}
+            </button>
+          </>
         )}
 
         {canReject && (

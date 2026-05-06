@@ -347,8 +347,12 @@ func (s *Service) AdminReject(ctx context.Context, publicID, note string) error 
 }
 
 // AdminPublish 上架：生成 ServiceConfig 并写入 monitors.d/。
+// board 指定目标版块（hot/secondary/cold），优先级高于 AdminConfigJSON 中的同名字段。
 // 使用原子文件写入（temp + fsync + rename）确保安全。
-func (s *Service) AdminPublish(ctx context.Context, publicID string) error {
+func (s *Service) AdminPublish(ctx context.Context, publicID, board string) error {
+	if board == "" {
+		board = "hot"
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -384,6 +388,8 @@ func (s *Service) AdminPublish(ctx context.Context, publicID string) error {
 			monitorCfg.APIKey = apiKey
 		}
 	}
+	// board 参数优先级高于 AdminConfigJSON，显式覆盖
+	monitorCfg.Board = board
 
 	// 发布前校验：验证生成的 monitor 配置是否合法
 	if err := s.validateMonitorConfig(monitorCfg); err != nil {

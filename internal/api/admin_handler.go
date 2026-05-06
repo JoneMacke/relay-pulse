@@ -206,7 +206,23 @@ func (h *Handler) AdminPublishSubmission(c *gin.Context) {
 
 	publicID := c.Param("id")
 
-	if err := svc.AdminPublish(c.Request.Context(), publicID); err != nil {
+	var req struct {
+		Board string `json:"board"`
+	}
+	// 忽略解析错误（空 body 合法，使用默认值）
+	_ = c.ShouldBindJSON(&req)
+	board := strings.TrimSpace(req.Board)
+	if board == "" {
+		board = "hot"
+	}
+	switch board {
+	case "hot", "secondary", "cold":
+	default:
+		apiError(c, http.StatusBadRequest, ErrCodeInvalidParam, "board 参数无效，可选值：hot/secondary/cold")
+		return
+	}
+
+	if err := svc.AdminPublish(c.Request.Context(), publicID, board); err != nil {
 		var conflict *onboarding.PSCConflictError
 		if errors.As(err, &conflict) {
 			logger.Warn("admin", "上架 PSC 冲突", "public_id", publicID,
