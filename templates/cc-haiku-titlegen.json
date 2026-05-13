@@ -1,0 +1,74 @@
+{
+	"model": "Haiku",
+	"request_model": "claude-haiku-4-5-20251001",
+	"url": "{{BASE_URL}}/v1/messages?beta=true",
+	"method": "POST",
+	"headers": {
+		"Authorization": "Bearer {{API_KEY}}",
+		"Accept": "application/json",
+		"Content-Type": "application/json",
+		"User-Agent": "claude-cli/2.1.123 (external, sdk-cli)",
+		"X-Claude-Code-Session-Id": "{{RAND_UUID}}",
+		"X-Stainless-Arch": "x64",
+		"X-Stainless-Lang": "js",
+		"X-Stainless-OS": "Linux",
+		"X-Stainless-Package-Version": "0.81.0",
+		"X-Stainless-Retry-Count": "0",
+		"X-Stainless-Runtime": "node",
+		"X-Stainless-Runtime-Version": "v24.3.0",
+		"X-Stainless-Timeout": "600",
+		"anthropic-beta": "oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advisor-tool-2026-03-01,structured-outputs-2025-12-15",
+		"anthropic-dangerous-direct-browser-access": "true",
+		"anthropic-version": "2023-06-01",
+		"x-app": "cli"
+	},
+	"body": {
+		"model": "{{MODEL}}",
+		"messages": [{
+			"role": "user",
+			"content": [{"type": "text", "text": "{{PROMPT}}"}]
+		}],
+		"system": [
+			{
+				"type": "text",
+				"text": "x-anthropic-billing-header: cc_version=2.1.123.605; cc_entrypoint=sdk-cli; cch=83576;"
+			},
+			{
+				"type": "text",
+				"text": "You are a Claude agent, built on Anthropic's Claude Agent SDK."
+			},
+			{
+				"type": "text",
+				"text": "Generate a concise, sentence-case title (3-7 words) that captures the main topic or goal of this coding session. The title should be clear enough that the user recognizes the session in a list. Use sentence case: capitalize only the first word and proper nouns.\n\nReturn JSON with a single \"title\" field.\n\nGood examples:\n{\"title\": \"Fix login button on mobile\"}\n{\"title\": \"Add OAuth authentication\"}\n{\"title\": \"Debug failing CI tests\"}\n{\"title\": \"Refactor API client error handling\"}\n\nBad (too vague): {\"title\": \"Code changes\"}\nBad (too long): {\"title\": \"Investigate and fix the issue where the login button does not respond on mobile devices\"}\nBad (wrong case): {\"title\": \"Fix Login Button On Mobile\"}"
+			}
+		],
+		"tools": [],
+		"metadata": {
+			"user_id": "{\"device_id\":\"{{USER_ID_HASH}}\",\"account_uuid\":\"{{USER_ACCOUNT_UUID}}\",\"session_id\":\"{{RAND_UUID}}\"}"
+		},
+		"max_tokens": 32000,
+		"temperature": 1,
+		"output_config": {
+			"format": {
+				"type": "json_schema",
+				"schema": {
+					"type": "object",
+					"properties": {
+						"title": {"type": "string"}
+					},
+					"required": ["title"],
+					"additionalProperties": false
+				}
+			}
+		},
+		"stream": true
+	},
+	"response": {
+		"success_contains": "\"title\""
+	},
+	"probe": {
+		"slow_latency": "5s",
+		"timeout": "10s",
+		"retry": 0
+	}
+}
