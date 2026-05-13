@@ -13,6 +13,7 @@ import (
 
 	"monitor/internal/config"
 	"monitor/internal/identity"
+	"monitor/internal/logger"
 	"monitor/internal/monitor"
 )
 
@@ -203,6 +204,9 @@ func (p *InlineProber) Probe(ctx context.Context, serviceType, templateName, bas
 		ProbeStatus: 0,
 		SubStatus:   "none",
 	}
+	// defer 单条日志，确保所有 early-return 分支都能被串联起来
+	defer logInlineProbeResult(result, "service", strings.TrimSpace(serviceType),
+		"template", strings.TrimSpace(templateName), "base_url", baseURL)
 
 	if err := ctx.Err(); err != nil {
 		result.SubStatus = "canceled"
@@ -271,6 +275,45 @@ func (p *InlineProber) Probe(ctx context.Context, serviceType, templateName, bas
 	return result
 }
 
+// logInlineProbeResult 在 InlineProber 的每次探测结束时打印一条结构化日志，
+// 让运维可以 `grep probe_id=probe-xxx` 把一次 inline 探测的所有上下文串起来。
+//
+// 日志级别按主状态分级：绿 → Info；黄 → Warn（含 ResponseSnippet 中前 200 字节）；
+// 红 → Warn（错误摘要 + 截断的 ResponseSnippet）。避免 Error 级别污染告警通道。
+//
+// extraFields 用于附加调用点已知的字段（如 PSCM、template、base_url），按 slog 键值对追加。
+func logInlineProbeResult(r *Result, extraFields ...any) {
+	if r == nil {
+		return
+	}
+	fields := []any{
+		"probe_id", r.ProbeID,
+		"status", r.ProbeStatus,
+		"sub_status", r.SubStatus,
+		"http_code", r.HTTPCode,
+		"latency_ms", r.Latency,
+	}
+	if r.ErrorMessage != "" {
+		fields = append(fields, "error", truncateForLog(r.ErrorMessage, 200))
+	}
+	fields = append(fields, extraFields...)
+
+	switch r.ProbeStatus {
+	case 1:
+		logger.Info("inline_probe", "探测完成", fields...)
+	default:
+		logger.Warn("inline_probe", "探测异常或不可用", fields...)
+	}
+}
+
+// truncateForLog 安全截断字符串到 max 字节，避免日志被超长 payload 撑爆。
+func truncateForLog(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "...(truncated)"
+}
+
 // ProbeConfig 使用已解析完成的 ServiceConfig 执行一次内联探测。
 //
 // 适用场景：调用方持有一份**已经过模板填充 + Duration 派生**的 ServiceConfig
@@ -296,6 +339,15 @@ func (p *InlineProber) ProbeConfig(ctx context.Context, cfg config.ServiceConfig
 		ProbeStatus: 0,
 		SubStatus:   "none",
 	}
+	// defer 单条日志，把 probe_id 与 PSCM 上下文一起记下来；
+	// 让运维 `grep probe_id=probe-xxx` 一行串联整次 inline 探测。
+	defer logInlineProbeResult(result,
+		"provider", cfg.Provider,
+		"service", cfg.Service,
+		"channel", cfg.Channel,
+		"model", cfg.Model,
+		"base_url", cfg.BaseURL,
+		"template", cfg.Template)
 
 	if err := ctx.Err(); err != nil {
 		result.SubStatus = "canceled"
