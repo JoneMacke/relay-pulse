@@ -2,10 +2,12 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"monitor/internal/config"
 	"monitor/internal/logger"
 	"monitor/internal/probe"
+	"monitor/internal/storage"
 )
 
 // adminProbeRequest 探测覆盖参数：非空字段会覆盖磁盘上保存的值，
@@ -367,6 +370,15 @@ func (h *Handler) AdminToggleMonitor(c *gin.Context) {
 
 // AdminProbeMonitor 对监测项执行探测测试
 // POST /api/admin/monitors/:key/probe
+//
+// 行为：按"当前运行时已解析"的 ServiceConfig 探测，与 scheduler 真实探测字段级一致。
+// 与旧实现相比的改进：
+//   - 不再只取 (service, template, base_url, api_key) 4 个标量，而是完整复用 headers/body/
+//     success_contains/timeout/slow_latency/retry 等所有 monitor file 字段
+//   - 通过 resolveRuntimeRoot 优先获取已经过模板填充和 Duration 派生的 runtime config，
+//     未找到时 fallback 到 raw monitor file root 并即时 ResolveSingleMonitor
+//   - 拒绝 template 覆盖：变更模板涉及 URLPattern/Headers/Body 等派生字段重新解析，
+//     沙箱测试无法做到"半解析"，所以强制要求先保存
 func (h *Handler) AdminProbeMonitor(c *gin.Context) {
 	if !h.checkAdminToken(c) {
 		return
@@ -417,37 +429,58 @@ func (h *Handler) AdminProbeMonitor(c *gin.Context) {
 		}
 	}
 
-	template := root.Template
-	baseURL := root.BaseURL
-	apiKey := root.APIKey
-	if v := strings.TrimSpace(req.Template); v != "" {
-		template = v
-	}
-	if v := strings.TrimSpace(req.BaseURL); v != "" {
-		baseURL = v
-	}
-	if v := strings.TrimSpace(req.APIKey); v != "" {
-		apiKey = v
-	}
-
-	if baseURL == "" {
-		apiError(c, http.StatusBadRequest, ErrCodeInvalidParam, "base_url 未配置")
+	// 拒绝 template 覆盖：模板字段变更涉及 URLPattern/Headers/Body/SuccessContains 等
+	// 派生字段的重新解析，沙箱测试无法做到"半解析"。前端应在用户编辑模板时禁用 Probe 按钮。
+	if overrideTpl := strings.TrimSpace(req.Template); overrideTpl != "" && overrideTpl != strings.TrimSpace(root.Template) {
+		apiError(c, http.StatusUnprocessableEntity, ErrCodeTemplateChangeRequiresSave,
+			"修改模板需保存后再测试（base_url / api_key 可即时覆盖）")
 		return
 	}
 
-	// 覆盖参数源自管理员输入，必须过 SSRF 守卫（与 OnboardingTest 一致）
-	if strings.TrimSpace(req.BaseURL) != "" {
-		if err := probe.NewSSRFGuard().ValidateURL(baseURL); err != nil {
+	// 取已解析的 runtime config（与 scheduler 一致）；未命中则 fallback 到 raw + 即时解析。
+	cfg, isResolved := h.resolveRuntimeRoot(root)
+
+	if !isResolved {
+		// fallback 路径：raw monitor file 未在运行时配置中（多见于刚 Create 还未热重载）。
+		// 即时走 ResolveSingleMonitor 把模板和 Duration 派生上去；并在响应头标注 fallback。
+		appCfg := h.snapshotAppConfig()
+		if appCfg == nil {
+			apiError(c, http.StatusServiceUnavailable, ErrCodeServiceUnavailable, "运行时配置未就绪")
+			return
+		}
+		if err := config.ResolveSingleMonitor(appCfg, &cfg, h.configDir()); err != nil {
+			logger.Error("admin", "ResolveSingleMonitor 失败", "key", key, "error", err)
+			apiError(c, http.StatusInternalServerError, ErrCodeInternalError, "解析监测配置失败: "+err.Error())
+			return
+		}
+		logger.Warn("admin", "AdminProbeMonitor 使用 raw fallback 解析",
+			"key", key, "provider", root.Provider, "service", root.Service, "channel", root.Channel)
+		c.Header("X-Probe-Config-Source", "raw-fallback")
+	}
+
+	// 应用 base_url / api_key 覆盖（用于"编辑未保存"场景）
+	if v := strings.TrimSpace(req.BaseURL); v != "" {
+		// 覆盖参数源自管理员输入，必须过 SSRF 守卫（与 OnboardingTest 一致）
+		if err := probe.NewSSRFGuard().ValidateURL(v); err != nil {
 			apiError(c, http.StatusBadRequest, ErrCodeInvalidParam, "base_url 安全校验失败: "+err.Error())
 			return
 		}
+		cfg.BaseURL = strings.TrimRight(v, "/")
+	}
+	if v := strings.TrimSpace(req.APIKey); v != "" {
+		cfg.APIKey = v
+	}
+
+	if strings.TrimSpace(cfg.BaseURL) == "" {
+		apiError(c, http.StatusBadRequest, ErrCodeInvalidParam, "base_url 未配置")
+		return
 	}
 
 	// 使用内联探测器同步执行
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
-	result := h.inlineProber.Probe(ctx, root.Service, template, baseURL, apiKey)
+	result := h.inlineProber.ProbeConfig(ctx, cfg)
 
 	c.JSON(http.StatusOK, gin.H{
 		"probe_id":         result.ProbeID,
@@ -457,6 +490,233 @@ func (h *Handler) AdminProbeMonitor(c *gin.Context) {
 		"latency":          result.Latency,
 		"error_message":    result.ErrorMessage,
 		"response_snippet": result.ResponseSnippet,
+	})
+}
+
+// resolveRuntimeRoot 根据 monitor file 的父通道 PSC 在运行时配置中查找已解析的 ServiceConfig。
+//
+// 返回值：
+//   - 第一个返回值：找到时为运行时 resolved cfg 的值拷贝；未找到时为 raw root 的值拷贝
+//   - 第二个返回值：是否命中运行时配置；调用方未命中时需要自行 ResolveSingleMonitor
+//
+// 注意：ServiceConfig 含 map（Headers）和 *int/*float64 等指针字段，本方法返回值拷贝，
+// 浅拷贝足以支持"只覆盖 BaseURL/APIKey 等字符串字段"的探测覆盖场景；调用方如需修改
+// Headers 等引用字段，必须自行深拷贝。
+func (h *Handler) resolveRuntimeRoot(root *config.ServiceConfig) (config.ServiceConfig, bool) {
+	if root == nil {
+		return config.ServiceConfig{}, false
+	}
+	h.cfgMu.RLock()
+	defer h.cfgMu.RUnlock()
+	if h.config == nil {
+		return *root, false
+	}
+	for _, m := range h.config.Monitors {
+		if strings.TrimSpace(m.Parent) != "" {
+			continue
+		}
+		if m.Provider == root.Provider && m.Service == root.Service && m.Channel == root.Channel {
+			return m, true
+		}
+	}
+	return *root, false
+}
+
+// snapshotAppConfig 原子地读取当前运行时 AppConfig 指针，避免持锁太久。
+// 返回的指针指向的 AppConfig 在调用方使用期间是稳定的（只读全局默认值）。
+func (h *Handler) snapshotAppConfig() *config.AppConfig {
+	h.cfgMu.RLock()
+	defer h.cfgMu.RUnlock()
+	return h.config
+}
+
+// configDir 返回 monitors.d/ 与 templates/ 的共同父目录，供 ResolveSingleMonitor 加载 template JSON。
+func (h *Handler) configDir() string {
+	store := h.getMonitorStore()
+	if store == nil {
+		return ""
+	}
+	return filepath.Dir(store.Dir())
+}
+
+// adminMonitorLogItem 是 AdminGetMonitorLogs 返回的单条日志结构。
+// 字段命名与前端 ProbeHistoryEntry 类型对齐。
+type adminMonitorLogItem struct {
+	ID          int64             `json:"id"`
+	Provider    string            `json:"provider"`
+	Service     string            `json:"service"`
+	Channel     string            `json:"channel"`
+	Model       string            `json:"model,omitempty"`
+	Status      int               `json:"status"`
+	SubStatus   storage.SubStatus `json:"sub_status"`
+	HTTPCode    int               `json:"http_code"`
+	Latency     int               `json:"latency"`
+	Timestamp   int64             `json:"timestamp"`
+	ErrorDetail string            `json:"error_detail,omitempty"`
+}
+
+// parseAdminLogsSince 解析 since query 参数。
+// 支持 Go duration（如 "1h"、"30m"）或 RFC3339 时间戳；空值回退到 1h。
+// 返回 (sinceTime, error)；error != nil 时 since 无效。
+func parseAdminLogsSince(raw string, now time.Time) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		raw = "1h"
+	}
+	if d, err := time.ParseDuration(raw); err == nil {
+		if d <= 0 {
+			return time.Time{}, fmt.Errorf("since 必须为正向时间跨度")
+		}
+		return now.Add(-d), nil
+	}
+	if ts, err := time.Parse(time.RFC3339, raw); err == nil {
+		return ts, nil
+	}
+	return time.Time{}, fmt.Errorf("since 必须为 Go duration（如 1h）或 RFC3339 时间")
+}
+
+// AdminGetMonitorLogs 返回某监测项的最近探测历史记录（按时间倒序）。
+//
+// GET /api/admin/monitors/:key/logs?since=1h&limit=200&model=<可选>
+//
+// 实现要点：
+//   - since 默认 1h，limit 默认 200（最大 1000）
+//   - 不指定 model 时遍历 monitor file 中所有 PSCM 组合（父+所有子通道），合并后排序
+//   - 指定 model 时只查该 model；避免父+多子通道场景下早期记录被 limit 截断
+//   - error_detail 可能含上游返回的敏感信息，响应头加 Cache-Control: no-store
+func (h *Handler) AdminGetMonitorLogs(c *gin.Context) {
+	if !h.checkAdminToken(c) {
+		return
+	}
+
+	store := h.getMonitorStore()
+	if store == nil {
+		apiError(c, http.StatusServiceUnavailable, ErrCodeFeatureDisabled, "monitors.d 管理未启用")
+		return
+	}
+
+	key := c.Param("key")
+	file, err := store.Get(key)
+	if err != nil {
+		logger.Error("admin", "获取监测项失败", "key", key, "error", err)
+		apiError(c, http.StatusInternalServerError, ErrCodeInternalError, "获取监测项失败")
+		return
+	}
+	if file == nil {
+		apiError(c, http.StatusNotFound, ErrCodeNotFound, "监测项不存在")
+		return
+	}
+
+	const (
+		defaultLimit = 200
+		maxLimit     = 1000
+	)
+
+	limit := defaultLimit
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			apiError(c, http.StatusBadRequest, ErrCodeInvalidParam, "limit 必须为正整数")
+			return
+		}
+		if n > maxLimit {
+			n = maxLimit
+		}
+		limit = n
+	}
+
+	since, err := parseAdminLogsSince(c.Query("since"), time.Now())
+	if err != nil {
+		apiError(c, http.StatusBadRequest, ErrCodeInvalidParam, err.Error())
+		return
+	}
+
+	modelFilter := strings.TrimSpace(c.Query("model"))
+
+	// 收集需要查询的 PSCM 组合。
+	// monitor file 中父通道 model 可能为空（聚合状态），子通道 model 必填。
+	type pscm struct {
+		provider, service, channel, model string
+	}
+	var keys []pscm
+	for _, m := range file.Monitors {
+		// 父通道：以 file 父通道 PSC 作为基准（同 monitor_handler 既有惯例）
+		provider := m.Provider
+		service := m.Service
+		channel := m.Channel
+		// 子通道由 parent 继承 PSC，但 monitor file 直接存储字段；优先用 m 自身字段，
+		// 空值（子通道未填）时回退到 file 父通道
+		if strings.TrimSpace(provider) == "" || strings.TrimSpace(service) == "" || strings.TrimSpace(channel) == "" {
+			for _, p := range file.Monitors {
+				if strings.TrimSpace(p.Parent) == "" {
+					provider = p.Provider
+					service = p.Service
+					channel = p.Channel
+					break
+				}
+			}
+		}
+		model := m.Model
+		if modelFilter != "" && model != modelFilter {
+			continue
+		}
+		keys = append(keys, pscm{provider, service, channel, model})
+	}
+
+	if len(keys) == 0 {
+		c.Header("Cache-Control", "no-store")
+		c.JSON(http.StatusOK, gin.H{"logs": []adminMonitorLogItem{}, "total": 0})
+		return
+	}
+
+	// 用 context.WithTimeout 限制 DB 查询总时长（每条 PSCM 单独 limit，合并后裁剪）
+	queryCtx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	db := h.storage.WithContext(queryCtx)
+	logs := make([]adminMonitorLogItem, 0, limit)
+	for _, k := range keys {
+		records, err := db.GetHistoryWithLimit(k.provider, k.service, k.channel, k.model, since, limit)
+		if err != nil {
+			logger.Error("admin", "查询监测日志失败",
+				"key", key, "provider", k.provider, "service", k.service,
+				"channel", k.channel, "model", k.model, "error", err)
+			apiError(c, http.StatusInternalServerError, ErrCodeInternalError, "查询监测日志失败")
+			return
+		}
+		for _, r := range records {
+			logs = append(logs, adminMonitorLogItem{
+				ID:          r.ID,
+				Provider:    r.Provider,
+				Service:     r.Service,
+				Channel:     r.Channel,
+				Model:       r.Model,
+				Status:      r.Status,
+				SubStatus:   r.SubStatus,
+				HTTPCode:    r.HttpCode,
+				Latency:     r.Latency,
+				Timestamp:   r.Timestamp,
+				ErrorDetail: r.ErrorDetail,
+			})
+		}
+	}
+
+	// 多 PSCM 合并后按 (timestamp DESC, id DESC) 整体排序，再裁剪到 limit。
+	// 同一秒内 id 倒序保证分页结果稳定。
+	sort.Slice(logs, func(i, j int) bool {
+		if logs[i].Timestamp == logs[j].Timestamp {
+			return logs[i].ID > logs[j].ID
+		}
+		return logs[i].Timestamp > logs[j].Timestamp
+	})
+	if len(logs) > limit {
+		logs = logs[:limit]
+	}
+
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, gin.H{
+		"logs":  logs,
+		"total": len(logs),
 	})
 }
 

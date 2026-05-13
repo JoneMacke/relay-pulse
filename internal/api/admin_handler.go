@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"monitor/internal/config"
 	"monitor/internal/logger"
 	"monitor/internal/onboarding"
 )
@@ -274,11 +275,26 @@ func (h *Handler) AdminTestSubmission(c *gin.Context) {
 		return
 	}
 
+	// 走与 AdminPublish 同一映射器构造 ServiceConfig，确保"管理员审核测一下"与
+	// "发布后调度真探测"使用字段级一致的 cfg。
+	cfg := onboarding.BuildServiceConfigFromSubmission(sub, apiKey)
+
+	appCfg := h.snapshotAppConfig()
+	if appCfg == nil {
+		apiError(c, http.StatusServiceUnavailable, ErrCodeServiceUnavailable, "运行时配置未就绪")
+		return
+	}
+	if err := config.ResolveSingleMonitor(appCfg, &cfg, h.configDir()); err != nil {
+		logger.Error("admin", "ResolveSingleMonitor 失败", "public_id", publicID, "error", err)
+		apiError(c, http.StatusInternalServerError, ErrCodeInternalError, "解析测试配置失败: "+err.Error())
+		return
+	}
+
 	// 使用内联探测器同步执行
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
-	result := h.inlineProber.Probe(ctx, sub.ServiceType, sub.TemplateName, sub.BaseURL, apiKey)
+	result := h.inlineProber.ProbeConfig(ctx, cfg)
 
 	c.JSON(http.StatusOK, gin.H{
 		"probe_status":     result.ProbeStatus,

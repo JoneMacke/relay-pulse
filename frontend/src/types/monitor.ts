@@ -86,3 +86,24 @@ export interface AdminMonitorListResponse {
 export interface AdminMonitorDetailResponse {
   monitor: MonitorFile;
 }
+
+/** 单条探测历史记录（管理后台 logs tab 用） */
+export interface ProbeHistoryEntry {
+  id: number;
+  provider: string;
+  service: string;
+  channel: string;
+  model?: string;
+  status: number; // 1=绿 2=黄 0=红
+  sub_status: string;
+  http_code: number;
+  latency: number; // ms
+  timestamp: number; // Unix 秒
+  error_detail?: string;
+}
+
+/** 管理后台日志查询响应 */
+export interface AdminMonitorLogsResponse {
+  logs: ProbeHistoryEntry[];
+  total: number;
+}

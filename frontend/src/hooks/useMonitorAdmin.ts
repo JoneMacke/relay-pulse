@@ -5,6 +5,8 @@ import type {
   MonitorFile,
   AdminMonitorListResponse,
   AdminMonitorDetailResponse,
+  AdminMonitorLogsResponse,
+  ProbeHistoryEntry,
 } from '../types/monitor';
 
 export interface ProbeResult {
@@ -220,6 +222,27 @@ export function useMonitorAdmin(token: string) {
     }
   }, [token, authHeaders]);
 
+  // Logs：拉取某监测项的探测历史记录（按 timestamp 倒序）。
+  // since: Go duration (默认 "1h") 或 RFC3339；limit: 默认 200，上限 1000；model: 可选过滤。
+  const fetchMonitorLogs = useCallback(async (
+    key: string,
+    opts?: { since?: string; limit?: number; model?: string },
+  ): Promise<ProbeHistoryEntry[]> => {
+    if (!token) return [];
+
+    const params = new URLSearchParams();
+    if (opts?.since) params.set('since', opts.since);
+    if (opts?.limit != null) params.set('limit', String(opts.limit));
+    if (opts?.model) params.set('model', opts.model);
+
+    const qs = params.toString();
+    const resp = await apiGet<AdminMonitorLogsResponse>(
+      `/api/admin/monitors/${encodeURIComponent(key)}/logs${qs ? '?' + qs : ''}`,
+      { headers: authHeaders() },
+    );
+    return resp.logs || [];
+  }, [token, authHeaders]);
+
   return {
     monitors,
     total,
@@ -248,5 +271,6 @@ export function useMonitorAdmin(token: string) {
     isProbing,
     probeResult,
     probeError,
+    fetchMonitorLogs,
   };
 }

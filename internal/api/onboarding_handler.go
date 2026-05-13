@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"monitor/internal/config"
 	"monitor/internal/logger"
 	"monitor/internal/onboarding"
 	"monitor/internal/probe"
@@ -266,11 +267,33 @@ func (h *Handler) OnboardingTest(c *gin.Context) {
 		return
 	}
 
+	// 走与 AdminPublish 同一映射器构造 ServiceConfig，再经 ResolveSingleMonitor 走与 loader 一致
+	// 的解析路径（模板填充 + Duration 派生）。这样"用户自助测试"与"发布后调度真探测"用同一份
+	// cfg 表达，规避"测试绿、上线红"的字段漂移。
+	virtualSub := &onboarding.Submission{
+		ServiceType:  req.ServiceType,
+		TemplateName: req.TemplateName,
+		BaseURL:      req.BaseURL,
+		// PSC 在自助测试阶段只用于日志/审计，不参与 monitor_store 唯一性校验，故用占位值
+		ChannelCode: "__test__",
+	}
+	cfg := onboarding.BuildServiceConfigFromSubmission(virtualSub, req.APIKey)
+
+	appCfg := h.snapshotAppConfig()
+	if appCfg == nil {
+		apiError(c, http.StatusServiceUnavailable, ErrCodeServiceUnavailable, "运行时配置未就绪")
+		return
+	}
+	if err := config.ResolveSingleMonitor(appCfg, &cfg, h.configDir()); err != nil {
+		apiError(c, http.StatusBadRequest, ErrCodeInvalidParam, "解析测试配置失败: "+err.Error())
+		return
+	}
+
 	// 30 秒总超时
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
-	result := h.inlineProber.Probe(ctx, req.ServiceType, req.TemplateName, req.BaseURL, req.APIKey)
+	result := h.inlineProber.ProbeConfig(ctx, cfg)
 
 	resp := gin.H{
 		"probe_status":     result.ProbeStatus,

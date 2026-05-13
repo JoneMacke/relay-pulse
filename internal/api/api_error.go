@@ -14,6 +14,11 @@ const (
 	ErrCodeFeatureDisabled    = "FEATURE_DISABLED"
 	ErrCodeQueueFull          = "QUEUE_FULL"
 	ErrCodeNotAcceptable      = "NOT_ACCEPTABLE"
+
+	// ErrCodeTemplateChangeRequiresSave: 管理后台 probe 收到 template 覆盖，
+	// 但模板变更涉及 URLPattern/Headers/Body/SuccessContains 等派生字段重新解析，
+	// 不能简单替换 cfg.Template 字段；必须先保存监测项后再测试。
+	ErrCodeTemplateChangeRequiresSave = "TEMPLATE_CHANGE_REQUIRES_SAVE"
 )
 
 // APIErrorDetail 统一错误对象

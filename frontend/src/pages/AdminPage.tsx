@@ -165,6 +165,7 @@ export default function AdminPage() {
                       }
                       return null;
                     }}
+                    fetchLogs={monitor.fetchMonitorLogs}
                     isProbing={monitor.isProbing}
                     probeResult={monitor.probeResult}
                     probeError={monitor.probeError}

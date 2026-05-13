@@ -199,6 +199,7 @@ func NewServer(store storage.Storage, cfg *config.AppConfig, port string, autoMo
 	router.DELETE("/api/admin/monitors/:key", handler.AdminDeleteMonitor)
 	router.POST("/api/admin/monitors/:key/toggle", handler.AdminToggleMonitor)
 	router.POST("/api/admin/monitors/:key/probe", handler.AdminProbeMonitor)
+	router.GET("/api/admin/monitors/:key/logs", handler.AdminGetMonitorLogs)
 
 	// SEO 路由
 	router.GET("/sitemap.xml", handler.GetSitemap)

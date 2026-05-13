@@ -1,8 +1,11 @@
 import { useEffect, useState, type InputHTMLAttributes } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Eye, EyeOff, Copy, Check } from 'lucide-react';
-import type { MonitorConfig, MonitorFile } from '../../types/monitor';
+import type { MonitorConfig, MonitorFile, ProbeHistoryEntry } from '../../types/monitor';
 import type { ProbeResult } from '../../hooks/useMonitorAdmin';
+import { MonitorLogsTab } from './MonitorLogsTab';
+
+type DetailTab = 'detail' | 'logs';
 
 interface MonitorDetailProps {
   fetchTemplates: () => Promise<string[]>;
@@ -13,6 +16,10 @@ interface MonitorDetailProps {
   onDelete: () => void;
   onToggle: (field: 'disabled' | 'hidden', value: boolean) => void;
   onProbe: (overrides?: { template?: string; base_url?: string; api_key?: string }) => Promise<ProbeResult | null>;
+  fetchLogs: (
+    key: string,
+    opts?: { since?: string; limit?: number; model?: string },
+  ) => Promise<ProbeHistoryEntry[]>;
   isProbing?: boolean;
   probeResult?: ProbeResult | null;
   probeError?: string | null;
@@ -39,10 +46,11 @@ interface SelectOption {
 
 export function MonitorDetail({
   fetchTemplates, monitorFile, monitorKey, onBack,
-  onSave, onDelete, onToggle, onProbe,
+  onSave, onDelete, onToggle, onProbe, fetchLogs,
   isProbing, probeResult, probeError,
 }: MonitorDetailProps) {
   const { t } = useTranslation();
+  const [activeTab, setActiveTab] = useState<DetailTab>('detail');
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -223,11 +231,14 @@ export function MonitorDetail({
     }
   };
 
+  // 模板被改动后，禁用 Probe（后端会拒绝 template override，因为模板字段变化
+  // 涉及 URLPattern/Headers/Body 的重新解析，沙箱无法做"半解析"）。
+  const templateDirty = isEditing && (editFields.template || '') !== (root?.template || '');
+
   const handleProbe = async () => {
-    // 编辑模式下用 draft 字段覆盖磁盘配置探测，未编辑则空 body 走原路径
+    // 编辑模式下用 draft 字段覆盖磁盘配置探测；template 不再发送（后端拒绝 template 覆盖）。
     if (isEditing) {
       await onProbe({
-        template: editFields.template,
         base_url: editFields.base_url,
         api_key: editFields.api_key,
       });
@@ -270,6 +281,28 @@ export function MonitorDetail({
         {root?.provider}/{root?.service}/{root?.channel}
       </h2>
 
+      {/* Tab 导航 */}
+      <nav className="flex gap-1 border-b border-default">
+        <SubTabButton
+          active={activeTab === 'detail'}
+          onClick={() => setActiveTab('detail')}
+          label={t('admin.monitors.tabs.detail')}
+        />
+        <SubTabButton
+          active={activeTab === 'logs'}
+          onClick={() => setActiveTab('logs')}
+          label={t('admin.monitors.tabs.logs')}
+        />
+      </nav>
+
+      {activeTab === 'logs' ? (
+        <MonitorLogsTab
+          monitorKey={monitorKey}
+          monitorFile={monitorFile}
+          fetchLogs={fetchLogs}
+        />
+      ) : (
+      <>
       {/* 保存错误 */}
       {saveError && (
         <div className="p-3 bg-danger/10 border border-danger/20 rounded-lg text-danger text-sm">
@@ -569,13 +602,20 @@ export function MonitorDetail({
       <div className="flex gap-3">
         <button
           onClick={handleProbe}
-          disabled={isProbing}
+          disabled={isProbing || templateDirty}
+          title={templateDirty ? t('admin.monitors.templateDirtyHint') : undefined}
           className="px-4 py-2 rounded-lg bg-accent/10 text-accent text-sm font-medium hover:bg-accent/20 transition disabled:opacity-50"
         >
           {isProbing ? t('admin.monitors.probing') : t('admin.monitors.probe')}
         </button>
 
-        {probeResult && (
+        {templateDirty && (
+          <span className="self-center text-xs text-warning">
+            {t('admin.monitors.templateDirtyHint')}
+          </span>
+        )}
+
+        {probeResult && !templateDirty && (
           <div className="flex items-center gap-3 self-center text-xs">
             <span className={`inline-block w-2 h-2 rounded-full ${
               probeResult.probeStatus === 1 ? 'bg-success' :
@@ -591,7 +631,7 @@ export function MonitorDetail({
           </div>
         )}
 
-        {probeError && (
+        {probeError && !templateDirty && (
           <span className="self-center text-xs text-danger">{probeError}</span>
         )}
 
@@ -623,7 +663,24 @@ export function MonitorDetail({
           </div>
         )}
       </div>
+      </>
+      )}
     </div>
+  );
+}
+
+function SubTabButton({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-4 py-2 text-sm font-medium transition border-b-2 -mb-px ${
+        active
+          ? 'border-accent text-accent'
+          : 'border-transparent text-muted hover:text-secondary'
+      }`}
+    >
+      {label}
+    </button>
   );
 }
 
