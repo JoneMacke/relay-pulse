@@ -120,12 +120,17 @@ export interface AdminMonitorLogsResponse {
   total: number;
 }
 
-/** rpdiag 质量分 sparkline 3 点数据（avg_30d → avg_7d → latest）。 */
+/** rpdiag 质量分 sparkline 数据。
+ *  ranking-export.v5.2 起额外暴露 recent_scores（最近 ≤3 次单 sample 升序），
+ *  消费方可叠在 30d / 7d 均值之后构造 5 点 sparkline；旧版 wire 仍走 3 点
+ *  (avg_30d → avg_7d → latest) fallback。 */
 export interface RpdiagScoreTrend {
   latest?: number | null;
   latest_at?: string | null;
   avg_7d?: number | null;
   avg_30d?: number | null;
+  /** v5.2+: 最近 ≤3 个 sample 升序（旧→新）。null/缺失时走 latest fallback。 */
+  recent_scores?: number[] | null;
   n_7d: number;
   n_30d: number;
 }

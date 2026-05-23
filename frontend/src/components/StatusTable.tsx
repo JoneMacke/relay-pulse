@@ -187,10 +187,13 @@ interface StatusTableProps {
   rpdiagScores?: RpdiagScoresResponse;
 }
 
-// rpdiag 质量分单元格：所有 model 的 3 点 sparkline (30d/7d/latest) 叠在
-// 同一个 SVG 画布上，**不分块**。每条 polyline 颜色由该 model 自己的 latest
-// 分数决定（100=绿/60=黄/0=红 平滑渐变），dot 标记每个真实数据点。
+// rpdiag 质量分单元格：所有 model 的 5 点 sparkline (30d 均 / 7d 均 / 最近 3
+// 次单 sample 升序) 叠在同一个 SVG 画布上，**不分块**。每条 polyline 颜色由
+// 该 model 自己最右侧 sample 的分数决定（100=绿/60=黄/0=红 平滑渐变），dot
+// 标记每个真实数据点；80 / 100 两条点划参考线作 Y 轴刻度。
 // 无可见数字，hover tooltip 出 per-model 明细。
+// recent_scores 在 ranking-export.v5.2 起暴露；v5.1 wire 则 fallback 到 3 点
+// (30d / 7d / latest) 显示，最新分始终落在最右侧槽位。
 //
 // 视觉读法：
 //   3 条线靠近 → "所有 model 表现接近"（共识）
@@ -206,7 +209,11 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
 
   const W = compact ? 36 : 44;
   const H = compact ? 14 : 36;
-  const STEP = W / 3;
+  // 5 槽位 sparkline：slot 0/1 是 30d / 7d 窗口均值，slot 2/3/4 是最近
+  // 3 次单 sample 升序（旧→新）；缺值的槽位不画点，polyline 跨空槽直连
+  // 反映样本稀少的自然间隔。
+  const NUM_SLOTS = 5;
+  const STEP = W / NUM_SLOTS;
   // 1.2px 内边距上下避免点贴边
   const PAD = 1.2;
   // 圆点半径/线粗随 H 等比放大，desktop H=36 时圆点更醒目
@@ -227,8 +234,30 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
   // 用 qualityScoreYNorm 计算。绝对分数由 dot 颜色 + tooltip 数字双重提供。
   const series = ranked
     .map((m) => {
-      const values = [m.trend?.avg_30d, m.trend?.avg_7d, m.trend?.latest];
-      const present = values
+      // 构造 5 槽位 values 数组：slot 0/1 永远是窗口均值；slot 2/3/4 是
+      // recent_scores 右对齐升序填入（n=1 → slot 4，n=2 → slot 3/4，n=3 → slot 2/3/4）。
+      // ranking-export.v5.1 wire 没有 recent_scores 时，用 latest 单点填 slot 4
+      // 作为前向兼容 fallback——视觉上仍把"最新分"摆在最右。
+      const slotValues: Array<number | null | undefined> = [
+        m.trend?.avg_30d,
+        m.trend?.avg_7d,
+        null,
+        null,
+        null,
+      ];
+      const recentScores = Array.isArray(m.trend?.recent_scores)
+        ? m.trend.recent_scores.slice(-3)
+        : [];
+      if (recentScores.length > 0) {
+        const startSlot = NUM_SLOTS - recentScores.length;
+        recentScores.forEach((v, i) => {
+          slotValues[startSlot + i] = v;
+        });
+      } else if (typeof m.trend?.latest === 'number') {
+        slotValues[NUM_SLOTS - 1] = m.trend.latest;
+      }
+
+      const present = slotValues
         .map((v, slot) => (typeof v === 'number' ? { value: v, slot } : null))
         .filter((p): p is { value: number; slot: number } => p !== null);
       if (present.length === 0) return null;
@@ -239,6 +268,7 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
         const y = H - PAD - norm * (H - 2 * PAD);
         return { x, y, value: clamped };
       });
+      // 颜色取最右侧（最新）样本对应分；polyline 升序排，最后一个 present 总是 slot 最大者
       const recent = present[present.length - 1].value;
       return { points, color: qualityScoreColor(recent) };
     })
@@ -878,7 +908,7 @@ function StatusTableComponent({
                   <span className="absolute right-0 top-full z-50 mt-1 w-56 rounded-lg border border-default bg-elevated px-2 py-1.5 text-[11px] font-normal normal-case tracking-normal leading-snug whitespace-normal text-primary opacity-0 pointer-events-none shadow-lg transition-opacity delay-150 group-hover/quality-tip:opacity-100 group-hover/quality-tip:pointer-events-auto">
                     {t(
                       'table.headers.qualityTooltip',
-                      '由 rpdiag.relaypulse.top 独立采样的质量分（0-100）。通道里每个模型一条 sparkline 叠绘显示历史趋势；80 / 100 两条参考线作 Y 轴刻度。',
+                      '由 rpdiag.relaypulse.top 独立采样的质量分（0-100）。通道里每个模型一条 5 点 sparkline 叠绘：30d 均 / 7d 均 / 最近 3 次单 sample；80 / 100 两条参考线作 Y 轴刻度。',
                     )}
                   </span>
                 </span>

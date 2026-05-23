@@ -37,15 +37,22 @@ const (
 	maxResponseBytes = 10 << 20 // 10 MiB; export payload is < 1 MiB today
 )
 
-// ScoreTrend mirrors rpdiag's per-row 3-point sparkline data
-// (avg_30d → avg_7d → latest). All fields except the counts are optional.
+// ScoreTrend mirrors rpdiag's per-row sparkline payload. Consumers can render
+// either the original 3-point form (avg_30d → avg_7d → latest) or the
+// ranking-export.v5.2+ 5-point form (avg_30d → avg_7d → up to 3 most-recent
+// single samples in time-ascending order). All fields are optional; nil
+// counts mean "no in-scope samples".
 type ScoreTrend struct {
 	Latest   *float64 `json:"latest,omitempty"`
 	LatestAt *string  `json:"latest_at,omitempty"`
 	Avg7D    *float64 `json:"avg_7d,omitempty"`
 	Avg30D   *float64 `json:"avg_30d,omitempty"`
-	N7D      int      `json:"n_7d"`
-	N30D     int      `json:"n_30d"`
+	// RecentScores holds up to 3 most-recent single fingerprint samples in
+	// time-ascending order (oldest → newest). nil on pre-v5.2 wire or when
+	// no in-scope samples exist; len may be 1 or 2 during cold start.
+	RecentScores []float64 `json:"recent_scores,omitempty"`
+	N7D          int       `json:"n_7d"`
+	N30D         int       `json:"n_30d"`
 }
 
 // ModelScore captures one (channel, model) row from rpdiag.
@@ -205,9 +212,9 @@ func (c *Client) staleSnapshot() (map[string]Score, bool) {
 	return cloneScores(c.cache), true
 }
 
-// exportPayload mirrors the rpdiag ranking-export.v5.1 wire schema we
-// consume. Only the fields the client needs are bound; unknown fields are
-// dropped.
+// exportPayload mirrors the rpdiag ranking-export wire schema we consume
+// (v5.1 baseline + v5.2 recent_scores). Only the fields the client needs
+// are bound; unknown fields are dropped.
 type exportPayload struct {
 	SchemaVersion string       `json:"schema_version"`
 	Items         []rankingRow `json:"items"`
