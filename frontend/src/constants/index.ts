@@ -65,6 +65,11 @@ export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 export const USE_MOCK_DATA =
   (import.meta.env.VITE_USE_MOCK_DATA || '').toLowerCase() === 'true';
 
+// 是否隐藏公开列表/卡片中的"价格 ¥/$"列（自报倍率，无法验证、随时可变）
+// 构建期部署策略：值为 'true' 时隐藏，默认显示；admin 录入端不受影响
+export const HIDE_PRICE_COLUMN =
+  (import.meta.env.VITE_HIDE_PRICE_COLUMN || '').toLowerCase() === 'true';
+
 // 反馈链接配置
 // 向后兼容：优先使用新的环境变量，回退到旧的 VITE_FEEDBACK_URL
 const legacyFeedbackUrl = import.meta.env.VITE_FEEDBACK_URL;

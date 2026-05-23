@@ -18,6 +18,7 @@ import { createMediaQueryEffect } from '../utils/mediaQuery';
 import { shortenModelName } from '../utils/modelName';
 import { hasAnyAnnotation, hasAnyAnnotationInList } from '../utils/annotationUtils';
 import { formatPriceRatioStructured } from '../utils/format';
+import { HIDE_PRICE_COLUMN } from '../constants';
 import { getServiceIconComponent } from './ServiceIcon';
 import { lookupRpdiagScore } from '../hooks/useRpdiagScores';
 import type { ProcessedMonitorData, SortConfig } from '../types';
@@ -605,7 +606,7 @@ function MobileSortMenu({
     { key: 'uptime', label: t('table.sorting.uptime') },
     { key: 'lastCheck', label: t('table.sorting.lastCheck') },
     { key: 'serviceType', label: t('table.sorting.service') },
-    { key: 'priceRatio', label: t('table.sorting.priceRatio') },
+    ...(HIDE_PRICE_COLUMN ? [] : [{ key: 'priceRatio', label: t('table.sorting.priceRatio') }]),
     { key: 'listedDays', label: t('table.sorting.listedDays') },
   ];
 
@@ -715,15 +716,15 @@ function StatusTableComponent({
         <colgroup>
           {hasAnnotations && <col className="w-px" />}
           {showProvider && <col className="w-px" />}
-          <col className="w-px" />
-          <col className="w-px" />
-          <col className="w-px" />
-          <col className="w-px" />
-          <col className="w-px" />
-          <col className="w-px" />
-          <col className="w-px" />
-          <col className="w-px" />
-          <col className="w-full" />
+          <col className="w-px" /> {/* service */}
+          <col className="w-px" /> {/* channel */}
+          <col className="w-px" /> {/* model */}
+          {!HIDE_PRICE_COLUMN && <col className="w-px" />} {/* priceRatio */}
+          <col className="w-px" /> {/* listedDays */}
+          <col className="w-px" /> {/* uptime */}
+          <col className="w-px" /> {/* lastCheck */}
+          <col className="w-px" /> {/* quality */}
+          <col className="w-full" /> {/* trend */}
         </colgroup>
         <thead>
           <tr className="border-b border-default/50 text-secondary text-xs uppercase tracking-wider">
@@ -772,31 +773,33 @@ function StatusTableComponent({
             <th className="px-2 py-3 font-medium whitespace-nowrap">
               {t('table.headers.model')}
             </th>
-            <th
-              className="px-2 py-3 font-medium whitespace-nowrap cursor-pointer hover:text-accent transition-colors focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none"
-              onClick={() => onSort('priceRatio')}
-              onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), onSort('priceRatio'))}
-              tabIndex={0}
-              role="button"
-            >
-              <div className="flex items-center">
-                <div className="flex flex-col leading-tight">
-                  <span>{t('table.headers.priceRatioLine1')}</span>
-                  <span className="text-[10px] opacity-50 font-normal">{t('table.headers.priceRatioLine2')}</span>
-                </div>
-                <span
-                  className="relative group/price-tip ml-1 inline-flex items-center cursor-help"
-                  onClick={(e) => e.stopPropagation()}
-                  onKeyDown={(e) => e.stopPropagation()}
-                >
-                  <Info size={12} className="text-secondary opacity-70" aria-hidden="true" />
-                  <span className="absolute left-1/2 top-full z-50 mt-1 w-48 -translate-x-1/2 rounded-lg border border-default bg-elevated px-2 py-1.5 text-[11px] font-normal normal-case tracking-normal leading-snug whitespace-normal text-primary opacity-0 pointer-events-none shadow-lg transition-opacity delay-150 group-hover/price-tip:opacity-100 group-hover/price-tip:pointer-events-auto">
-                    {t('table.headers.priceRatioTooltip')}
+            {!HIDE_PRICE_COLUMN && (
+              <th
+                className="px-2 py-3 font-medium whitespace-nowrap cursor-pointer hover:text-accent transition-colors focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none"
+                onClick={() => onSort('priceRatio')}
+                onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), onSort('priceRatio'))}
+                tabIndex={0}
+                role="button"
+              >
+                <div className="flex items-center">
+                  <div className="flex flex-col leading-tight">
+                    <span>{t('table.headers.priceRatioLine1')}</span>
+                    <span className="text-[10px] opacity-50 font-normal">{t('table.headers.priceRatioLine2')}</span>
+                  </div>
+                  <span
+                    className="relative group/price-tip ml-1 inline-flex items-center cursor-help"
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => e.stopPropagation()}
+                  >
+                    <Info size={12} className="text-secondary opacity-70" aria-hidden="true" />
+                    <span className="absolute left-1/2 top-full z-50 mt-1 w-48 -translate-x-1/2 rounded-lg border border-default bg-elevated px-2 py-1.5 text-[11px] font-normal normal-case tracking-normal leading-snug whitespace-normal text-primary opacity-0 pointer-events-none shadow-lg transition-opacity delay-150 group-hover/price-tip:opacity-100 group-hover/price-tip:pointer-events-auto">
+                      {t('table.headers.priceRatioTooltip')}
+                    </span>
                   </span>
-                </span>
-                <SortIcon columnKey="priceRatio" />
-              </div>
-            </th>
+                  <SortIcon columnKey="priceRatio" />
+                </div>
+              </th>
+            )}
             <th
               className="px-2 py-3 font-medium whitespace-nowrap cursor-pointer hover:text-accent transition-colors focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none"
               onClick={() => onSort('listedDays')}
@@ -979,20 +982,22 @@ function StatusTableComponent({
                   );
                 })()}
               </td>
-              <td className="px-2 py-1 font-mono text-xs whitespace-nowrap">
-                {(() => {
-                  const priceData = formatPriceRatioStructured(item.priceMin, item.priceMax);
-                  if (!priceData) return <span className="text-muted">-</span>;
-                  return (
-                    <div className="flex flex-col leading-tight">
-                      <span className="text-secondary">{priceData.base}</span>
-                      {priceData.sub && (
-                        <span className="text-[10px] text-muted">{priceData.sub}</span>
-                      )}
-                    </div>
-                  );
-                })()}
-              </td>
+              {!HIDE_PRICE_COLUMN && (
+                <td className="px-2 py-1 font-mono text-xs whitespace-nowrap">
+                  {(() => {
+                    const priceData = formatPriceRatioStructured(item.priceMin, item.priceMax);
+                    if (!priceData) return <span className="text-muted">-</span>;
+                    return (
+                      <div className="flex flex-col leading-tight">
+                        <span className="text-secondary">{priceData.base}</span>
+                        {priceData.sub && (
+                          <span className="text-[10px] text-muted">{priceData.sub}</span>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </td>
+              )}
               <td className="px-2 py-1 font-mono text-xs text-secondary whitespace-nowrap">
                 {item.listedDays != null ? `${item.listedDays}d` : '-'}
               </td>

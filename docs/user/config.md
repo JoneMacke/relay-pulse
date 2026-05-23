@@ -2143,6 +2143,20 @@ VITE_API_BASE_URL=http://localhost:8080
 VITE_USE_MOCK_DATA=false
 ```
 
+#### 列展示控制
+
+```bash
+# 是否在公开列表/卡片中隐藏"价格 ¥/$"列（自报倍率，无法验证）
+# 值为 true 时隐藏，默认或留空表示显示
+# 仅影响前端公开展示，admin 录入端始终可见
+VITE_HIDE_PRICE_COLUMN=
+```
+
+**说明**：
+- 此变量为**构建期烧进 bundle 的部署策略**，需在 `npm run build` 前设置（Dockerfile 已透传 ARG）
+- 使用预构建镜像（`image:` 而非 `build:`）时此 env 在运行期无效；如需切换必须重新构建镜像
+- 旧链接的 `?sort=priceRatio_desc` 在隐藏后会被解析层归一化回默认排序，不影响赞助置顶语义
+
 #### Notifier 配置（订阅通知功能）
 
 ```bash

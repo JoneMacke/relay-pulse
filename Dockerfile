@@ -8,6 +8,8 @@ FROM node:20-alpine AS frontend-builder
 
 # Notifier API URL for subscription feature
 ARG VITE_NOTIFIER_API_URL=https://notifier.relaypulse.top
+# 是否隐藏公开列表/卡片中的"价格 ¥/$"列（值为 true 时隐藏，默认显示）
+ARG VITE_HIDE_PRICE_COLUMN=
 
 WORKDIR /build
 
@@ -20,6 +22,7 @@ COPY frontend/ ./
 
 # 构建生产版本（传入环境变量）
 ENV VITE_NOTIFIER_API_URL=${VITE_NOTIFIER_API_URL}
+ENV VITE_HIDE_PRICE_COLUMN=${VITE_HIDE_PRICE_COLUMN}
 RUN npm run build
 
 # ============================================

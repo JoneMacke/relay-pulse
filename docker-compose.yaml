@@ -15,6 +15,8 @@ services:
         VERSION: ${MONITOR_VERSION:-dev}
         GIT_COMMIT: ${MONITOR_GIT_COMMIT:-unknown}
         BUILD_TIME: ${MONITOR_BUILD_TIME:-unknown}
+        # 构建期隐藏公开列表/卡片中的"价格 ¥/$"列（值为 true 时隐藏，默认显示）
+        VITE_HIDE_PRICE_COLUMN: ${VITE_HIDE_PRICE_COLUMN:-}
 
     container_name: relaypulse-monitor
 

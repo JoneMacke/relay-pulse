@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import type { ViewMode, SortConfig, BoardFilter } from '../types';
+import { HIDE_PRICE_COLUMN } from '../constants';
 
 /**
  * URL 查询参数与状态同步的配置
@@ -90,11 +91,23 @@ interface ListStateSnapshot {
 }
 
 /**
+ * 判断 URL sort 原始参数是否应被忽略
+ * 当前仅用于：价格列被 HIDE_PRICE_COLUMN 隐藏时，旧链接的 priceRatio_* 视为无效
+ */
+function isIgnorableSortParam(param: string | null): boolean {
+  if (!param) return false;
+  if (!HIDE_PRICE_COLUMN) return false;
+  const lastUnderscore = param.lastIndexOf('_');
+  const key = lastUnderscore === -1 ? param : param.substring(0, lastUnderscore);
+  return key === 'priceRatio';
+}
+
+/**
  * 解析排序参数
  * 格式：key_direction，如 uptime_desc、latency_asc
  */
 function parseSortParam(param: string | null): SortConfig {
-  if (!param) {
+  if (!param || isIgnorableSortParam(param)) {
     return { key: DEFAULTS.sortKey, direction: DEFAULTS.sortDirection };
   }
 
@@ -168,7 +181,8 @@ export function useUrlState(): [UrlState, UrlStateActions] {
 
     // 获取 sort 参数
     const rawSortParam = searchParams.get(PARAM_KEYS.sort);
-    const hasSortParam = Boolean(rawSortParam && rawSortParam.trim());
+    // 隐藏价格列时，旧链接的 priceRatio_* 参数视为无效（保持赞助置顶语义）
+    const hasSortParam = Boolean(rawSortParam && rawSortParam.trim() && !isIgnorableSortParam(rawSortParam));
 
     // 判断是否为初始排序状态
     // 用于赞助商置顶功能：初始状态启用置顶，用户点击排序后失效

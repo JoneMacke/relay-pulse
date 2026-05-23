@@ -197,6 +197,7 @@ jobs:
             VERSION=${{ steps.info.outputs.version }}
             GIT_COMMIT=${{ steps.info.outputs.git_commit }}
             BUILD_TIME=${{ steps.info.outputs.build_time }}
+            VITE_HIDE_PRICE_COLUMN=${{ vars.HIDE_PRICE_COLUMN }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

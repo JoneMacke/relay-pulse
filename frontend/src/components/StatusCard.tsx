@@ -6,7 +6,7 @@ import { HeatmapBlock } from './HeatmapBlock';
 import { LayeredHeatmapBlock } from './LayeredHeatmapBlock';
 import { ExternalLink } from './ExternalLink';
 import { FavoriteButton } from './FavoriteButton';
-import { getTimeRanges } from '../constants';
+import { getTimeRanges, HIDE_PRICE_COLUMN } from '../constants';
 import { availabilityToColor, latencyToColor, sponsorLevelToCardBorderColor, sponsorLevelToPinnedBgClass } from '../utils/color';
 import { formatPriceRatioStructured } from '../utils/format';
 import { aggregateHeatmap } from '../utils/heatmapAggregator';
@@ -136,7 +136,7 @@ function StatusCardComponent({
                   {t('card.uptime')} {item.uptime >= 0 ? `${item.uptime}%` : '--'}
                 </span>
               </span>
-              {(item.priceMin != null || item.priceMax != null) && (() => {
+              {!HIDE_PRICE_COLUMN && (item.priceMin != null || item.priceMax != null) && (() => {
                 const priceData = formatPriceRatioStructured(item.priceMin, item.priceMax);
                 if (!priceData) return null;
                 return (
