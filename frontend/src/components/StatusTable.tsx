@@ -21,7 +21,7 @@ import { formatPriceRatioStructured } from '../utils/format';
 import { getServiceIconComponent } from './ServiceIcon';
 import { lookupRpdiagScore } from '../hooks/useRpdiagScores';
 import type { ProcessedMonitorData, SortConfig } from '../types';
-import type { RpdiagScore, RpdiagScoresResponse } from '../types/monitor';
+import type { RpdiagModelScore, RpdiagScore, RpdiagScoresResponse } from '../types/monitor';
 
 type HistoryPoint = ProcessedMonitorData['history'][number];
 
