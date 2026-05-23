@@ -12,13 +12,16 @@ import { AnnotationCell } from './annotations';
 import { FavoriteButton } from './FavoriteButton';
 import { getTimeRanges } from '../constants';
 import { availabilityToColor, latencyToColor, sponsorLevelToBorderClass, sponsorLevelToCardBorderColor, sponsorLevelToPinnedBgClass } from '../utils/color';
+import { trackEvent } from '../utils/analytics';
 import { aggregateHeatmap } from '../utils/heatmapAggregator';
 import { createMediaQueryEffect } from '../utils/mediaQuery';
 import { shortenModelName } from '../utils/modelName';
 import { hasAnyAnnotation, hasAnyAnnotationInList } from '../utils/annotationUtils';
 import { formatPriceRatioStructured } from '../utils/format';
 import { getServiceIconComponent } from './ServiceIcon';
+import { lookupRpdiagScore } from '../hooks/useRpdiagScores';
 import type { ProcessedMonitorData, SortConfig } from '../types';
+import type { RpdiagScore, RpdiagScoresResponse } from '../types/monitor';
 
 type HistoryPoint = ProcessedMonitorData['history'][number];
 
@@ -179,6 +182,177 @@ interface StatusTableProps {
   onBlockHover: (e: React.MouseEvent<HTMLDivElement>, point: HistoryPoint) => void;
   onBlockLeave: () => void;
   onFilterProvider?: (providerId: string) => void; // 按服务商筛选
+  /** rpdiag 质量分索引（按 "provider|service|channel" 键）。空对象表示功能未启用或上游不可达。 */
+  rpdiagScores?: RpdiagScoresResponse;
+}
+
+// rpdiag 质量分单元格：所有 model 的 3 点 sparkline (30d/7d/latest) 叠在
+// 同一个 SVG 画布上，**不分块**。每条 polyline 颜色由该 model 自己的 latest
+// 分数决定（100=绿/60=黄/0=红 平滑渐变），dot 标记每个真实数据点。
+// 无可见数字，hover tooltip 出 per-model 明细。
+//
+// 视觉读法：
+//   3 条线靠近 → "所有 model 表现接近"（共识）
+//   分散      → "各 model 差异大"（需点进详情看哪个掉了）
+//   缺点      → 不补 0；缺一个点的 model 只画 dot/短线
+function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; compact?: boolean }) {
+  if (!score || !score.models || score.models.length === 0) {
+    return <span className="text-muted text-xs">-</span>;
+  }
+
+  const ranked = [...score.models].sort(compareModelKeys);
+  const title = ranked.map(formatModelTooltipRow).join('\n');
+
+  const W = compact ? 36 : 44;
+  const H = compact ? 14 : 18;
+  const STEP = W / 3;
+  // 1.2px 内边距上下避免点贴边
+  const PAD = 1.2;
+
+  // Y 轴分段非线性：高分段占 SVG 顶部 60% 像素，让 95 vs 100 等小差异有视觉空间。
+  //   score 0-60   → SVG 底部 20%
+  //   score 60-80  → 中间 20%
+  //   score 80-100 → 顶部 60%（实际业务关心的"好通道"区域）
+  // 跨 row 仍可比（同分数 → 同高度），但读 sparkline 时要意识到刻度不是匀速的。
+  // 用 qualityScoreYNorm 计算。绝对分数由 dot 颜色 + tooltip 数字双重提供。
+  const series = ranked
+    .map((m) => {
+      const values = [m.trend?.avg_30d, m.trend?.avg_7d, m.trend?.latest];
+      const present = values
+        .map((v, slot) => (typeof v === 'number' ? { value: v, slot } : null))
+        .filter((p): p is { value: number; slot: number } => p !== null);
+      if (present.length === 0) return null;
+      const points = present.map(({ value, slot }) => {
+        const clamped = Math.max(0, Math.min(100, value));
+        const norm = qualityScoreYNorm(clamped);
+        const x = STEP / 2 + slot * STEP;
+        const y = H - PAD - norm * (H - 2 * PAD);
+        return { x, y, value: clamped };
+      });
+      const recent = present[present.length - 1].value;
+      return { points, color: qualityScoreColor(recent) };
+    })
+    .filter((s): s is { points: { x: number; y: number; value: number }[]; color: string } => s !== null);
+
+  if (series.length === 0) {
+    return <span className="text-muted text-xs">-</span>;
+  }
+
+  const content = (
+    <span className="inline-flex items-center" title={title || undefined}>
+      <svg
+        width={W}
+        height={H}
+        viewBox={`0 0 ${W} ${H}`}
+        aria-hidden="true"
+        className="flex-shrink-0"
+      >
+        {series.map((s, i) => (
+          <g key={i}>
+            {s.points.length > 1 && (
+              <polyline
+                points={s.points.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')}
+                fill="none"
+                stroke={s.color}
+                strokeWidth="1.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                opacity="0.85"
+              />
+            )}
+            {s.points.map((p, j) => (
+              <circle key={j} cx={p.x} cy={p.y} r="1.4" fill={qualityScoreColor(p.value)} />
+            ))}
+          </g>
+        ))}
+      </svg>
+    </span>
+  );
+
+  if (!score.channel_url) return content;
+
+  // 裸 <a>：保留新窗 + noopener；不复用 ExternalLink 因为它强制带 ↗ 图标，
+  // 在密集表格里这点宝贵宽度还是留给 sparkline。
+  return (
+    <a
+      href={score.channel_url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center hover:opacity-80 active:opacity-60"
+      onClick={() => trackEvent('click_external_link', { link_text: 'rpdiag quality score', link_url: score.channel_url, outbound: true })}
+    >
+      {content}
+    </a>
+  );
+}
+
+// 分数 → SVG 高度归一化值（0=底部，1=顶部）。Piecewise 把高分段 80-100
+// 拉伸到 60% 像素带，让 95 vs 100 等小差异在视觉上看得见。
+// 业务事实：rpdiag 80% 的通道分数集中在 80-100，原本线性映射 95-100 只占
+// 顶 5% 像素，sparkline 全部贴顶看不出形状。
+function qualityScoreYNorm(score: number): number {
+  const c = Math.max(0, Math.min(100, score));
+  if (c <= 60) return (c / 60) * 0.2;                  // [0,60]   → [0, 0.2]
+  if (c <= 80) return 0.2 + ((c - 60) / 20) * 0.2;     // [60,80]  → [0.2, 0.4]
+  return 0.4 + ((c - 80) / 20) * 0.6;                  // [80,100] → [0.4, 1.0]
+}
+
+// 分数 → HSL 颜色：5 个色站段内线性插值，高分段（80-100）分辨率最高，
+// 让 90 / 95 / 100 也有清晰可辨的色差。
+//   0   → 红     (hue 0)
+//   60  → 橙黄   (hue 40)
+//   80  → 黄绿   (hue 75)
+//   90  → 草绿   (hue 105)
+//   100 → 翠绿   (hue 140)
+// 不复用 `availabilityToColor`：可用率与质量分语义不同，未来 rpdiag 可能调整阈值。
+function qualityScoreColor(score: number): string {
+  // [score, hue, saturation, lightness]
+  const stops: Array<[number, number, number, number]> = [
+    [0,   0,   78, 50],
+    [60,  40,  82, 50],
+    [80,  75,  72, 48],
+    [90,  105, 70, 46],
+    [100, 140, 78, 44],
+  ];
+  const c = Math.max(0, Math.min(100, score));
+  for (let i = 1; i < stops.length; i++) {
+    if (c <= stops[i][0]) {
+      const [s0, h0, sat0, l0] = stops[i - 1];
+      const [s1, h1, sat1, l1] = stops[i];
+      const t = s1 === s0 ? 0 : (c - s0) / (s1 - s0);
+      const h = h0 + t * (h1 - h0);
+      const sat = sat0 + t * (sat1 - sat0);
+      const l = l0 + t * (l1 - l0);
+      return `hsl(${h.toFixed(0)} ${sat.toFixed(0)}% ${l.toFixed(0)}%)`;
+    }
+  }
+  const last = stops[stops.length - 1];
+  return `hsl(${last[1]} ${last[2]}% ${last[3]}%)`;
+}
+
+const _MODEL_FAMILY_ORDER: Record<string, number> = { haiku: 0, sonnet: 1, opus: 2 };
+
+function compareModelKeys(a: RpdiagModelScore, b: RpdiagModelScore): number {
+  const ra = _modelFamilyRank(a.model_key || a.model);
+  const rb = _modelFamilyRank(b.model_key || b.model);
+  if (ra !== rb) return ra - rb;
+  return (a.model_key || a.model || '').localeCompare(b.model_key || b.model || '');
+}
+
+function _modelFamilyRank(name: string | undefined): number {
+  if (!name) return 99;
+  const lower = name.toLowerCase();
+  for (const [family, rank] of Object.entries(_MODEL_FAMILY_ORDER)) {
+    if (lower.includes(family)) return rank;
+  }
+  return 50;
+}
+
+function formatModelTooltipRow(m: RpdiagModelScore): string {
+  const fmt = (v: number | null | undefined) => (typeof v === 'number' ? v.toFixed(1) : '—');
+  const key = m.model_key || m.model || '?';
+  const t = m.trend;
+  return `${key}  30d=${fmt(t?.avg_30d)}  7d=${fmt(t?.avg_7d)}  latest=${fmt(t?.latest)}`;
 }
 
 // react-window v2 虚拟列表行组件（rowComponent 接口）
@@ -193,9 +367,10 @@ interface MobileRowProps {
   onToggleFavorite: (id: string) => void;
   onBlockHover: (e: React.MouseEvent<HTMLDivElement>, point: HistoryPoint) => void;
   onBlockLeave: () => void;
+  rpdiagScores?: RpdiagScoresResponse;
 }
 
-function MobileRow({ index, style, data, slowLatencyMs, enableAnnotations, showProvider, showSponsor, useLatencyGradient, isFavorite, onToggleFavorite, onBlockHover, onBlockLeave }: RowComponentProps<MobileRowProps>) {
+function MobileRow({ index, style, data, slowLatencyMs, enableAnnotations, showProvider, showSponsor, useLatencyGradient, isFavorite, onToggleFavorite, onBlockHover, onBlockLeave, rpdiagScores }: RowComponentProps<MobileRowProps>) {
   const item = data[index];
   return (
     <div style={style}>
@@ -211,6 +386,7 @@ function MobileRow({ index, style, data, slowLatencyMs, enableAnnotations, showP
           onToggleFavorite={() => onToggleFavorite(item.id)}
           onBlockHover={onBlockHover}
           onBlockLeave={onBlockLeave}
+          rpdiagScore={lookupRpdiagScore(rpdiagScores, item.providerId, item.serviceType, item.channel)}
         />
       </div>
     </div>
@@ -229,6 +405,7 @@ function MobileListItem({
   onToggleFavorite,
   onBlockHover,
   onBlockLeave,
+  rpdiagScore,
 }: {
   item: ProcessedMonitorData;
   slowLatencyMs: number;
@@ -240,6 +417,7 @@ function MobileListItem({
   onToggleFavorite: () => void;
   onBlockHover: (e: React.MouseEvent<HTMLDivElement>, point: HistoryPoint) => void;
   onBlockLeave: () => void;
+  rpdiagScore?: RpdiagScore;
 }) {
   const { i18n } = useTranslation();
   const ServiceIcon = getCachedServiceIcon(item.serviceType);
@@ -369,6 +547,9 @@ function MobileListItem({
           >
             {item.uptime >= 0 ? `${item.uptime}%` : '--'}
           </span>
+          {rpdiagScore && rpdiagScore.models && rpdiagScore.models.length > 0 && (
+            <QualityScoreCell score={rpdiagScore} compact />
+          )}
           {/* 时间和延迟（总是显示） */}
           <div className="flex items-center gap-2 text-[10px] text-muted font-mono">
             {item.lastCheckTimestamp && (
@@ -474,6 +655,7 @@ function StatusTableComponent({
   onBlockHover,
   onBlockLeave,
   onFilterProvider,
+  rpdiagScores,
 }: StatusTableProps) {
   const { t, i18n } = useTranslation();
   const [isMobile, setIsMobile] = useState(false);
@@ -517,7 +699,7 @@ function StatusTableComponent({
           rowHeight={MOBILE_ROW_HEIGHT}
           overscanCount={3}
           rowComponent={MobileRow}
-          rowProps={{ data, slowLatencyMs, enableAnnotations, showProvider, showSponsor, useLatencyGradient, isFavorite, onToggleFavorite, onBlockHover, onBlockLeave }}
+          rowProps={{ data, slowLatencyMs, enableAnnotations, showProvider, showSponsor, useLatencyGradient, isFavorite, onToggleFavorite, onBlockHover, onBlockLeave, rpdiagScores }}
         />
       </div>
     );
@@ -533,6 +715,7 @@ function StatusTableComponent({
         <colgroup>
           {hasAnnotations && <col className="w-px" />}
           {showProvider && <col className="w-px" />}
+          <col className="w-px" />
           <col className="w-px" />
           <col className="w-px" />
           <col className="w-px" />
@@ -653,6 +836,24 @@ function StatusTableComponent({
                   <span className="text-[10px] opacity-50 font-normal">{t('table.headers.lastCheckLine2')}</span>
                 </div>
                 <SortIcon columnKey="lastCheck" />
+              </div>
+            </th>
+            <th className="px-2 py-3 font-medium whitespace-nowrap">
+              <div className="flex items-center gap-1">
+                {t('table.headers.quality', '质量')}
+                <span
+                  className="relative group/quality-tip inline-flex items-center cursor-help"
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => e.stopPropagation()}
+                >
+                  <Info size={12} className="text-secondary opacity-70" aria-hidden="true" />
+                  <span className="absolute right-0 top-full z-50 mt-1 w-56 rounded-lg border border-default bg-elevated px-2 py-1.5 text-[11px] font-normal normal-case tracking-normal leading-snug whitespace-normal text-primary opacity-0 pointer-events-none shadow-lg transition-opacity delay-150 group-hover/quality-tip:opacity-100 group-hover/quality-tip:pointer-events-auto">
+                    {t(
+                      'table.headers.qualityTooltip',
+                      '由 rpdiag.relaypulse.top 独立采样的质量分（0-100），按通道最佳模型取分；3 点 sparkline 显示 30d / 7d / 最近一次。',
+                    )}
+                  </span>
+                </span>
               </div>
             </th>
             <th className="pl-2 pr-4 py-3 font-medium min-w-[260px]">
@@ -819,6 +1020,9 @@ function StatusTableComponent({
                     <span className="text-muted text-xs">-</span>
                   )}
                 </div>
+              </td>
+              <td className="px-2 py-1 whitespace-nowrap">
+                <QualityScoreCell score={lookupRpdiagScore(rpdiagScores, item.providerId, item.serviceType, item.channel)} />
               </td>
               <td className="pl-2 pr-4 py-1.5 align-middle">
                 <div className="flex items-center gap-[2px] h-5 w-full overflow-hidden rounded-sm">

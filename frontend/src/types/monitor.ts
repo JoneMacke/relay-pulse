@@ -119,3 +119,37 @@ export interface AdminMonitorLogsResponse {
   logs: ProbeHistoryEntry[];
   total: number;
 }
+
+/** rpdiag 质量分 sparkline 3 点数据（avg_30d → avg_7d → latest）。 */
+export interface RpdiagScoreTrend {
+  latest?: number | null;
+  latest_at?: string | null;
+  avg_7d?: number | null;
+  avg_30d?: number | null;
+  n_7d: number;
+  n_30d: number;
+}
+
+/** rpdiag (provider, service, channel) 三元组下某个 model 的质量分。 */
+export interface RpdiagModelScore {
+  model?: string;
+  model_key?: string;
+  score?: number | null;
+  trend: RpdiagScoreTrend;
+  detail_url?: string;
+}
+
+/** rpdiag 一个 (provider, service, channel) 三元组的聚合质量分。
+ *  max_score 取该通道下所有 model 的最高分；列表用户更关心
+ *  「该通道能达到的最佳状态」而不是平均，避免被低频/旧模型拖低。
+ */
+export interface RpdiagScore {
+  max_score?: number | null;
+  models: RpdiagModelScore[];
+  trend: RpdiagScoreTrend;
+  channel_url: string;
+}
+
+/** /api/rpdiag-scores 响应。
+ *  键格式 "provider|service|channel"，三段均为小写并已剥 rpdiag 前缀。 */
+export type RpdiagScoresResponse = Record<string, RpdiagScore>;

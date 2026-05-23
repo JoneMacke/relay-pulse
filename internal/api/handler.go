@@ -19,6 +19,7 @@ import (
 	"monitor/internal/logger"
 	"monitor/internal/onboarding"
 	"monitor/internal/probe"
+	"monitor/internal/rpdiag"
 	"monitor/internal/storage"
 )
 
@@ -252,6 +253,7 @@ type Handler struct {
 	changeMu      sync.RWMutex         // 保护 changeSvc 热替换
 	changeSvc     *change.Service      // 变更请求服务（可选）
 	monitorStore  *config.MonitorStore // monitors.d/ CRUD（可选）
+	rpdiagClient  *rpdiag.Client       // rpdiag 质量分客户端（可选，启动时一次性注入）
 }
 
 // NewHandler 创建处理器
@@ -267,6 +269,38 @@ func NewHandler(store storage.Storage, cfg *config.AppConfig, autoMover *automov
 // SetInlineProber 设置内联探测器。
 func (h *Handler) SetInlineProber(p *probe.InlineProber) {
 	h.inlineProber = p
+}
+
+// SetRpdiagClient 注入 rpdiag 质量分客户端。client 为 nil 表示未启用。
+// 设计为启动期一次性注入（不支持热替换），故无锁。
+func (h *Handler) SetRpdiagClient(client *rpdiag.Client) {
+	h.rpdiagClient = client
+}
+
+// GetRpdiagScores 返回 rpdiag 质量分索引（按 "provider|service|channel" 键）。
+// 当客户端未启用（MONITOR_RPDIAG_ENABLED=false / 未设置）时返回空对象，
+// 由前端兜底显示 "-"；上游异常时返回 503，前端走同样的空兜底。
+func (h *Handler) GetRpdiagScores(c *gin.Context) {
+	if h.rpdiagClient == nil {
+		c.Header("Cache-Control", "no-store")
+		c.JSON(http.StatusOK, gin.H{})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+
+	scores, err := h.rpdiagClient.Scores(ctx)
+	if err != nil {
+		logger.FromContext(c.Request.Context(), "api").Error(
+			"获取 rpdiag 质量分失败", "error", err,
+		)
+		apiError(c, http.StatusServiceUnavailable, ErrCodeServiceUnavailable, "质量分暂不可用")
+		return
+	}
+
+	c.Header("Cache-Control", "public, max-age=60")
+	c.JSON(http.StatusOK, scores)
 }
 
 // SetProbeLimiter 设置公共探测端点限流器。

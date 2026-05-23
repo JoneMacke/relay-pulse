@@ -21,6 +21,7 @@ import (
 	"monitor/internal/buildinfo"
 	"monitor/internal/config"
 	"monitor/internal/logger"
+	"monitor/internal/rpdiag"
 	"monitor/internal/storage"
 )
 
@@ -151,11 +152,13 @@ func NewServer(store storage.Storage, cfg *config.AppConfig, port string, autoMo
 
 	// 创建处理器
 	handler := NewHandler(store, cfg, autoMover)
+	handler.SetRpdiagClient(rpdiag.NewClientFromEnv())
 
 	// 注册 API 路由
 	router.GET("/api/status", handler.GetStatus)
 	router.GET("/api/status/query", handler.GetStatusQuery)
 	router.POST("/api/status/batch", handler.PostStatusBatch)
+	router.GET("/api/rpdiag-scores", handler.GetRpdiagScores)
 
 	// 事件 API 路由
 	router.GET("/api/events", handler.GetEvents)

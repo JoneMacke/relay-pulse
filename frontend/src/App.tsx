@@ -16,6 +16,7 @@ import { useSeoMeta } from './hooks/useSeoMeta';
 import { useUrlState } from './hooks/useUrlState';
 import { useFavorites } from './hooks/useFavorites';
 import { useAnnouncements } from './hooks/useAnnouncements';
+import { useRpdiagScores } from './hooks/useRpdiagScores';
 import { createMediaQueryEffect } from './utils/mediaQuery';
 import { trackPeriodChange, trackServiceFilter, trackEvent } from './utils/analytics';
 import type { TooltipState, ProcessedMonitorData, ChannelOption } from './types';
@@ -175,6 +176,8 @@ function App() {
       return next;
     });
   };
+
+  const { scores: rpdiagScores } = useRpdiagScores();
 
   const { loading, error, data, rawData, stats, providers, slowLatencyMs, enableAnnotations, boardsEnabled, boardsEnabledLoaded, boardCounts, allMonitorIds, allMonitorIdsSupported, refetch } = useMonitorData({
     timeRange,
@@ -707,6 +710,7 @@ function App() {
                   onBlockHover={handleBlockHover}
                   onBlockLeave={handleBlockLeave}
                   onFilterProvider={(providerId) => setFilterProvider([providerId])}
+                  rpdiagScores={rpdiagScores}
                 />
               )}
 
