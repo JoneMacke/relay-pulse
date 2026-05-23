@@ -264,9 +264,9 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
             y1={line.y}
             x2={W}
             y2={line.y}
-            stroke="hsl(0 0% 55% / 0.35)"
-            strokeWidth="0.5"
-            strokeDasharray="1 2"
+            stroke="hsl(0 0% 75% / 0.55)"
+            strokeWidth="1"
+            strokeDasharray="2 2"
           />
         ))}
         {series.map((s, i) => (
@@ -878,7 +878,7 @@ function StatusTableComponent({
                   <span className="absolute right-0 top-full z-50 mt-1 w-56 rounded-lg border border-default bg-elevated px-2 py-1.5 text-[11px] font-normal normal-case tracking-normal leading-snug whitespace-normal text-primary opacity-0 pointer-events-none shadow-lg transition-opacity delay-150 group-hover/quality-tip:opacity-100 group-hover/quality-tip:pointer-events-auto">
                     {t(
                       'table.headers.qualityTooltip',
-                      '由 rpdiag.relaypulse.top 独立采样的质量分（0-100），按通道最佳模型取分；3 点 sparkline 显示 30d / 7d / 最近一次。',
+                      '由 rpdiag.relaypulse.top 独立采样的质量分（0-100）。通道里每个模型一条 sparkline 叠绘显示历史趋势；80 / 100 两条参考线作 Y 轴刻度。',
                     )}
                   </span>
                 </span>
