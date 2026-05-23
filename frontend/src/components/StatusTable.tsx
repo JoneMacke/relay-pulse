@@ -204,7 +204,7 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
   const ranked = [...score.models].sort(compareModelKeys);
   const title = ranked.map(formatModelTooltipRow).join('\n');
 
-  const W = compact ? 36 : 44;
+  const W = compact ? 36 : 90;
   const H = compact ? 14 : 18;
   const STEP = W / 3;
   // 1.2px 内边距上下避免点贴边
@@ -240,9 +240,9 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
   }
 
   const content = (
-    <span className="inline-flex items-center" title={title || undefined}>
+    <span className={compact ? 'inline-flex items-center' : 'flex w-full items-center'} title={title || undefined}>
       <svg
-        width={W}
+        width={compact ? W : '100%'}
         height={H}
         viewBox={`0 0 ${W} ${H}`}
         aria-hidden="true"
@@ -279,7 +279,11 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
       href={score.channel_url}
       target="_blank"
       rel="noopener noreferrer"
-      className="inline-flex items-center hover:opacity-80 active:opacity-60"
+      className={
+        compact
+          ? 'inline-flex items-center hover:opacity-80 active:opacity-60'
+          : 'flex w-full items-center hover:opacity-80 active:opacity-60'
+      }
       onClick={() => trackEvent('click_external_link', { link_text: 'rpdiag quality score', link_url: score.channel_url, outbound: true })}
     >
       {content}
