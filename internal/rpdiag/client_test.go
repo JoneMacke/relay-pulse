@@ -76,6 +76,7 @@ func TestBuildScoresAggregatesByTriple(t *testing.T) {
 			ChannelName: "Anthropic", RelaypulseChannelKey: "anthropic",
 			ProviderName: "Anthropic", ServiceCLICommand: "claude",
 			Model: "claude-haiku-4-5", ModelKey: "claude-haiku-4-5",
+			DetailURL:         "https://diag.relaypulse.top/channel/Anthropic?window=30d&provider=Anthropic&service=claude&model=claude-haiku-4-5",
 			FinalQualityScore: mk(100),
 			ScoreTrend:        ScoreTrend{Latest: mk(100), Avg7D: mk(100), Avg30D: mk(100), N7D: 3, N30D: 9},
 		},
@@ -115,8 +116,11 @@ func TestBuildScoresAggregatesByTriple(t *testing.T) {
 	if len(entry.Models) != 2 {
 		t.Errorf("Models len = %d, want 2", len(entry.Models))
 	}
-	if entry.ChannelURL == "" {
-		t.Errorf("ChannelURL should be populated")
+	// ChannelURL 必须从 max-score 那行的 detail_url 派生（去掉 ?model=），
+	// 保留 rpdiag 给的原始 channel name 与 provider/service 限定。
+	wantChannelURL := "https://diag.relaypulse.top/channel/Anthropic?provider=Anthropic&service=claude&window=30d"
+	if entry.ChannelURL != wantChannelURL {
+		t.Errorf("ChannelURL = %q, want %q", entry.ChannelURL, wantChannelURL)
 	}
 }
 
@@ -148,6 +152,7 @@ func TestScoresUpstreamRoundTrip(t *testing.T) {
 			ChannelName: "cc", RelaypulseChannelKey: "cc",
 			ProviderName: "InfAI", ServiceCLICommand: "claude",
 			Model: "claude-haiku-4-5", ModelKey: "claude-haiku-4-5",
+			DetailURL:         "https://diag.relaypulse.top/channel/cc?window=30d&provider=InfAI&service=claude&model=claude-haiku-4-5",
 			FinalQualityScore: mk(95.2),
 			ScoreTrend:        ScoreTrend{Latest: mk(98), Avg7D: mk(98), Avg30D: mk(98)},
 		}},
@@ -158,7 +163,7 @@ func TestScoresUpstreamRoundTrip(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient(nil, srv.URL, DefaultDetailBaseURL, 0, true)
+	client := NewClient(nil, srv.URL, 0, true)
 	scores, err := client.Scores(context.Background())
 	if err != nil {
 		t.Fatalf("Scores returned error: %v", err)
@@ -170,6 +175,34 @@ func TestScoresUpstreamRoundTrip(t *testing.T) {
 	if entry.MaxScore == nil || *entry.MaxScore != 95.2 {
 		t.Errorf("MaxScore = %v, want 95.2", entry.MaxScore)
 	}
+	wantChannelURL := "https://diag.relaypulse.top/channel/cc?provider=InfAI&service=claude&window=30d"
+	if entry.ChannelURL != wantChannelURL {
+		t.Errorf("ChannelURL = %q, want %q", entry.ChannelURL, wantChannelURL)
+	}
+}
+
+func TestBuildScoresChannelURLEmptyWhenDetailURLMissing(t *testing.T) {
+	// 若 rpdiag 没给 detail_url（理论上不该发生，但 schema 可选），ChannelURL
+	// 必须留空，前端 nil-check 后不展示链接 — 避免回退到任何本地拼接的
+	// "bare channel key" 死路。
+	c := newTestClient()
+	mk := func(v float64) *float64 { return &v }
+
+	rows := []rankingRow{{
+		ChannelName: "O-Max", RelaypulseChannelKey: "max",
+		ProviderName: "SAIAi", ServiceCLICommand: "claude",
+		Model: "claude-haiku-4-5", ModelKey: "claude-haiku-4-5",
+		FinalQualityScore: mk(90),
+		// DetailURL 缺省为空字符串
+	}}
+
+	entry, ok := c.buildScores(rows)["saiai|cc|max"]
+	if !ok {
+		t.Fatalf("expected entry saiai|cc|max, got %v", keysOf(c.buildScores(rows)))
+	}
+	if entry.ChannelURL != "" {
+		t.Errorf("ChannelURL = %q, want empty", entry.ChannelURL)
+	}
 }
 
 func TestScoresRejectsUnsupportedSchema(t *testing.T) {
@@ -178,7 +211,7 @@ func TestScoresRejectsUnsupportedSchema(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient(nil, srv.URL, DefaultDetailBaseURL, 0, true)
+	client := NewClient(nil, srv.URL, 0, true)
 	if _, err := client.Scores(context.Background()); err == nil {
 		t.Errorf("expected error for unsupported schema_version, got nil")
 	}
@@ -187,7 +220,7 @@ func TestScoresRejectsUnsupportedSchema(t *testing.T) {
 // helpers ---------------------------------------------------------------
 
 func newTestClient() *Client {
-	return NewClient(nil, DefaultExportURL, DefaultDetailBaseURL, DefaultTTL, true)
+	return NewClient(nil, DefaultExportURL, DefaultTTL, true)
 }
 
 func keysOf(m map[string]Score) []string {

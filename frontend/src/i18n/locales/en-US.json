@@ -144,7 +144,7 @@
   },
   "table": {
     "headers": {
-      "annotation": "Annotations",
+      "annotation": "Tags",
       "provider": "Provider",
       "sponsor": "Sponsor",
       "service": "Service",
@@ -154,6 +154,8 @@
       "priceRatioLine1": "Price",
       "priceRatioLine2": "¥/$",
       "priceRatioTooltip": "How many CNY per 1 USD of tokens, for reference only",
+      "quality": "Quality",
+      "qualityTooltip": "Independent quality score (0-100) sampled by rpdiag.relaypulse.top, taking the channel's best-performing model. Sparkline shows 30d / 7d / latest.",
       "listedDays": "Listed Days",
       "listedDaysLine1": "Listed",
       "listedDaysLine2": "Days",

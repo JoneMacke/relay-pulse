@@ -31,11 +31,10 @@ import (
 )
 
 const (
-	defaultExportURL     = "https://diag.relaypulse.top/api/v1/ranking/export?scoring_version=all"
-	defaultDetailBaseURL = "https://diag.relaypulse.top/channel"
-	defaultTTL           = 10 * time.Minute
-	requestTimeout       = 10 * time.Second
-	maxResponseBytes     = 10 << 20 // 10 MiB; export payload is < 1 MiB today
+	defaultExportURL = "https://diag.relaypulse.top/api/v1/ranking/export?scoring_version=all"
+	defaultTTL       = 10 * time.Minute
+	requestTimeout   = 10 * time.Second
+	maxResponseBytes = 10 << 20 // 10 MiB; export payload is < 1 MiB today
 )
 
 // ScoreTrend mirrors rpdiag's per-row 3-point sparkline data
@@ -71,10 +70,9 @@ type Score struct {
 
 // Client is safe for concurrent use.
 type Client struct {
-	httpClient    *http.Client
-	exportURL     string
-	detailBaseURL string
-	ttl           time.Duration
+	httpClient *http.Client
+	exportURL  string
+	ttl        time.Duration
 
 	mu        sync.RWMutex
 	cache     map[string]Score
@@ -88,7 +86,7 @@ type Client struct {
 // should call NewClientFromEnv. Passing enabled=false returns a Client that
 // always serves an empty snapshot (useful for tests that need a non-nil
 // reference).
-func NewClient(httpClient *http.Client, exportURL, detailBaseURL string, ttl time.Duration, enabled bool) *Client {
+func NewClient(httpClient *http.Client, exportURL string, ttl time.Duration, enabled bool) *Client {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: requestTimeout}
 	}
@@ -98,14 +96,10 @@ func NewClient(httpClient *http.Client, exportURL, detailBaseURL string, ttl tim
 	if strings.TrimSpace(exportURL) == "" {
 		exportURL = defaultExportURL
 	}
-	if strings.TrimSpace(detailBaseURL) == "" {
-		detailBaseURL = defaultDetailBaseURL
-	}
 	c := &Client{
-		httpClient:    httpClient,
-		exportURL:     strings.TrimSpace(exportURL),
-		detailBaseURL: strings.TrimRight(strings.TrimSpace(detailBaseURL), "/"),
-		ttl:           ttl,
+		httpClient: httpClient,
+		exportURL:  strings.TrimSpace(exportURL),
+		ttl:        ttl,
 	}
 	if !enabled {
 		// Disabled clients still need to honour the Scores() contract; tag
@@ -118,18 +112,16 @@ func NewClient(httpClient *http.Client, exportURL, detailBaseURL string, ttl tim
 
 // Exported constants for tests.
 const (
-	DefaultExportURL     = defaultExportURL
-	DefaultDetailBaseURL = defaultDetailBaseURL
-	DefaultTTL           = defaultTTL
+	DefaultExportURL = defaultExportURL
+	DefaultTTL       = defaultTTL
 )
 
 // NewClientFromEnv returns a Client when MONITOR_RPDIAG_ENABLED is truthy,
 // otherwise nil. Recognized env vars:
 //
-//	MONITOR_RPDIAG_ENABLED          "1"/"true"/"yes" → enable, default disabled
-//	MONITOR_RPDIAG_EXPORT_URL       override the rpdiag export endpoint
-//	MONITOR_RPDIAG_DETAIL_BASE_URL  override the per-channel detail URL prefix
-//	MONITOR_RPDIAG_CACHE_TTL        Go duration string (e.g. "5m"), defaults 10m
+//	MONITOR_RPDIAG_ENABLED      "1"/"true"/"yes" → enable, default disabled
+//	MONITOR_RPDIAG_EXPORT_URL   override the rpdiag export endpoint
+//	MONITOR_RPDIAG_CACHE_TTL    Go duration string (e.g. "5m"), defaults 10m
 func NewClientFromEnv() *Client {
 	if !enabledFromEnv(os.Getenv("MONITOR_RPDIAG_ENABLED")) {
 		return nil
@@ -139,10 +131,6 @@ func NewClientFromEnv() *Client {
 	if exportURL == "" {
 		exportURL = defaultExportURL
 	}
-	detailBase := strings.TrimSpace(os.Getenv("MONITOR_RPDIAG_DETAIL_BASE_URL"))
-	if detailBase == "" {
-		detailBase = defaultDetailBaseURL
-	}
 	ttl := defaultTTL
 	if raw := strings.TrimSpace(os.Getenv("MONITOR_RPDIAG_CACHE_TTL")); raw != "" {
 		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
@@ -151,10 +139,9 @@ func NewClientFromEnv() *Client {
 	}
 
 	return &Client{
-		httpClient:    &http.Client{Timeout: requestTimeout},
-		exportURL:     exportURL,
-		detailBaseURL: strings.TrimRight(detailBase, "/"),
-		ttl:           ttl,
+		httpClient: &http.Client{Timeout: requestTimeout},
+		exportURL:  exportURL,
+		ttl:        ttl,
 	}
 }
 
@@ -317,9 +304,10 @@ func (c *Client) buildScores(rows []rankingRow) map[string]Score {
 		if entry.MaxScore == nil || *row.FinalQualityScore > *entry.MaxScore {
 			entry.MaxScore = copyFloat(row.FinalQualityScore)
 			entry.Trend = row.ScoreTrend
-		}
-		if entry.ChannelURL == "" {
-			entry.ChannelURL = c.channelURL(channel)
+			// 通道整体跳转 = max-score 那行的 detail_url 去掉 model 参数 →
+			// 落到 rpdiag 的"服务商+通道"概览页（channel name 与大小写、前缀都来自
+			// rpdiag，本地不再猜测路由规则）。
+			entry.ChannelURL = channelURLFromDetailURL(row.DetailURL)
 		}
 		out[key] = entry
 	}
@@ -375,11 +363,26 @@ func canonical(v string) string {
 	return strings.ToLower(strings.TrimSpace(v))
 }
 
-func (c *Client) channelURL(channel string) string {
-	if c.detailBaseURL == "" || channel == "" {
+// channelURLFromDetailURL 从 model 级别的 detail_url 派生出 channel 级别链接：
+// 解析 URL，丢弃 ?model= 查询参数后重新序列化。
+//
+// rpdiag 已经在 detail_url 里给了正确的 channel name（带前缀、大小写敏感）和
+// 必要的 provider/service 限定符，去掉 model 后就是"服务商+通道"概览。这样
+// relaypulse 不需要硬编码 rpdiag 路由规则，路由变化只需要 rpdiag 调整 detail_url
+// 即可。detail_url 为空或不可解析时返回空，前端 nil-check 后不展示链接。
+func channelURLFromDetailURL(detailURL string) string {
+	trimmed := strings.TrimSpace(detailURL)
+	if trimmed == "" {
 		return ""
 	}
-	return c.detailBaseURL + "/" + url.PathEscape(channel)
+	u, err := url.Parse(trimmed)
+	if err != nil || !u.IsAbs() {
+		return ""
+	}
+	q := u.Query()
+	q.Del("model")
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 func modelOrderScore(m ModelScore) float64 {

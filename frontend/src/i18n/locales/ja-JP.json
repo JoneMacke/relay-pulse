@@ -154,6 +154,8 @@
       "priceRatioLine1": "価格",
       "priceRatioLine2": "¥/$",
       "priceRatioTooltip": "1ドル分のトークンに何人民元必要か、参考値",
+      "quality": "品質",
+      "qualityTooltip": "rpdiag.relaypulse.top が独立にサンプリングした品質スコア（0-100）。チャネル内で最も成績の良いモデルを採用。スパークラインは 30日 / 7日 / 最新の 3 点を表示。",
       "listedDays": "掲載日数",
       "listedDaysLine1": "掲載",
       "listedDaysLine2": "日数",

@@ -154,6 +154,8 @@
       "priceRatioLine1": "Цена",
       "priceRatioLine2": "¥/$",
       "priceRatioTooltip": "Сколько юаней за 1 доллар токенов, только для справки",
+      "quality": "Качество",
+      "qualityTooltip": "Независимая оценка качества (0-100) от rpdiag.relaypulse.top по лучшей модели канала. Спарклайн показывает 30д / 7д / последнее.",
       "listedDays": "Дней в списке",
       "listedDaysLine1": "Дней",
       "listedDaysLine2": "",

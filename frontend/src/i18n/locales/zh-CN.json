@@ -154,6 +154,8 @@
       "priceRatioLine1": "价格",
       "priceRatioLine2": "¥/$",
       "priceRatioTooltip": "多少人民币可用 1 美元 token，仅作参考",
+      "quality": "质量",
+      "qualityTooltip": "由 rpdiag.relaypulse.top 独立采样的质量分（0-100），按通道最佳模型取分；3 点 sparkline 显示 30d / 7d / 最近一次",
       "listedDays": "收录天数",
       "listedDaysLine1": "收录",
       "listedDaysLine2": "天数",
