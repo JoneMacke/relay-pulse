@@ -243,7 +243,11 @@ func main() {
 	monitorStore := config.NewMonitorStore(monitorsDirPath)
 
 	// 创建API服务器
-	server := api.NewServer(store, cfg, "8080", autoMover)
+	httpPort := os.Getenv("PORT")
+	if httpPort == "" {
+		httpPort = "8080"
+	}
+	server := api.NewServer(store, cfg, httpPort, autoMover)
 	server.GetHandler().SetMonitorStore(monitorStore)
 
 	// runtimeMu 保护热更新回调与关闭序列之间对 mutable 组件实例的并发访问
