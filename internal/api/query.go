@@ -34,6 +34,7 @@ func (h *Handler) queryAndSerialize(ctx context.Context, period, align string, t
 	sponsorPin := h.config.SponsorPin
 	enableAnnotations := h.config.EnableAnnotations
 	boardsEnabled := h.config.Boards.Enabled
+	hidePriceColumn := h.config.HidePriceColumn
 	h.cfgMu.RUnlock()
 
 	// 应用自动移板 override（运行时覆盖 board 字段，不修改配置）
@@ -128,6 +129,7 @@ func (h *Handler) queryAndSerialize(ctx context.Context, period, align string, t
 		"count":              len(response),
 		"slow_latency_ms":    slowLatencyMs,
 		"enable_annotations": enableAnnotations,
+		"hide_price_column":  hidePriceColumn,
 		"sponsor_pin": gin.H{
 			"enabled":    sponsorPin.IsEnabled(),
 			"max_pinned": sponsorPin.MaxPinned,

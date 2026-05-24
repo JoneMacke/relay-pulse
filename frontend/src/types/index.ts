@@ -128,6 +128,7 @@ export interface ApiResponse {
     timeline_mode?: 'raw' | 'aggregated';  // 时间线模式：raw=原始记录，aggregated=聚合数据
     slow_latency_ms?: number;  // 慢延迟阈值（毫秒），用于延迟颜色渐变
     enable_annotations?: boolean;   // 注解系统总开关（默认 true）
+    hide_price_column?: boolean;    // 运行时控制：是否隐藏价格列（默认 false / 旧后端缺失）
     sponsor_pin?: SponsorPinConfig;  // 赞助商置顶配置
     boards?: BoardsConfig;     // 板块配置
     board_counts?: BoardCounts; // 各板块通道数量
@@ -181,6 +182,7 @@ export interface ProcessedMonitorData {
   intervalMs?: number;                 // 监测间隔（毫秒，可选）
   slowLatencyMs?: number;              // 慢请求阈值（毫秒，per-monitor）
   pinned?: boolean;                    // 是否为置顶项（由排序逻辑标记）
+  qualityScore?: number | null;        // rpdiag 通道最高质量分（max_score），sort 前由 useMonitorData 注入；null 表示未上报或 rpdiag 未启用
   isMultiModel: boolean;               // 是否为多模型监测组
   layers?: MonitorLayer[];             // 原始分层数据（仅多模型组有值）
   modelEntries?: Array<{ model: string; requestModel: string }>; // 模型展示名与实际请求模型映射

@@ -171,7 +171,8 @@
       "lastCheck": "状態/レイテンシ",
       "service": "サービス種別",
       "priceRatio": "価格",
-      "listedDays": "掲載"
+      "listedDays": "掲載",
+      "quality": "品質"
     },
     "categoryLabels": {
       "promoted": "商用サイト",

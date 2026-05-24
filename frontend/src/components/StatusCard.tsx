@@ -6,7 +6,7 @@ import { HeatmapBlock } from './HeatmapBlock';
 import { LayeredHeatmapBlock } from './LayeredHeatmapBlock';
 import { ExternalLink } from './ExternalLink';
 import { FavoriteButton } from './FavoriteButton';
-import { getTimeRanges, HIDE_PRICE_COLUMN } from '../constants';
+import { getTimeRanges } from '../constants';
 import { availabilityToColor, latencyToColor, sponsorLevelToCardBorderColor, sponsorLevelToPinnedBgClass } from '../utils/color';
 import { formatPriceRatioStructured } from '../utils/format';
 import { aggregateHeatmap } from '../utils/heatmapAggregator';
@@ -36,6 +36,7 @@ interface StatusCardProps {
   showSponsor?: boolean;     // 是否显示赞助者信息，默认 true
   isFavorite?: (id: string) => boolean;  // 检查是否收藏
   onToggleFavorite?: (id: string) => void;  // 切换收藏状态
+  hidePriceColumn?: boolean; // runtime 控制：是否隐藏价格列（meta.hide_price_column 派生，默认 false）
   onBlockHover: (e: React.MouseEvent<HTMLDivElement>, point: HistoryPoint) => void;
   onBlockLeave: () => void;
 }
@@ -48,6 +49,7 @@ function StatusCardComponent({
   showProvider = true,
   isFavorite,
   onToggleFavorite,
+  hidePriceColumn = false,
   onBlockHover,
   onBlockLeave
 }: StatusCardProps) {
@@ -136,7 +138,7 @@ function StatusCardComponent({
                   {t('card.uptime')} {item.uptime >= 0 ? `${item.uptime}%` : '--'}
                 </span>
               </span>
-              {!HIDE_PRICE_COLUMN && (item.priceMin != null || item.priceMax != null) && (() => {
+              {!hidePriceColumn && (item.priceMin != null || item.priceMax != null) && (() => {
                 const priceData = formatPriceRatioStructured(item.priceMin, item.priceMax);
                 if (!priceData) return null;
                 return (

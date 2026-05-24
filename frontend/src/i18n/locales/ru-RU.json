@@ -171,7 +171,8 @@
       "lastCheck": "Статус/Задержка",
       "service": "Тип сервиса",
       "priceRatio": "Цена",
-      "listedDays": "Дней"
+      "listedDays": "Дней",
+      "quality": "Качество"
     },
     "categoryLabels": {
       "promoted": "Коммерческий",

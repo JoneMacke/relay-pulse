@@ -320,6 +320,72 @@ describe('sortMonitors', () => {
     });
   });
 
+  describe('qualityScore 排序', () => {
+    it('按质量分降序，null 沉底', () => {
+      const data = [
+        createMockData({ id: '1', qualityScore: 80, lastCheckLatency: 100 }),
+        createMockData({ id: '2', qualityScore: null, lastCheckLatency: 100 }),
+        createMockData({ id: '3', qualityScore: 95, lastCheckLatency: 100 }),
+      ];
+      const config: SortConfig = { key: 'qualityScore', direction: 'desc' };
+
+      const result = sortMonitors(data, config);
+
+      expect(result.map((d) => d.id)).toEqual(['3', '1', '2']);
+    });
+
+    it('按质量分升序，null 仍沉底（不随 direction 翻转）', () => {
+      const data = [
+        createMockData({ id: '1', qualityScore: 80, lastCheckLatency: 100 }),
+        createMockData({ id: '2', qualityScore: null, lastCheckLatency: 100 }),
+        createMockData({ id: '3', qualityScore: 95, lastCheckLatency: 100 }),
+      ];
+      const config: SortConfig = { key: 'qualityScore', direction: 'asc' };
+
+      const result = sortMonitors(data, config);
+
+      expect(result.map((d) => d.id)).toEqual(['1', '3', '2']);
+    });
+
+    it('多个 null 时按延迟二级排序', () => {
+      const data = [
+        createMockData({ id: '1', qualityScore: null, lastCheckLatency: 200 }),
+        createMockData({ id: '2', qualityScore: 90, lastCheckLatency: 100 }),
+        createMockData({ id: '3', qualityScore: null, lastCheckLatency: 100 }),
+      ];
+      const config: SortConfig = { key: 'qualityScore', direction: 'desc' };
+
+      const result = sortMonitors(data, config);
+
+      expect(result.map((d) => d.id)).toEqual(['2', '3', '1']);
+    });
+
+    it('全部为 null（rpdiag 未启用 / 全 cx 通道）时退化为按延迟排序', () => {
+      const data = [
+        createMockData({ id: '1', qualityScore: null, lastCheckLatency: 300 }),
+        createMockData({ id: '2', qualityScore: null, lastCheckLatency: 100 }),
+        createMockData({ id: '3', qualityScore: null, lastCheckLatency: 200 }),
+      ];
+      const config: SortConfig = { key: 'qualityScore', direction: 'desc' };
+
+      const result = sortMonitors(data, config);
+
+      expect(result.map((d) => d.id)).toEqual(['2', '3', '1']);
+    });
+
+    it('undefined（未注入字段）等同 null', () => {
+      const data = [
+        createMockData({ id: '1', lastCheckLatency: 100 }), // qualityScore 字段缺失
+        createMockData({ id: '2', qualityScore: 70, lastCheckLatency: 200 }),
+      ];
+      const config: SortConfig = { key: 'qualityScore', direction: 'desc' };
+
+      const result = sortMonitors(data, config);
+
+      expect(result.map((d) => d.id)).toEqual(['2', '1']);
+    });
+  });
+
   describe('延迟主排序', () => {
     it('按延迟升序排序（有效延迟）', () => {
       const data = [

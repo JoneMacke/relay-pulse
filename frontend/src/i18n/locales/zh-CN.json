@@ -171,7 +171,8 @@
       "lastCheck": "状态/延迟",
       "service": "服务类型",
       "priceRatio": "价格",
-      "listedDays": "收录"
+      "listedDays": "收录",
+      "quality": "质量"
     },
     "categoryLabels": {
       "promoted": "商业站",

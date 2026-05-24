@@ -121,6 +121,11 @@ type AppConfig struct {
 
 	// ===== 功能开关 =====
 
+	// 是否在公开列表/卡片中隐藏价格列。默认 false（显示价格列）。
+	// 运行时配置：改 yaml 即触发热更新，前端通过 /api/status meta 拿到新值，
+	// 不需要重建镜像或重启容器。
+	HidePriceColumn bool `yaml:"hide_price_column" json:"hide_price_column"`
+
 	// 热板/冷板功能配置（默认禁用，保持向后兼容）
 	// 启用后可通过 monitor.board 字段控制监测项归属
 	Boards BoardsConfig `yaml:"boards" json:"boards"`

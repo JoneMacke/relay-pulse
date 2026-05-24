@@ -4,6 +4,7 @@ import { Helmet } from 'react-helmet-async';
 import { useTranslation } from 'react-i18next';
 import { Server } from 'lucide-react';
 import { useMonitorData } from '../hooks/useMonitorData';
+import { useRpdiagScores } from '../hooks/useRpdiagScores';
 import { useFavorites } from '../hooks/useFavorites';
 import { useSeoMeta } from '../hooks/useSeoMeta';
 import { Header } from '../components/Header';
@@ -120,9 +121,12 @@ export default function ProviderPage() {
     return cleanup;
   }, []);
 
+  // rpdiag 质量分（异步），用于 sort 前给项目注入 qualityScore，并驱动质量列排序可用性
+  const { scores: rpdiagScores, loaded: rpdiagScoresLoaded } = useRpdiagScores();
+
   // 数据获取 - 先获取全部数据用于构建映射
   // Provider 页面不启用置顶功能（isInitialSort=false）
-  const { data: allData, loading, error, stats, slowLatencyMs, enableAnnotations, boardsEnabled, boardsEnabledLoaded, allMonitorIds, allMonitorIdsSupported, refetch } = useMonitorData({
+  const { data: allData, loading, error, stats, slowLatencyMs, enableAnnotations, boardsEnabled, boardsEnabledLoaded, allMonitorIds, allMonitorIdsSupported, hidePriceColumn, refetch } = useMonitorData({
     timeRange,
     timeAlign,
     timeFilter,
@@ -135,7 +139,17 @@ export default function ProviderPage() {
     isInitialSort: false, // Provider页面禁用置顶
     // 冷板数据不更新，禁用自动刷新以节省资源
     autoRefresh: board !== 'cold',
+    rpdiagScores,
+    rpdiagScoresLoaded,
   });
+
+  // 运行时隐藏价格列后，若本地 sortConfig 还停留在 priceRatio，
+  // 则退回默认排序，避免 UI 上"按隐藏列排序"的语义错位（局部状态，无 URL 干扰）
+  useEffect(() => {
+    if (hidePriceColumn && sortConfig.key === 'priceRatio') {
+      setSortConfig({ key: 'uptime', direction: 'desc' });
+    }
+  }, [hidePriceColumn, sortConfig.key]);
 
   // 板块功能禁用时，自动归一 board 到 hot
   // 解决：用户手动输入 ?board=cold 但功能未启用时的 URL 混乱问题
@@ -475,6 +489,9 @@ export default function ProviderPage() {
                   onSort={handleSort}
                   onBlockHover={handleBlockHover}
                   onBlockLeave={handleBlockLeave}
+                  rpdiagScores={rpdiagScores}
+                  rpdiagScoresLoaded={rpdiagScoresLoaded}
+                  hidePriceColumn={hidePriceColumn}
                 />
               )}
 
@@ -491,6 +508,7 @@ export default function ProviderPage() {
                       showProvider={!isEmbedMode}
                       isFavorite={isFavorite}
                       onToggleFavorite={toggleFavorite}
+                      hidePriceColumn={hidePriceColumn}
                       onBlockHover={handleBlockHover}
                       onBlockLeave={handleBlockLeave}
                     />

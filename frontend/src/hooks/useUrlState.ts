@@ -42,6 +42,10 @@ interface UrlStateActions {
   setShowFavoritesOnly: (value: boolean) => void; // 仅显示收藏
   setViewMode: (value: ViewMode) => void;
   setSortConfig: (value: SortConfig) => void;
+  /** 若 URL sort 参数当前是 priceRatio_*，将其删除（恢复初始置顶语义）。
+   *  与 setSortConfig 不同：不会设置 hasManualSort，因此置顶恢复后仍允许首屏置顶生效。
+   *  用于 runtime 隐藏价格列后，清理用户之前留下的"按价格排序"链接。 */
+  clearPriceRatioSort: () => void;
   enterFavoritesMode: () => void;  // 进入收藏模式（保存快照并清空筛选）
   exitFavoritesMode: () => void;   // 退出收藏模式（恢复快照）
 }
@@ -329,6 +333,20 @@ export function useUrlState(): [UrlState, UrlStateActions] {
     }, { replace: true });
   }, [setSearchParams]);
 
+  // 见 UrlStateActions.clearPriceRatioSort jsdoc：runtime 隐藏价格列后清理旧 URL。
+  const clearPriceRatioSort = useCallback(() => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      const raw = next.get(PARAM_KEYS.sort);
+      if (!raw) return next;
+      const lastUnderscore = raw.lastIndexOf('_');
+      const key = lastUnderscore === -1 ? raw : raw.substring(0, lastUnderscore);
+      if (key !== 'priceRatio') return next;
+      next.delete(PARAM_KEYS.sort);
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+
   // 进入收藏模式：保存当前筛选状态快照，清空筛选器，启用收藏模式
   const enterFavoritesMode = useCallback(() => {
     // 防止重复进入：已在收藏模式时不重复保存快照（避免覆盖有效快照）
@@ -430,6 +448,7 @@ export function useUrlState(): [UrlState, UrlStateActions] {
     setShowFavoritesOnly,
     setViewMode,
     setSortConfig,
+    clearPriceRatioSort,
     enterFavoritesMode,
     exitFavoritesMode,
   };

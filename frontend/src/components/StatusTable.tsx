@@ -18,7 +18,6 @@ import { createMediaQueryEffect } from '../utils/mediaQuery';
 import { shortenModelName } from '../utils/modelName';
 import { hasAnyAnnotation, hasAnyAnnotationInList } from '../utils/annotationUtils';
 import { formatPriceRatioStructured } from '../utils/format';
-import { HIDE_PRICE_COLUMN } from '../constants';
 import { getServiceIconComponent } from './ServiceIcon';
 import { lookupRpdiagScore } from '../hooks/useRpdiagScores';
 import type { ProcessedMonitorData, SortConfig } from '../types';
@@ -185,6 +184,10 @@ interface StatusTableProps {
   onFilterProvider?: (providerId: string) => void; // 按服务商筛选
   /** rpdiag 质量分索引（按 "provider|service|channel" 键）。空对象表示功能未启用或上游不可达。 */
   rpdiagScores?: RpdiagScoresResponse;
+  /** rpdiag 质量分是否已加载完成。false 时质量列排序按钮置灰（避免空数据触发的伪排序）。 */
+  rpdiagScoresLoaded?: boolean;
+  /** runtime 价格列隐藏开关（meta.hide_price_column 派生）。默认 false（显示）。 */
+  hidePriceColumn?: boolean;
 }
 
 // rpdiag 质量分单元格：所有 model 的 5 点 sparkline (30d 均 / 7d 均 / 最近 3
@@ -649,35 +652,45 @@ function MobileSortMenu({
   sortConfig,
   isInitialSort,
   onSort,
+  hidePriceColumn,
+  rpdiagScoresLoaded,
 }: {
   sortConfig: SortConfig;
   isInitialSort?: boolean;
   onSort: (key: string) => void;
+  hidePriceColumn: boolean;
+  rpdiagScoresLoaded: boolean;
 }) {
   const { t } = useTranslation();
 
-  const sortOptions = [
+  const sortOptions: Array<{ key: string; label: string; disabled?: boolean }> = [
     { key: 'providerName', label: t('table.sorting.provider') },
     { key: 'uptime', label: t('table.sorting.uptime') },
     { key: 'lastCheck', label: t('table.sorting.lastCheck') },
     { key: 'serviceType', label: t('table.sorting.service') },
-    ...(HIDE_PRICE_COLUMN ? [] : [{ key: 'priceRatio', label: t('table.sorting.priceRatio') }]),
+    ...(hidePriceColumn ? [] : [{ key: 'priceRatio', label: t('table.sorting.priceRatio') }]),
     { key: 'listedDays', label: t('table.sorting.listedDays') },
+    { key: 'qualityScore', label: t('table.sorting.quality'), disabled: !rpdiagScoresLoaded },
   ];
 
   return (
     <div className="flex items-center gap-2 mb-2 overflow-x-auto pb-2">
       <span className="text-xs text-muted flex-shrink-0">{t('controls.sortBy')}</span>
       {sortOptions.map((option) => {
+        // rpdiag 未加载完成时质量按钮置灰、不响应点击；其他按钮无变化
+        const isDisabled = option.disabled === true;
         // 初始状态下不高亮任何排序按钮
-        const isActive = !isInitialSort && sortConfig.key === option.key;
+        const isActive = !isDisabled && !isInitialSort && sortConfig.key === option.key;
         return (
           <button
             key={option.key}
-            onClick={() => onSort(option.key)}
+            onClick={() => !isDisabled && onSort(option.key)}
+            disabled={isDisabled}
             className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors flex-shrink-0 focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none ${
               isActive
                 ? 'bg-accent/20 text-accent border border-accent/30'
+                : isDisabled
+                ? 'bg-elevated text-muted border border-default opacity-60 cursor-not-allowed'
                 : 'bg-elevated text-secondary border border-default hover:text-primary'
             }`}
           >
@@ -712,6 +725,8 @@ function StatusTableComponent({
   onBlockLeave,
   onFilterProvider,
   rpdiagScores,
+  rpdiagScoresLoaded = false,
+  hidePriceColumn = false,
 }: StatusTableProps) {
   const { t, i18n } = useTranslation();
   const [isMobile, setIsMobile] = useState(false);
@@ -748,7 +763,13 @@ function StatusTableComponent({
 
     return (
       <div>
-        <MobileSortMenu sortConfig={sortConfig} isInitialSort={isInitialSort} onSort={onSort} />
+        <MobileSortMenu
+          sortConfig={sortConfig}
+          isInitialSort={isInitialSort}
+          onSort={onSort}
+          hidePriceColumn={hidePriceColumn}
+          rpdiagScoresLoaded={rpdiagScoresLoaded}
+        />
         <List
           style={{ height: mobileListHeight, width: '100%' }}
           rowCount={data.length}
@@ -774,7 +795,7 @@ function StatusTableComponent({
           <col className="w-px" /> {/* service */}
           <col className="w-px" /> {/* channel */}
           <col className="w-px" /> {/* model */}
-          {!HIDE_PRICE_COLUMN && <col className="w-px" />} {/* priceRatio */}
+          {!hidePriceColumn && <col className="w-px" />} {/* priceRatio */}
           <col className="w-px" /> {/* listedDays */}
           <col className="w-px" /> {/* uptime */}
           <col className="w-px" /> {/* lastCheck */}
@@ -828,7 +849,7 @@ function StatusTableComponent({
             <th className="px-2 py-3 font-medium whitespace-nowrap">
               {t('table.headers.model')}
             </th>
-            {!HIDE_PRICE_COLUMN && (
+            {!hidePriceColumn && (
               <th
                 className="px-2 py-3 font-medium whitespace-nowrap cursor-pointer hover:text-accent transition-colors focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none"
                 onClick={() => onSort('priceRatio')}
@@ -896,7 +917,25 @@ function StatusTableComponent({
                 <SortIcon columnKey="lastCheck" />
               </div>
             </th>
-            <th className="px-2 py-3 font-medium whitespace-nowrap">
+            {/* 质量列表头：rpdiag 加载完成前置灰不响应排序，避免空数据触发的伪排序 */}
+            <th
+              className={`px-2 py-3 font-medium whitespace-nowrap focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none ${
+                rpdiagScoresLoaded
+                  ? 'cursor-pointer hover:text-accent transition-colors'
+                  : 'text-muted cursor-not-allowed opacity-60'
+              }`}
+              onClick={() => rpdiagScoresLoaded && onSort('qualityScore')}
+              onKeyDown={(e) => {
+                if (!rpdiagScoresLoaded) return;
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onSort('qualityScore');
+                }
+              }}
+              tabIndex={rpdiagScoresLoaded ? 0 : -1}
+              role="button"
+              aria-disabled={rpdiagScoresLoaded ? undefined : true}
+            >
               <div className="flex items-center gap-1">
                 {t('table.headers.quality', '质量')}
                 <span
@@ -912,6 +951,7 @@ function StatusTableComponent({
                     )}
                   </span>
                 </span>
+                {rpdiagScoresLoaded && <SortIcon columnKey="qualityScore" />}
               </div>
             </th>
             <th className="pl-2 pr-4 py-3 font-medium min-w-[260px]">
@@ -1037,7 +1077,7 @@ function StatusTableComponent({
                   );
                 })()}
               </td>
-              {!HIDE_PRICE_COLUMN && (
+              {!hidePriceColumn && (
                 <td className="px-2 py-1 font-mono text-xs whitespace-nowrap">
                   {(() => {
                     const priceData = formatPriceRatioStructured(item.priceMin, item.priceMax);

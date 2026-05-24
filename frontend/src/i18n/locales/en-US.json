@@ -171,7 +171,8 @@
       "lastCheck": "Status/Latency",
       "service": "Service type",
       "priceRatio": "Price",
-      "listedDays": "Listed"
+      "listedDays": "Listed",
+      "quality": "Quality"
     },
     "categoryLabels": {
       "promoted": "Commercial",

@@ -67,6 +67,8 @@ function comparePrimary(
     return compareUptime(a.uptime, b.uptime, direction);
   } else if (key === 'priceRatio') {
     return comparePriceRatio(a.priceMin, a.priceMax, b.priceMin, b.priceMax, direction);
+  } else if (key === 'qualityScore') {
+    return compareQualityScore(a.qualityScore, b.qualityScore, direction);
   } else if (key === 'listedDays') {
     return compareListedDays(a.listedDays, b.listedDays, direction);
   } else if (key === 'lastCheck') {
@@ -143,6 +145,27 @@ function comparePriceRatio(
   // 两者都有数据，正常比较
   if (aValue! < bValue!) return direction === 'asc' ? -1 : 1;
   if (aValue! > bValue!) return direction === 'asc' ? 1 : -1;
+  return 0;
+}
+
+/**
+ * qualityScore 特殊排序：rpdiag 未覆盖（null/undefined）的项始终排最后，
+ * 与 priceRatio/listedDays 的 null-sink 范式一致。
+ */
+function compareQualityScore(
+  aScore: number | null | undefined,
+  bScore: number | null | undefined,
+  direction: 'asc' | 'desc'
+): number {
+  const aHasData = aScore != null;
+  const bHasData = bScore != null;
+
+  if (aHasData && !bHasData) return -1;
+  if (!aHasData && bHasData) return 1;
+  if (!aHasData && !bHasData) return 0;
+
+  if (aScore! < bScore!) return direction === 'asc' ? -1 : 1;
+  if (aScore! > bScore!) return direction === 'asc' ? 1 : -1;
   return 0;
 }
 

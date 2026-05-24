@@ -9,11 +9,13 @@ import type {
   BoardFilter,
   BoardCounts,
 } from '../types';
-import { API_BASE_URL, USE_MOCK_DATA } from '../constants';
+import { API_BASE_URL, HIDE_PRICE_COLUMN, USE_MOCK_DATA } from '../constants';
 import { fetchMockMonitorData } from '../utils/mockMonitor';
 import { trackAPIPerformance, trackAPIError } from '../utils/analytics';
 import { sortMonitorsWithPinning } from '../utils/sortMonitors';
 import { convertLegacyDataToProcessedData, convertGroupToProcessedData } from '../utils/monitorDataProcessor';
+import { lookupRpdiagScore } from './useRpdiagScores';
+import type { RpdiagScoresResponse } from '../types/monitor';
 
 // 请求节流间隔（毫秒）- 防止快速切换参数导致过多请求
 const FETCH_THROTTLE_MS = 300;
@@ -33,6 +35,10 @@ interface UseMonitorDataOptions {
   sortConfig: SortConfig;
   isInitialSort: boolean;    // 是否为初始排序状态（用于赞助商置顶）
   autoRefresh?: boolean;     // 自动刷新开关，默认开启
+  // rpdiag 质量分（异步），用于 sort 前给 ProcessedMonitorData 注入 qualityScore。
+  // 缺省表示 rpdiag 集成未启用 / 调用方不关心质量排序。
+  rpdiagScores?: RpdiagScoresResponse;
+  rpdiagScoresLoaded?: boolean;
 }
 
 export function useMonitorData({
@@ -47,6 +53,8 @@ export function useMonitorData({
   sortConfig,
   isInitialSort,
   autoRefresh = true,
+  rpdiagScores,
+  rpdiagScoresLoaded = false,
 }: UseMonitorDataOptions) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -61,6 +69,9 @@ export function useMonitorData({
   const [sponsorPinConfig, setSponsorPinConfig] = useState<SponsorPinConfig | null>(null); // 赞助商置顶配置
   const [allMonitorIds, setAllMonitorIds] = useState<Set<string>>(new Set()); // 全量监控项 ID（用于清理无效收藏）
   const [allMonitorIdsSupported, setAllMonitorIdsSupported] = useState<boolean>(false); // 后端是否支持 all_monitor_ids
+  // runtime 价格列隐藏开关。默认采用 build-time HIDE_PRICE_COLUMN，确保 meta 到达前 UI 行为可预测；
+  // /api/status 回来后用 meta.hide_price_column 覆盖（旧后端缺该字段时继续走 build-time 值）。
+  const [hidePriceColumn, setHidePriceColumn] = useState<boolean>(HIDE_PRICE_COLUMN);
 
   // 统一的刷新触发器，供手动刷新与自动轮询复用
   // skipCache: 是否绕过浏览器缓存（手动刷新时应为 true）
@@ -138,6 +149,9 @@ export function useMonitorData({
 
           // 提取注解系统总开关（默认 true）
           setEnableAnnotations(json.meta.enable_annotations !== false);
+
+          // 提取价格列隐藏开关（兼容旧后端：字段缺失时回落到 build-time 默认）
+          setHidePriceColumn(json.meta.hide_price_column ?? HIDE_PRICE_COLUMN);
 
           // 提取赞助商置顶配置
           if (json.meta.sponsor_pin) {
@@ -311,9 +325,20 @@ export function useMonitorData({
       return matchService && matchProvider && matchChannel && matchCategory;
     });
 
+    // 在排序前给每项注入 qualityScore（来自 rpdiag 三元组查表）。
+    // rpdiag 未加载完成 / 查不到时为 null，sortMonitors 内 compareQualityScore 会让其沉底。
+    const enriched = rpdiagScoresLoaded
+      ? filtered.map((item) => ({
+          ...item,
+          qualityScore:
+            lookupRpdiagScore(rpdiagScores, item.providerId, item.serviceType, item.channelName || item.channel)
+              ?.max_score ?? null,
+        }))
+      : filtered;
+
     // 使用带置顶逻辑的排序函数
-    return sortMonitorsWithPinning(filtered, sortConfig, sponsorPinConfig, isInitialSort);
-  }, [rawData, filterService, filterProvider, filterChannel, filterCategory, sortConfig, sponsorPinConfig, isInitialSort]);
+    return sortMonitorsWithPinning(enriched, sortConfig, sponsorPinConfig, isInitialSort);
+  }, [rawData, filterService, filterProvider, filterChannel, filterCategory, sortConfig, sponsorPinConfig, isInitialSort, rpdiagScores, rpdiagScoresLoaded]);
 
   // 统计数据
   const stats = useMemo(() => {
@@ -338,6 +363,7 @@ export function useMonitorData({
     boardCounts,    // 各板块通道数量
     allMonitorIds,  // 全量监控项 ID（用于清理无效收藏）
     allMonitorIdsSupported, // 后端是否支持 all_monitor_ids（用于区分"空列表"和"不支持"）
+    hidePriceColumn, // runtime 价格列隐藏开关（meta.hide_price_column 优先，缺失时回落 build-time）
     refetch: triggerRefetch,
   };
 }

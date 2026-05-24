@@ -95,6 +95,7 @@ function App() {
     setFilterCategory,
     setViewMode,
     setSortConfig,
+    clearPriceRatioSort,
     enterFavoritesMode,  // 进入收藏模式（保存快照）
     exitFavoritesMode,   // 退出收藏模式（恢复快照）
   } = urlActions;
@@ -177,9 +178,9 @@ function App() {
     });
   };
 
-  const { scores: rpdiagScores } = useRpdiagScores();
+  const { scores: rpdiagScores, loaded: rpdiagScoresLoaded } = useRpdiagScores();
 
-  const { loading, error, data, rawData, stats, providers, slowLatencyMs, enableAnnotations, boardsEnabled, boardsEnabledLoaded, boardCounts, allMonitorIds, allMonitorIdsSupported, refetch } = useMonitorData({
+  const { loading, error, data, rawData, stats, providers, slowLatencyMs, enableAnnotations, boardsEnabled, boardsEnabledLoaded, boardCounts, allMonitorIds, allMonitorIdsSupported, hidePriceColumn, refetch } = useMonitorData({
     timeRange,
     timeAlign,
     timeFilter,
@@ -192,7 +193,18 @@ function App() {
     isInitialSort,
     // 冷板数据不更新，禁用自动刷新以节省资源
     autoRefresh: autoRefresh && board !== 'cold',
+    rpdiagScores,
+    rpdiagScoresLoaded,
   });
+
+  // 运行时 hide_price_column 切到 true 后，主动抹掉旧的 priceRatio_* URL 排序，
+  // 避免点 hide 后用户带着隐藏列的"按价格排序"链接刷新仍触发该排序。
+  // 使用 clearPriceRatioSort（不写 hasManualSort=true），刷新仍可恢复置顶语义。
+  useEffect(() => {
+    if (hidePriceColumn) {
+      clearPriceRatioSort();
+    }
+  }, [hidePriceColumn, clearPriceRatioSort]);
 
   // 板块功能禁用时，自动归一 board 到 hot
   // 解决：用户手动输入 ?board=cold 但功能未启用时的 URL 混乱问题
@@ -711,6 +723,8 @@ function App() {
                   onBlockLeave={handleBlockLeave}
                   onFilterProvider={(providerId) => setFilterProvider([providerId])}
                   rpdiagScores={rpdiagScores}
+                  rpdiagScoresLoaded={rpdiagScoresLoaded}
+                  hidePriceColumn={hidePriceColumn}
                 />
               )}
 
@@ -725,6 +739,7 @@ function App() {
                       enableAnnotations={enableAnnotations}
                       isFavorite={isFavorite}
                       onToggleFavorite={toggleFavorite}
+                      hidePriceColumn={hidePriceColumn}
                       onBlockHover={handleBlockHover}
                       onBlockLeave={handleBlockLeave}
                     />
