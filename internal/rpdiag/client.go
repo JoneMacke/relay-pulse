@@ -270,16 +270,40 @@ func (c *Client) refresh(ctx context.Context) (map[string]Score, error) {
 	return cloneScores(scores), nil
 }
 
+// latestFingerprintSample returns the most recent single fingerprint sample
+// from a trend — the value the sparkline's rightmost dot already renders
+// (front-end uses recent_scores[-1] when present, falling back to trend.latest;
+// rpdiag fills both with the same value, so the tooltip's "latest=" row stays
+// aligned in practice). Using it as the channel representative score keeps
+// list ordering and per-row visualisation in lockstep.
+//
+// Prefers recent_scores[-1] when v5.2 wire carries it (one true sample,
+// strictly time-ascending), falling back to trend.latest on v5.1.
+func latestFingerprintSample(t ScoreTrend) *float64 {
+	if n := len(t.RecentScores); n > 0 {
+		v := t.RecentScores[n-1]
+		return &v
+	}
+	return t.Latest
+}
+
 // buildScores collapses many rpdiag rows into one entry per (provider,
-// service, channel) triple. Rows that lack a final score, or that come
-// from the public /submit pipeline (`submission_source=user` / `U-`
-// channel prefix), are skipped — those entries don't exist in relaypulse
-// listings and would never join.
+// service, channel) triple. Rows that lack a representative fingerprint
+// sample, or that come from the public /submit pipeline
+// (`submission_source=user` / `U-` channel prefix), are skipped — those
+// entries don't exist in relaypulse listings and would never join.
+//
+// The representative score is the latest single fingerprint sample (not
+// rpdiag's composite `final_quality_score`, which folds in latency and
+// availability multipliers). Composite scoring belongs to rpdiag's own
+// ranking page; relaypulse's "Quality" column shows pure response-quality
+// per its tooltip, so the sort key must match that visual semantics.
 func (c *Client) buildScores(rows []rankingRow) map[string]Score {
 	out := make(map[string]Score, len(rows))
 
 	for _, row := range rows {
-		if row.FinalQualityScore == nil {
+		latest := latestFingerprintSample(row.ScoreTrend)
+		if latest == nil {
 			continue
 		}
 		if strings.EqualFold(row.SubmissionSource, "user") {
@@ -303,13 +327,13 @@ func (c *Client) buildScores(rows []rankingRow) map[string]Score {
 		entry.Models = append(entry.Models, ModelScore{
 			Model:     row.Model,
 			ModelKey:  row.ModelKey,
-			Score:     copyFloat(row.FinalQualityScore),
+			Score:     copyFloat(latest),
 			Trend:     row.ScoreTrend,
 			DetailURL: row.DetailURL,
 		})
 
-		if entry.MaxScore == nil || *row.FinalQualityScore > *entry.MaxScore {
-			entry.MaxScore = copyFloat(row.FinalQualityScore)
+		if entry.MaxScore == nil || *latest > *entry.MaxScore {
+			entry.MaxScore = copyFloat(latest)
 			entry.Trend = row.ScoreTrend
 			// 通道整体跳转 = max-score 那行的 detail_url 去掉 model 参数 →
 			// 落到 rpdiag 的"服务商+通道"概览页（channel name 与大小写、前缀都来自

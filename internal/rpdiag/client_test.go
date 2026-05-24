@@ -92,9 +92,9 @@ func TestBuildScoresAggregatesByTriple(t *testing.T) {
 			ProviderName: "DawAPI", ServiceCLICommand: "claude",
 			SubmissionSource: "user",
 			Model:            "claude-haiku-4-5", ModelKey: "claude-haiku-4-5",
-			FinalQualityScore: mk(95),
+			ScoreTrend: ScoreTrend{Latest: mk(95)},
 		},
-		{ // missing score — dropped
+		{ // missing trend representative — dropped (no recent_scores, no Latest)
 			ChannelName: "Foo", RelaypulseChannelKey: "foo",
 			ProviderName: "Bar", ServiceCLICommand: "claude",
 		},
@@ -135,7 +135,7 @@ func TestBuildScoresFallsBackToChannelNameWhenJoinKeyMissing(t *testing.T) {
 			ChannelName:  "O-Max", // no RelaypulseChannelKey
 			ProviderName: "SAIAi", ServiceCLICommand: "claude",
 			Model: "claude-haiku-4-5", ModelKey: "claude-haiku-4-5",
-			FinalQualityScore: mk(96),
+			ScoreTrend: ScoreTrend{Latest: mk(96)},
 		},
 	}
 	out := c.buildScores(rows)
@@ -146,6 +146,8 @@ func TestBuildScoresFallsBackToChannelNameWhenJoinKeyMissing(t *testing.T) {
 
 func TestScoresUpstreamRoundTrip(t *testing.T) {
 	mk := func(v float64) *float64 { return &v }
+	// 关键：FinalQualityScore=95.2 但 trend.Latest=98，MaxScore 应跟 latest (98)
+	// 而非 final（95.2）。验证从 composite quality 切到 fingerprint 表征分。
 	payload := exportPayload{
 		SchemaVersion: "ranking-export.v5.1",
 		Items: []rankingRow{{
@@ -172,8 +174,11 @@ func TestScoresUpstreamRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing infai|cc|cc entry, got %v", keysOf(scores))
 	}
-	if entry.MaxScore == nil || *entry.MaxScore != 95.2 {
-		t.Errorf("MaxScore = %v, want 95.2", entry.MaxScore)
+	if entry.MaxScore == nil || *entry.MaxScore != 98 {
+		t.Errorf("MaxScore = %v, want 98 (trend.latest, NOT final_quality_score 95.2)", entry.MaxScore)
+	}
+	if entry.Models[0].Score == nil || *entry.Models[0].Score != 98 {
+		t.Errorf("Models[0].Score = %v, want 98 (per-model score must also be latest fingerprint sample)", entry.Models[0].Score)
 	}
 	wantChannelURL := "https://diag.relaypulse.top/channel/cc?provider=InfAI&service=claude&window=30d"
 	if entry.ChannelURL != wantChannelURL {
@@ -192,7 +197,7 @@ func TestBuildScoresChannelURLEmptyWhenDetailURLMissing(t *testing.T) {
 		ChannelName: "O-Max", RelaypulseChannelKey: "max",
 		ProviderName: "SAIAi", ServiceCLICommand: "claude",
 		Model: "claude-haiku-4-5", ModelKey: "claude-haiku-4-5",
-		FinalQualityScore: mk(90),
+		ScoreTrend: ScoreTrend{Latest: mk(90)},
 		// DetailURL 缺省为空字符串
 	}}
 
@@ -202,6 +207,70 @@ func TestBuildScoresChannelURLEmptyWhenDetailURLMissing(t *testing.T) {
 	}
 	if entry.ChannelURL != "" {
 		t.Errorf("ChannelURL = %q, want empty", entry.ChannelURL)
+	}
+}
+
+func TestLatestFingerprintSample(t *testing.T) {
+	mk := func(v float64) *float64 { return &v }
+
+	tests := []struct {
+		name string
+		in   ScoreTrend
+		want *float64
+	}{
+		// recent_scores 优先：返回数组最末位（时间最新的 single sample）。
+		{"recent_scores_wins_over_latest", ScoreTrend{RecentScores: []float64{82, 72, 76}, Latest: mk(99)}, mk(76)},
+		{"recent_scores_single", ScoreTrend{RecentScores: []float64{88}}, mk(88)},
+		// v5.1 wire 没 recent_scores 时 fallback latest。
+		{"latest_fallback_when_recent_empty", ScoreTrend{Latest: mk(64)}, mk(64)},
+		{"latest_fallback_when_recent_nil", ScoreTrend{RecentScores: nil, Latest: mk(70)}, mk(70)},
+		// 两个都缺 → nil（调用方据此跳过 row）。
+		{"both_missing_returns_nil", ScoreTrend{}, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := latestFingerprintSample(tt.in)
+			switch {
+			case got == nil && tt.want == nil:
+				return
+			case got == nil || tt.want == nil:
+				t.Fatalf("got %v, want %v", got, tt.want)
+			case *got != *tt.want:
+				t.Fatalf("got %v, want %v", *got, *tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildScoresUsesRecentScoresTailWhenAvailable(t *testing.T) {
+	// 验证 buildScores 端到端：v5.2 wire 的 recent_scores 末位（76）
+	// 应被采纳为 ModelScore.Score 与通道 MaxScore，而不是 trend.latest（72）
+	// 或 final_quality_score（85.9）。覆盖 FastCode opus 在 prod 实际看到的形态。
+	c := newTestClient()
+	mk := func(v float64) *float64 { return &v }
+
+	rows := []rankingRow{{
+		ChannelName: "cc", RelaypulseChannelKey: "cc",
+		ProviderName: "FastCode", ServiceCLICommand: "claude",
+		Model: "claude-opus-4-7", ModelKey: "claude-opus-4-7",
+		FinalQualityScore: mk(85.9),
+		ScoreTrend: ScoreTrend{
+			RecentScores: []float64{82, 72, 76},
+			Latest:       mk(72),
+			Avg7D:        mk(76.7),
+			Avg30D:       mk(76.7),
+		},
+	}}
+
+	entry, ok := c.buildScores(rows)["fastcode|cc|cc"]
+	if !ok {
+		t.Fatalf("expected fastcode|cc|cc, got %v", keysOf(c.buildScores(rows)))
+	}
+	if entry.MaxScore == nil || *entry.MaxScore != 76 {
+		t.Errorf("MaxScore = %v, want 76 (recent_scores[-1])", entry.MaxScore)
+	}
+	if entry.Models[0].Score == nil || *entry.Models[0].Score != 76 {
+		t.Errorf("Models[0].Score = %v, want 76", entry.Models[0].Score)
 	}
 }
 
