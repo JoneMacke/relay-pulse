@@ -8,10 +8,11 @@ interface UseRpdiagScoresResult {
   loaded: boolean;
 }
 
-const RPDIAG_POLL_INTERVAL_MS = 10 * 60 * 1000; // 与后端缓存 TTL 对齐
+const RPDIAG_POLL_INTERVAL_MS = 60_000; // 与状态列自动刷新频率一致
 
-/** 拉取 rpdiag 质量分索引，每 10 分钟自动刷新（与后端缓存 TTL 对齐）。
+/** 拉取 rpdiag 质量分索引，每 60 秒自动刷新（与状态轮询同步）。
  *
+ *  - 后端 10min cache 兜底，高频调用不会产生额外计算；质量分有更新时可在 60s 内呈现
  *  - 失败时保留上次成功快照，列表不闪"-"
  *  - kill switch 由后端判断（MONITOR_RPDIAG_ENABLED）
  */
