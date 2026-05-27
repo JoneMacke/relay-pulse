@@ -8,10 +8,11 @@ interface UseRpdiagScoresResult {
   loaded: boolean;
 }
 
-/** 拉取 rpdiag 质量分索引（一次性，挂载时触发）。
+const RPDIAG_POLL_INTERVAL_MS = 10 * 60 * 1000; // 与后端缓存 TTL 对齐
+
+/** 拉取 rpdiag 质量分索引，每 10 分钟自动刷新（与后端缓存 TTL 对齐）。
  *
- *  - 后端缓存 TTL 10min，前端刷新更频繁也无收益
- *  - 失败时返回空对象 ⇒ 列表用 "-" 兜底，不阻塞页面
+ *  - 失败时保留上次成功快照，列表不闪"-"
  *  - kill switch 由后端判断（MONITOR_RPDIAG_ENABLED）
  */
 export function useRpdiagScores(): UseRpdiagScoresResult {
@@ -19,24 +20,33 @@ export function useRpdiagScores(): UseRpdiagScoresResult {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    const controller = new AbortController();
     let cancelled = false;
+    let currentController: AbortController | null = null;
 
-    apiGet<RpdiagScoresResponse>('/api/rpdiag-scores', { signal: controller.signal })
-      .then((data) => {
-        if (cancelled) return;
-        setScores(data ?? {});
-        setLoaded(true);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setScores({});
-        setLoaded(true);
-      });
+    function fetchScores() {
+      currentController?.abort();
+      const controller = new AbortController();
+      currentController = controller;
+      apiGet<RpdiagScoresResponse>('/api/rpdiag-scores', { signal: controller.signal })
+        .then((data) => {
+          if (cancelled) return;
+          setScores(data ?? {});
+          setLoaded(true);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          // 保留上次成功快照；首次失败时标记 loaded 避免永久加载态
+          setLoaded(true);
+        });
+    }
+
+    fetchScores();
+    const timer = setInterval(fetchScores, RPDIAG_POLL_INTERVAL_MS);
 
     return () => {
       cancelled = true;
-      controller.abort();
+      currentController?.abort();
+      clearInterval(timer);
     };
   }, []);
 
