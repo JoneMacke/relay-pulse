@@ -34,8 +34,9 @@ export function useRpdiagScores(): UseRpdiagScoresResult {
           setScores(data ?? {});
           setLoaded(true);
         })
-        .catch(() => {
+        .catch((error) => {
           if (cancelled) return;
+          if (error instanceof Error && error.name === 'AbortError') return;
           // 保留上次成功快照；首次失败时标记 loaded 避免永久加载态
           setLoaded(true);
         });
