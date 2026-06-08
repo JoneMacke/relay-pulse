@@ -383,7 +383,7 @@
       "variants": { "cc-haiku-pro-2184": "Haiku Pro (2.1.84)" },
       "runTest": "テスト実行", "testing": "テスト中...",
       "resultTitle": "テスト結果", "probeStatus": "探査状態",
-      "latency": "遅延", "httpCode": "HTTPコード", "subStatus": "詳細状態", "error": "エラー",
+      "latency": "遅延", "httpCode": "HTTPコード", "subStatus": "詳細状態", "error": "エラー", "responseDetail": "レスポンス詳細",
       "proofValid": "テスト証明有効（残り {{time}}）", "proofExpired": "テスト証明の期限切れ。再テストしてください"
     },
     "test": { "statusAvailable": "利用可能", "statusDegraded": "低下", "statusUnavailable": "利用不可", "statusUnknown": "不明" },

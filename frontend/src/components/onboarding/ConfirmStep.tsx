@@ -207,8 +207,9 @@ export function ConfirmStep({ formData, updateField, submitResult, isSubmitting,
         />
         <SummaryRow
           label={t('onboarding.providerInfo.sponsorLevel')}
-          /* 自助收录仅 pulse 等级（无选择器），sponsorLevel 恒为空，回退展示 pulse 避免出现空行 */
-          value={t(`onboarding.providerInfo.sponsorLevels.${formData.sponsorLevel || 'pulse'}`, { defaultValue: formData.sponsorLevel || 'pulse' })}
+          /* 自助收录仅 pulse 等级（无选择器），sponsorLevel 恒为空，回退展示 pulse 避免出现空行。
+             附等级代码（与来源下拉「名称（code）」惯例及《赞助权益体系》表格「脉冲链路 pulse」一致） */
+          value={`${t(`onboarding.providerInfo.sponsorLevels.${formData.sponsorLevel || 'pulse'}`, { defaultValue: formData.sponsorLevel || 'pulse' })}（${formData.sponsorLevel || 'pulse'}）`}
         />
         <SummaryRow
           label={t('onboarding.providerInfo.channelCodePreview')}
@@ -236,7 +237,9 @@ export function ConfirmStep({ formData, updateField, submitResult, isSubmitting,
           }
         />
         <SummaryRow
-          label={t('onboarding.connectionTest.testType')}
+          /* 值是 testVariant（请求模板，如 cc-haiku-arith），故标签用「请求模板」而非「服务类型」；
+             服务类型(cc) 已在上方「服务商信息」段单列，此处不再重复 */
+          label={t('onboarding.connectionTest.testVariant')}
           value={formData.testVariant || formData.testType}
         />
       </div>

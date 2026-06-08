@@ -306,11 +306,22 @@ export function ConnectionTestStep({
               </div>
             )}
 
-            {/* Error message */}
+            {/* Error message（网络层错误等；HTTP 4xx/5xx 时通常为空，详情走 response_snippet） */}
             {testResult.error_message && (
               <div className="mt-2 p-3 bg-danger/10 border border-danger/20 rounded">
                 <p className="text-sm font-medium text-danger mb-1">{t('onboarding.connectionTest.error')}</p>
                 <p className="text-xs text-secondary font-mono break-all">{testResult.error_message}</p>
+              </div>
+            )}
+
+            {/* 上游响应详情：失败时由后端截取前 512 字节，含 HTTP 4xx/5xx 的具体报错体；
+                与 error_message 相同则不重复展示（网络错误时两者同源） */}
+            {testResult.response_snippet && testResult.response_snippet !== testResult.error_message && (
+              <div className="mt-2 p-3 bg-danger/10 border border-danger/20 rounded">
+                <p className="text-sm font-medium text-danger mb-1">
+                  {t('onboarding.connectionTest.responseDetail', { defaultValue: '响应详情' })}
+                </p>
+                <p className="text-xs text-secondary font-mono break-all whitespace-pre-wrap">{testResult.response_snippet}</p>
               </div>
             )}
           </div>

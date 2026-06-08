@@ -383,7 +383,7 @@
       "variants": { "cc-haiku-pro-2184": "Haiku Pro (2.1.84)" },
       "runTest": "Запустить тест", "testing": "Тестирование...",
       "resultTitle": "Результат теста", "probeStatus": "Статус зонда",
-      "latency": "Задержка", "httpCode": "HTTP-код", "subStatus": "Детальный статус", "error": "Ошибка",
+      "latency": "Задержка", "httpCode": "HTTP-код", "subStatus": "Детальный статус", "error": "Ошибка", "responseDetail": "Детали ответа",
       "proofValid": "Доказательство действительно (осталось {{time}})", "proofExpired": "Срок доказательства истёк. Перезапустите тест"
     },
     "test": { "statusAvailable": "Доступен", "statusDegraded": "Деградация", "statusUnavailable": "Недоступен", "statusUnknown": "Неизвестно" },

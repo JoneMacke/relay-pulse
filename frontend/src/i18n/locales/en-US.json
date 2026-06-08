@@ -409,6 +409,7 @@
       "httpCode": "HTTP Code",
       "subStatus": "Sub Status",
       "error": "Error",
+      "responseDetail": "Response detail",
       "proofValid": "Test proof valid ({{time}} remaining)",
       "proofExpired": "Test proof expired, please re-run the test"
     },

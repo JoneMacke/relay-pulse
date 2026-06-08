@@ -412,6 +412,7 @@
       "httpCode": "HTTP 状态码",
       "subStatus": "细分状态",
       "error": "错误信息",
+      "responseDetail": "响应详情",
       "proofValid": "测试证明有效（剩余 {{time}}）",
       "proofExpired": "测试证明已过期，请重新测试"
     },
