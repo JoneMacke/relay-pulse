@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Helmet } from 'react-helmet-async';
-import { ClipboardList, RefreshCw, MessageCircle, Users, MessageSquare, Activity } from 'lucide-react';
+import { ClipboardList, RefreshCw, MessageCircle, Users, MessageSquare, Activity, Search } from 'lucide-react';
 import { LANGUAGE_PATH_MAP, type SupportedLanguage } from '../i18n';
 
 function ContactCard({
@@ -87,6 +87,12 @@ export default function ContactPage() {
               title={t('contact.change.title')}
               description={t('contact.change.description')}
               onClick={() => navigate(buildPath('/contact/change'))}
+            />
+            <ContactCard
+              icon={Search}
+              title={t('contact.status.title')}
+              description={t('contact.status.description')}
+              onClick={() => navigate(buildPath('/contact/status'))}
             />
             <ContactCard
               icon={MessageCircle}
