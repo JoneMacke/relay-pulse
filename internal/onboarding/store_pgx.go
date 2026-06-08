@@ -68,7 +68,11 @@ func (s *PgxStore) InitTable(ctx context.Context) error {
 		reviewed_at BIGINT,
 
 		created_at BIGINT NOT NULL,
-		updated_at BIGINT NOT NULL
+		updated_at BIGINT NOT NULL,
+
+		agreement_accepted BOOLEAN NOT NULL DEFAULT false,
+		agreement_accepted_at BIGINT NOT NULL DEFAULT 0,
+		agreement_version TEXT NOT NULL DEFAULT ''
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_onboarding_status ON onboarding_submissions(status, created_at DESC);
@@ -89,6 +93,9 @@ func (s *PgxStore) InitTable(ctx context.Context) error {
 		`ALTER TABLE onboarding_submissions ADD COLUMN IF NOT EXISTS target_service TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE onboarding_submissions ADD COLUMN IF NOT EXISTS target_channel TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE onboarding_submissions ADD COLUMN IF NOT EXISTS channel_group TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE onboarding_submissions ADD COLUMN IF NOT EXISTS agreement_accepted BOOLEAN NOT NULL DEFAULT false`,
+		`ALTER TABLE onboarding_submissions ADD COLUMN IF NOT EXISTS agreement_accepted_at BIGINT NOT NULL DEFAULT 0`,
+		`ALTER TABLE onboarding_submissions ADD COLUMN IF NOT EXISTS agreement_version TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := s.pool.Exec(ctx, ddl); err != nil {
 			return fmt.Errorf("迁移 onboarding_submissions 失败: %w", err)
@@ -110,8 +117,9 @@ func (s *PgxStore) Save(ctx context.Context, sub *Submission) error {
 		test_job_id, test_passed_at, test_latency_ms, test_http_code,
 		contact_info, submitter_ip_hash, locale,
 		admin_note, admin_config_json, reviewed_at,
-		created_at, updated_at
-	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36)
+		created_at, updated_at,
+		agreement_accepted, agreement_accepted_at, agreement_version
+	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39)
 	RETURNING id`
 
 	err := s.pool.QueryRow(ctx, query,
@@ -125,6 +133,7 @@ func (s *PgxStore) Save(ctx context.Context, sub *Submission) error {
 		pgxNullStr(sub.ContactInfo), pgxNullStr(sub.SubmitterIPHash), pgxNullStr(sub.Locale),
 		pgxNullStr(sub.AdminNote), pgxNullStr(sub.AdminConfigJSON), sub.ReviewedAt,
 		sub.CreatedAt, sub.UpdatedAt,
+		sub.AgreementAccepted, sub.AgreementAcceptedAt, sub.AgreementVersion,
 	).Scan(&sub.ID)
 	if err != nil {
 		return fmt.Errorf("保存申请失败: %w", err)
@@ -268,7 +277,8 @@ const pgxAllColumns = `id, public_id, status,
 	test_job_id, test_passed_at, test_latency_ms, test_http_code,
 	contact_info, submitter_ip_hash, locale,
 	admin_note, admin_config_json, reviewed_at,
-	created_at, updated_at`
+	created_at, updated_at,
+	agreement_accepted, agreement_accepted_at, agreement_version`
 
 func pgxScanSubmission(row pgx.Row) (*Submission, error) {
 	var sub Submission
@@ -287,6 +297,7 @@ func pgxScanSubmission(row pgx.Row) (*Submission, error) {
 		&contactInfo, &ipHash, &locale,
 		&adminNote, &adminConfigJSON, &reviewedAt,
 		&sub.CreatedAt, &sub.UpdatedAt,
+		&sub.AgreementAccepted, &sub.AgreementAcceptedAt, &sub.AgreementVersion,
 	)
 	if err != nil {
 		return nil, err

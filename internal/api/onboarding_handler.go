@@ -19,9 +19,12 @@ type OnboardingMetaResponse struct {
 	SponsorLevels           []SponsorLevelInfo                          `json:"sponsor_levels"`
 	ChannelTypes            []ChannelTypeInfo                           `json:"channel_types"`
 	ChannelSourcesByService map[string][]onboarding.ChannelSourceOption `json:"channel_sources_by_service"`
-	ChannelGroupRule        ChannelGroupRule                            `json:"channel_group_rule"`
-	TestTypes               []OnboardingTestType                        `json:"test_types"`
-	ContactInfo             string                                      `json:"contact_info"`
+	// ChannelTypeAllowedCategories: 通道类型(O/R/M) → 允许的来源 Category 列表，
+	// 供前端按已选类型过滤来源下拉，与后端 validateChannelTypeSource 同源。
+	ChannelTypeAllowedCategories map[string][]string  `json:"channel_type_allowed_categories"`
+	ChannelGroupRule             ChannelGroupRule     `json:"channel_group_rule"`
+	TestTypes                    []OnboardingTestType `json:"test_types"`
+	ContactInfo                  string               `json:"contact_info"`
 }
 
 // ChannelGroupRule 下发给前端的 channel_group 同步校验规则。
@@ -102,7 +105,8 @@ func (h *Handler) GetOnboardingMeta(c *gin.Context) {
 			{Value: "R", Label: "逆向通道"},
 			{Value: "M", Label: "混合通道"},
 		},
-		ChannelSourcesByService: onboarding.ChannelSourceOptionsByService(),
+		ChannelSourcesByService:      onboarding.ChannelSourceOptionsByService(),
+		ChannelTypeAllowedCategories: onboarding.ChannelTypeAllowedCategories(),
 		ChannelGroupRule: ChannelGroupRule{
 			Pattern:   groupPattern,
 			Default:   groupDefault,

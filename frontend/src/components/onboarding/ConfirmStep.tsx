@@ -1,18 +1,32 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, Copy, Check, RotateCcw, Search } from 'lucide-react';
+import { ChevronLeft, Copy, Check, RotateCcw, Search, ExternalLink } from 'lucide-react';
 import type { OnboardingFormData, SubmitOnboardingResponse } from '../../types/onboarding';
 import { LANGUAGE_PATH_MAP, type SupportedLanguage } from '../../i18n';
 
 interface ConfirmStepProps {
   formData: OnboardingFormData;
+  updateField: <K extends keyof OnboardingFormData>(key: K, value: OnboardingFormData[K]) => void;
   submitResult: SubmitOnboardingResponse | null;
   isSubmitting: boolean;
   onSubmit: () => void;
   onBack: () => void;
   onReset: () => void;
 }
+
+/** 《入驻须知与确认》核心要点 i18n key（顺序即展示顺序，付费在最前） */
+const AGREEMENT_CLAUSE_KEYS = [
+  'clausePaid',
+  'clauseApiKey',
+  'clauseQuality',
+  'clauseLegit',
+  'clauseNoEndorse',
+] as const;
+
+/** 完整《入驻须知与确认》文档地址 */
+const AGREEMENT_DOC_URL =
+  'https://github.com/prehisle/relay-pulse/blob/main/docs/user/sponsorship-agreement.md';
 
 /** A single row in the summary table. */
 function SummaryRow({ label, value }: { label: string; value: React.ReactNode }) {
@@ -65,11 +79,25 @@ function CopyableText({ text }: { text: string }) {
 }
 
 /** Step 3: Review summary and submit. */
-export function ConfirmStep({ formData, submitResult, isSubmitting, onSubmit, onBack, onReset }: ConfirmStepProps) {
+export function ConfirmStep({ formData, updateField, submitResult, isSubmitting, onSubmit, onBack, onReset }: ConfirmStepProps) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const langPrefix = LANGUAGE_PATH_MAP[i18n.language as SupportedLanguage];
   const buildPath = (path: string) => (langPrefix ? `/${langPrefix}${path}` : path);
+
+  // 逐条确认《入驻须知与确认》：每条独立勾选，全勾才放行提交。
+  // 本地维护各条勾选态，再把「是否全勾」同步到 formData.agreementAccepted（提交载荷据此上送后端）。
+  const [checkedClauses, setCheckedClauses] = useState<Record<string, boolean>>({});
+  const allClausesChecked = AGREEMENT_CLAUSE_KEYS.every((k) => checkedClauses[k]);
+
+  useEffect(() => {
+    if (formData.agreementAccepted !== allClausesChecked) {
+      updateField('agreementAccepted', allClausesChecked);
+    }
+  }, [allClausesChecked, formData.agreementAccepted, updateField]);
+
+  const toggleClause = (key: string) =>
+    setCheckedClauses((prev) => ({ ...prev, [key]: !prev[key] }));
 
   // 显示层大写（type-source），分组原样；与 ProviderInfoStep 预览一致，存储层由后端统一小写
   const channelCode = formData.channelType && formData.channelSource
@@ -213,24 +241,68 @@ export function ConfirmStep({ formData, submitResult, isSubmitting, onSubmit, on
         />
       </div>
 
+      {/* 入驻须知与确认：逐条勾选 */}
+      <div className="bg-elevated rounded-lg p-4 space-y-3 border border-accent/20">
+        <h3 className="text-sm font-semibold text-primary">
+          {t('onboarding.confirm.agreement.title')}
+        </h3>
+        <p className="text-xs text-secondary">{t('onboarding.confirm.agreement.intro')}</p>
+        <ul className="space-y-2.5">
+          {AGREEMENT_CLAUSE_KEYS.map((key) => (
+            <li key={key}>
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={!!checkedClauses[key]}
+                  onChange={() => toggleClause(key)}
+                  className="mt-0.5 w-4 h-4 flex-shrink-0 rounded border-muted accent-accent"
+                />
+                <span className="text-xs text-secondary leading-relaxed">
+                  {t(`onboarding.confirm.agreement.${key}`)}
+                </span>
+              </label>
+            </li>
+          ))}
+        </ul>
+        <p className="text-xs text-muted">
+          {t('onboarding.confirm.agreement.fullText')}{' '}
+          <a
+            href={AGREEMENT_DOC_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-accent hover:text-accent-strong underline inline-flex items-center gap-0.5"
+          >
+            {t('onboarding.confirm.agreement.fullLink')}
+            <ExternalLink className="w-3 h-3" />
+          </a>
+        </p>
+      </div>
+
       {/* Navigation buttons */}
-      <div className="flex justify-between pt-2">
+      <div className="flex flex-col items-stretch gap-2 pt-2 sm:flex-row sm:items-center sm:justify-between">
         <button
           type="button"
           onClick={onBack}
-          className="flex items-center gap-2 px-6 py-3 bg-surface border border-muted text-secondary rounded-lg hover:bg-elevated transition-colors"
+          className="flex items-center justify-center gap-2 px-6 py-3 bg-surface border border-muted text-secondary rounded-lg hover:bg-elevated transition-colors"
         >
           <ChevronLeft className="w-4 h-4" />
           {t('onboarding.back')}
         </button>
-        <button
-          type="button"
-          onClick={onSubmit}
-          disabled={isSubmitting}
-          className="px-6 py-3 bg-accent text-white rounded-lg font-medium hover:bg-accent-strong transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {isSubmitting ? t('onboarding.confirm.submitting') : t('onboarding.confirm.submit')}
-        </button>
+        <div className="flex flex-col items-stretch gap-1 sm:items-end">
+          <button
+            type="button"
+            onClick={onSubmit}
+            disabled={isSubmitting || !allClausesChecked}
+            className="px-6 py-3 bg-accent text-white rounded-lg font-medium hover:bg-accent-strong transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isSubmitting ? t('onboarding.confirm.submitting') : t('onboarding.confirm.submit')}
+          </button>
+          {!allClausesChecked && (
+            <span className="text-xs text-muted text-center sm:text-right">
+              {t('onboarding.confirm.agreement.allRequiredHint')}
+            </span>
+          )}
+        </div>
       </div>
     </div>
   );

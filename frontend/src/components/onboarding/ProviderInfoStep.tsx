@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronRight, ExternalLink } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
 import type { OnboardingFormData, OnboardingMeta, ChannelSourceOption } from '../../types/onboarding';
 
 interface ProviderInfoStepProps {
@@ -19,10 +19,14 @@ const GROUP_PATTERN = /^[a-z0-9]{1,8}$/;
 export function ProviderInfoStep({ formData, updateField, meta, onNext }: ProviderInfoStepProps) {
   const { t } = useTranslation();
 
-  // 当前服务的可选来源（受控词表，按 service 下发）
+  // 当前服务的可选来源：先按 service 取词表，再按已选通道类型(O/R/M)过滤 category，
+  // 保证「官方通道」不会列出逆向来源等不自洽组合（规则与后端 validateChannelTypeSource 同源）
   const sources: ChannelSourceOption[] = useMemo(() => {
-    return meta?.channel_sources_by_service?.[formData.serviceType] ?? [];
-  }, [meta, formData.serviceType]);
+    const all = meta?.channel_sources_by_service?.[formData.serviceType] ?? [];
+    const allowed = meta?.channel_type_allowed_categories?.[formData.channelType];
+    if (!allowed) return all;
+    return all.filter((opt) => allowed.includes(opt.category));
+  }, [meta, formData.serviceType, formData.channelType]);
 
   // 按 category 分组以便 optgroup 展示，保留词表原始顺序
   const sourceGroups = useMemo(() => {
@@ -40,11 +44,16 @@ export function ProviderInfoStep({ formData, updateField, meta, onNext }: Provid
 
   const groupMaxLength = meta?.channel_group_rule?.max_length ?? 8;
 
-  // 切换 serviceType 时清空已选来源（不同服务的来源词表不通用）
+  // 来源受 service + 通道类型双重约束；切换任一维度后，若已选来源不再出现在过滤结果中则清空。
+  // 直接以 sources（已含双重过滤）为准，能保留仍合法的草稿来源、只清掉真正失配的。
+  // meta 未加载时 sources 恒为空，须跳过，否则会误清掉草稿里本应合法的来源（meta 到达后无法恢复）。
   useEffect(() => {
-    updateField('channelSource', '');
+    if (!meta || !formData.channelSource) return;
+    if (!sources.some((opt) => opt.value === formData.channelSource)) {
+      updateField('channelSource', '');
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [formData.serviceType]);
+  }, [meta, sources]);
 
   const providerName = formData.providerName.trim();
   const providerNameValid = providerName.length > 0 && ASCII_PRINTABLE.test(providerName);
@@ -61,7 +70,6 @@ export function ProviderInfoStep({ formData, updateField, meta, onNext }: Provid
 
   const canProceed = useMemo(() => {
     return (
-      formData.agreementAccepted &&
       providerNameValid &&
       formData.websiteUrl.trim().length > 0 &&
       formData.serviceType.length > 0 &&
@@ -70,7 +78,7 @@ export function ProviderInfoStep({ formData, updateField, meta, onNext }: Provid
       groupValid
     );
   }, [
-    formData.agreementAccepted, providerNameValid, formData.websiteUrl,
+    providerNameValid, formData.websiteUrl,
     formData.serviceType, formData.channelType, formData.channelSource, groupValid,
   ]);
 
@@ -92,30 +100,6 @@ export function ProviderInfoStep({ formData, updateField, meta, onNext }: Provid
       <h2 className="text-xl font-semibold text-primary">
         {t('onboarding.providerInfo.title')}
       </h2>
-
-      {/* Agreement checkbox */}
-      <div className="p-4 bg-elevated rounded-lg space-y-3">
-        <label className="flex items-start gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={formData.agreementAccepted}
-            onChange={(e) => updateField('agreementAccepted', e.target.checked)}
-            className="mt-1 w-4 h-4 rounded border-muted accent-accent"
-          />
-          <span className="text-sm text-secondary leading-relaxed">
-            {t('onboarding.providerInfo.agreementText')}{' '}
-            <a
-              href="https://github.com/prehisle/relay-pulse/blob/main/docs/user/sponsorship.md"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-accent hover:text-accent-strong underline inline-flex items-center gap-0.5"
-            >
-              {t('onboarding.providerInfo.agreementLink')}
-              <ExternalLink className="w-3 h-3" />
-            </a>
-          </span>
-        </label>
-      </div>
 
       {/* Provider name */}
       <div>

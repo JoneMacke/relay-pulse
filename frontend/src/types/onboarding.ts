@@ -45,6 +45,8 @@ export interface OnboardingMeta {
   sponsor_levels: SponsorLevelInfo[];
   channel_types: ChannelTypeInfo[];
   channel_sources_by_service: Record<string, ChannelSourceOption[]>;
+  /** 通道类型(O/R/M) → 允许的来源 category 列表，用于按已选类型过滤来源下拉 */
+  channel_type_allowed_categories: Record<string, string[]>;
   channel_group_rule: ChannelGroupRule;
   test_types: TestTypeInfo[];
   contact_info: string;
@@ -102,6 +104,8 @@ export interface SubmitOnboardingRequest {
   test_latency: number;
   test_http_code: number;
   locale: string;
+  /** 用户逐条确认《入驻须知与确认》全部要点；后端要求为 true 才受理 */
+  agreement_accepted: boolean;
 }
 
 /** 提交申请响应 */
@@ -159,6 +163,9 @@ export interface AdminSubmission {
   reviewed_at: number | null;
   created_at: number;
   updated_at: number;
+  agreement_accepted: boolean;
+  agreement_accepted_at: number;
+  agreement_version: string;
 }
 
 /** 管理员列表响应 */

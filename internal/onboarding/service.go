@@ -35,7 +35,8 @@ var (
 )
 
 // ChannelSourceOption 是自助收录「通道来源」词表的单一真相源条目。
-// Category 仅用于前端分组展示，不参与 channel code 派生。
+// Category 既用于前端分组展示，也参与「通道类型↔来源」自洽校验（见 channelTypeAllowedCategories），
+// 但不参与 channel code 派生。
 type ChannelSourceOption struct {
 	Value    string `json:"value"`
 	Label    string `json:"label"`
@@ -83,6 +84,25 @@ func ChannelSourceOptionsByService() map[string][]ChannelSourceOption {
 	out := make(map[string][]ChannelSourceOption, len(ChannelSourceCatalog))
 	for service, opts := range ChannelSourceCatalog {
 		out[service] = append([]ChannelSourceOption(nil), opts...)
+	}
+	return out
+}
+
+// channelTypeAllowedCategories 定义每个通道类型（O/R/M）允许搭配的来源类别（ChannelSourceOption.Category）。
+// 单一真相源：同时供 Submit/AdminUpdate 后端校验与 /api/onboarding/meta 下发前端做下拉过滤，
+// 避免「官方通道却选逆向来源」一类不自洽提交，且杜绝前后端规则漂移。
+// 当前为干净划分——每个 Category 恰属一个类型：官方上游归 O、逆向归 R、混合归 M。
+var channelTypeAllowedCategories = map[string][]string{
+	"O": {"subscription", "official", "cloud"},
+	"R": {"reverse"},
+	"M": {"mixed"},
+}
+
+// ChannelTypeAllowedCategories 返回映射的深拷贝，供 API 层下发前端，避免外部修改污染真相源。
+func ChannelTypeAllowedCategories() map[string][]string {
+	out := make(map[string][]string, len(channelTypeAllowedCategories))
+	for ct, cats := range channelTypeAllowedCategories {
+		out[ct] = append([]string(nil), cats...)
 	}
 	return out
 }
@@ -165,7 +185,14 @@ type SubmitRequest struct {
 	TestLatency   int    `json:"test_latency"`
 	TestHTTPCode  int    `json:"test_http_code"`
 	Locale        string `json:"locale" binding:"max=10"`
+	// AgreementAccepted: 用户在提交前逐条勾选「入驻须知与确认」的结果，必须为 true 才受理。
+	// 落库的版本号与时间戳由后端盖戳（见 AgreementVersion），不信任客户端值。
+	AgreementAccepted bool `json:"agreement_accepted"`
 }
+
+// AgreementVersion 标记当前《入驻须知与确认》(docs/user/sponsorship-agreement.md) 的生效版本。
+// 协议要点发生实质调整时 bump 此值，便于审计「用户当时同意的是哪一版」。
+const AgreementVersion = "2026-06-08"
 
 // SubmitResponse 提交申请的响应
 type SubmitResponse struct {
@@ -180,12 +207,17 @@ func (s *Service) Submit(ctx context.Context, req *SubmitRequest, clientIP strin
 		return nil, fmt.Errorf("赞助等级 %q 已停止自助受理，请选择 pulse 或联系运营（QQ:18058344）", req.SponsorLevel)
 	}
 
+	// 必须确认《入驻须知与确认》全部要点（含付费/赞助制、API Key 授权等）后方可受理
+	if !req.AgreementAccepted {
+		return nil, fmt.Errorf("请先阅读并确认《入驻须知与确认》全部要点后再提交")
+	}
+
 	// 规范化并校验提交字段（服务商名禁中文、来源受控词表、分组格式）
 	providerName, err := validateProviderName(req.ProviderName)
 	if err != nil {
 		return nil, err
 	}
-	channelSource, err := validateChannelSource(req.ServiceType, req.ChannelSource)
+	channelSource, err := validateChannelTypeSource(req.ChannelType, req.ServiceType, req.ChannelSource)
 	if err != nil {
 		return nil, err
 	}
@@ -266,8 +298,12 @@ func (s *Service) Submit(ctx context.Context, req *SubmitRequest, clientIP strin
 		TestHTTPCode:      req.TestHTTPCode,
 		SubmitterIPHash:   ipHash,
 		Locale:            req.Locale,
-		CreatedAt:         now,
-		UpdatedAt:         now,
+		// 协议确认落库审计：后端盖戳版本与时间，不信任客户端
+		AgreementAccepted:   true,
+		AgreementAcceptedAt: now,
+		AgreementVersion:    AgreementVersion,
+		CreatedAt:           now,
+		UpdatedAt:           now,
 	}
 
 	if err := s.store.Save(ctx, sub); err != nil {
@@ -414,7 +450,7 @@ func (s *Service) AdminUpdate(ctx context.Context, publicID string, updates map[
 		sub.ChannelType != origChannelType ||
 		sub.ChannelSource != origChannelSource ||
 		sub.ChannelGroup != origChannelGroup {
-		source, err := validateChannelSource(sub.ServiceType, sub.ChannelSource)
+		source, err := validateChannelTypeSource(sub.ChannelType, sub.ServiceType, sub.ChannelSource)
 		if err != nil {
 			return nil, err
 		}
@@ -728,25 +764,67 @@ func validateProviderName(value string) (string, error) {
 	return value, nil
 }
 
-// validateChannelSource 校验 channel_source：必须是对应 service 受控词表中的合法值。
+// lookupChannelSource 在对应 service 受控词表中查找 channel_source，返回完整 option。
 // 词表成员资格是权威判定；格式正则仅用于在非法输入时给出更清晰的错误信息。
-// 返回小写规范值。
-func validateChannelSource(serviceType, source string) (string, error) {
+func lookupChannelSource(serviceType, source string) (ChannelSourceOption, error) {
 	serviceType = strings.ToLower(strings.TrimSpace(serviceType))
 	source = strings.ToLower(strings.TrimSpace(source))
 	if !channelSourcePattern.MatchString(source) {
-		return "", fmt.Errorf("channel_source 格式无效（%q），应为 2-5 位小写字母或数字", source)
+		return ChannelSourceOption{}, fmt.Errorf("channel_source 格式无效（%q），应为 2-5 位小写字母或数字", source)
 	}
 	options, ok := ChannelSourceCatalog[serviceType]
 	if !ok {
-		return "", fmt.Errorf("service_type %q 不支持", serviceType)
+		return ChannelSourceOption{}, fmt.Errorf("service_type %q 不支持", serviceType)
 	}
 	for _, opt := range options {
 		if opt.Value == source {
-			return source, nil
+			return opt, nil
 		}
 	}
-	return "", fmt.Errorf("channel_source %q 不在 service_type=%q 的允许来源中，如需新增请联系运营（QQ:18058344）", source, serviceType)
+	return ChannelSourceOption{}, fmt.Errorf("channel_source %q 不在 service_type=%q 的允许来源中，如需新增请联系运营（QQ:18058344）", source, serviceType)
+}
+
+// validateChannelSource 校验 channel_source 是否为对应 service 词表中的合法值，返回小写规范值。
+func validateChannelSource(serviceType, source string) (string, error) {
+	opt, err := lookupChannelSource(serviceType, source)
+	if err != nil {
+		return "", err
+	}
+	return opt.Value, nil
+}
+
+// validateChannelTypeSource 在 validateChannelSource 基础上追加「通道类型↔来源类别」自洽校验：
+// 来源既要在该 service 词表内，其 Category 还须落在该 channelType 的允许集合中。
+// channelType 须已规范为 O/R/M（调用方保证）。返回小写规范 source。
+func validateChannelTypeSource(channelType, serviceType, source string) (string, error) {
+	opt, err := lookupChannelSource(serviceType, source)
+	if err != nil {
+		return "", err
+	}
+	allowed, ok := channelTypeAllowedCategories[strings.ToUpper(strings.TrimSpace(channelType))]
+	if !ok {
+		return "", fmt.Errorf("channel_type 无效（%q），仅支持 O/R/M", channelType)
+	}
+	for _, cat := range allowed {
+		if opt.Category == cat {
+			return opt.Value, nil
+		}
+	}
+	return "", fmt.Errorf("通道来源「%s」与通道类型「%s」不匹配，请选择与该类型相符的来源", opt.Label, channelTypeLabel(channelType))
+}
+
+// channelTypeLabel 返回通道类型的中文标签，用于校验错误信息。
+func channelTypeLabel(channelType string) string {
+	switch strings.ToUpper(strings.TrimSpace(channelType)) {
+	case "O":
+		return "官方通道"
+	case "R":
+		return "逆向通道"
+	case "M":
+		return "混合通道"
+	default:
+		return channelType
+	}
 }
 
 // normalizeGroup 规范化 channel_group：留空回退默认值，并校验格式。返回小写规范值。

@@ -130,4 +130,32 @@ func TestAdminUpdate_RederiveGuard(t *testing.T) {
 			t.Errorf("切 service_type 到 cx 应重派生为 o-api-main，实际 service=%q code=%q", got.ServiceType, got.ChannelCode)
 		}
 	})
+
+	t.Run("仅改 channel_type 与现有 source 类别不符被拒", func(t *testing.T) {
+		svc, store := newTestService(t)
+		// 基础记录 type=O、source=api(official)。改 type=R（仅允许 reverse）应被自洽校验拒绝。
+		saveSubmission(t, store, "tcm-1", "pending", 100)
+
+		if _, err := svc.AdminUpdate(ctx, "tcm-1", map[string]any{
+			"channel_type": "R",
+		}); err == nil {
+			t.Errorf("O→R 但 source=api 仍为官方类，应被类型↔来源自洽校验拒绝")
+		}
+	})
+
+	t.Run("同时改 channel_type+source 到自洽组合通过并重派生", func(t *testing.T) {
+		svc, store := newTestService(t)
+		saveSubmission(t, store, "tcm-2", "pending", 100)
+
+		got, err := svc.AdminUpdate(ctx, "tcm-2", map[string]any{
+			"channel_type":   "R",
+			"channel_source": "kiro", // cc 词表含 kiro(reverse)，与 R 自洽
+		})
+		if err != nil {
+			t.Fatalf("R+kiro 应通过: %v", err)
+		}
+		if got.ChannelCode != "r-kiro-main" {
+			t.Errorf("R+kiro 应重派生为 r-kiro-main（空 group 回退 main），实际 %q", got.ChannelCode)
+		}
+	})
 }

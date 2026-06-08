@@ -99,6 +99,7 @@ export default function OnboardingPage() {
               {step === 3 && (
                 <ConfirmStep
                   formData={formData}
+                  updateField={updateField}
                   submitResult={submitResult}
                   isSubmitting={isSubmitting}
                   onSubmit={submit}

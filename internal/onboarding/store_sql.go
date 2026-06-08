@@ -67,7 +67,11 @@ func (s *SQLStore) InitTable(ctx context.Context) error {
 		reviewed_at INTEGER,
 
 		created_at INTEGER NOT NULL,
-		updated_at INTEGER NOT NULL
+		updated_at INTEGER NOT NULL,
+
+		agreement_accepted INTEGER NOT NULL DEFAULT 0,
+		agreement_accepted_at INTEGER NOT NULL DEFAULT 0,
+		agreement_version TEXT NOT NULL DEFAULT ''
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_onboarding_status ON onboarding_submissions(status, created_at DESC);
@@ -115,6 +119,9 @@ func (s *SQLStore) ensureColumns(ctx context.Context) error {
 		{"target_service", `ALTER TABLE onboarding_submissions ADD COLUMN target_service TEXT NOT NULL DEFAULT ''`},
 		{"target_channel", `ALTER TABLE onboarding_submissions ADD COLUMN target_channel TEXT NOT NULL DEFAULT ''`},
 		{"channel_group", `ALTER TABLE onboarding_submissions ADD COLUMN channel_group TEXT NOT NULL DEFAULT ''`},
+		{"agreement_accepted", `ALTER TABLE onboarding_submissions ADD COLUMN agreement_accepted INTEGER NOT NULL DEFAULT 0`},
+		{"agreement_accepted_at", `ALTER TABLE onboarding_submissions ADD COLUMN agreement_accepted_at INTEGER NOT NULL DEFAULT 0`},
+		{"agreement_version", `ALTER TABLE onboarding_submissions ADD COLUMN agreement_version TEXT NOT NULL DEFAULT ''`},
 	}
 	for _, m := range migrations {
 		if existing[m.name] {
@@ -140,8 +147,9 @@ func (s *SQLStore) Save(ctx context.Context, sub *Submission) error {
 		test_job_id, test_passed_at, test_latency_ms, test_http_code,
 		contact_info, submitter_ip_hash, locale,
 		admin_note, admin_config_json, reviewed_at,
-		created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		created_at, updated_at,
+		agreement_accepted, agreement_accepted_at, agreement_version
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	result, err := s.db.ExecContext(ctx, query,
 		sub.PublicID, sub.Status, sub.ProviderName, sub.WebsiteURL, sub.Category,
@@ -154,6 +162,7 @@ func (s *SQLStore) Save(ctx context.Context, sub *Submission) error {
 		nullStr(sub.ContactInfo), nullStr(sub.SubmitterIPHash), nullStr(sub.Locale),
 		nullStr(sub.AdminNote), nullStr(sub.AdminConfigJSON), sub.ReviewedAt,
 		sub.CreatedAt, sub.UpdatedAt,
+		boolToInt(sub.AgreementAccepted), sub.AgreementAcceptedAt, sub.AgreementVersion,
 	)
 	if err != nil {
 		return fmt.Errorf("保存申请失败: %w", err)
@@ -303,7 +312,8 @@ const allColumns = `id, public_id, status,
 	test_job_id, test_passed_at, test_latency_ms, test_http_code,
 	contact_info, submitter_ip_hash, locale,
 	admin_note, admin_config_json, reviewed_at,
-	created_at, updated_at`
+	created_at, updated_at,
+	agreement_accepted, agreement_accepted_at, agreement_version`
 
 // scanner 是 *sql.Row 和 *sql.Rows 的共同扫描接口
 type scanner interface {
@@ -314,6 +324,7 @@ func scanSubmission(s scanner) (*Submission, error) {
 	var sub Submission
 	var contactInfo, ipHash, locale, adminNote, adminConfigJSON sql.NullString
 	var reviewedAt sql.NullInt64
+	var agreementAccepted int // SQLite 以 INTEGER 0/1 存储 bool
 
 	err := s.Scan(
 		&sub.ID, &sub.PublicID, &sub.Status,
@@ -327,6 +338,7 @@ func scanSubmission(s scanner) (*Submission, error) {
 		&contactInfo, &ipHash, &locale,
 		&adminNote, &adminConfigJSON, &reviewedAt,
 		&sub.CreatedAt, &sub.UpdatedAt,
+		&agreementAccepted, &sub.AgreementAcceptedAt, &sub.AgreementVersion,
 	)
 	if err != nil {
 		return nil, err
@@ -337,6 +349,7 @@ func scanSubmission(s scanner) (*Submission, error) {
 	sub.Locale = locale.String
 	sub.AdminNote = adminNote.String
 	sub.AdminConfigJSON = adminConfigJSON.String
+	sub.AgreementAccepted = agreementAccepted != 0
 	if reviewedAt.Valid {
 		v := reviewedAt.Int64
 		sub.ReviewedAt = &v
@@ -363,4 +376,12 @@ func nullStr(s string) sql.NullString {
 		return sql.NullString{}
 	}
 	return sql.NullString{String: s, Valid: true}
+}
+
+// boolToInt 将 bool 转为 SQLite 存储用的 0/1（SQLite 无原生 BOOLEAN 类型）
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

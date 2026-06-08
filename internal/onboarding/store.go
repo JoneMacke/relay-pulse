@@ -66,6 +66,11 @@ type Submission struct {
 	SubmitterIPHash string `json:"submitter_ip_hash"`
 	Locale          string `json:"locale"`
 
+	// 协议确认（提交时一次性落库，作审计留痕，后续不可改）
+	AgreementAccepted   bool   `json:"agreement_accepted"`
+	AgreementAcceptedAt int64  `json:"agreement_accepted_at"`
+	AgreementVersion    string `json:"agreement_version"`
+
 	// 管理员审核
 	AdminNote       string `json:"admin_note"`
 	AdminConfigJSON string `json:"admin_config_json"` // 管理员调整后的完整 ServiceConfig JSON

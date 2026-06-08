@@ -193,6 +193,7 @@ export function useOnboarding() {
         test_latency: testResult.latency ?? 0,
         test_http_code: testResult.http_code ?? 0,
         locale: navigator.language || 'zh-CN',
+        agreement_accepted: formData.agreementAccepted,
       };
 
       const resp = await apiPost<SubmitOnboardingResponse>('/api/onboarding/submit', req);
