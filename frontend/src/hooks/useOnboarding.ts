@@ -19,6 +19,13 @@ function loadDraft(): Partial<OnboardingFormData> {
       delete parsed.apiKey;
       delete parsed.contactInfo;
       delete parsed.identity;
+      // 自定义通道类型 X 已下线：剔除残留字段并归一化旧草稿，避免提交被后端拒绝
+      delete parsed.channelTypeCustom;
+      if (parsed.channelType === 'X') parsed.channelType = 'O';
+      // 通道来源已收敛为 2-5 位小写受控词表；旧草稿里的长词级联值（subscription/bedrock…）一律丢弃，强制重选
+      if (typeof parsed.channelSource !== 'string' || !/^[a-z0-9]{2,5}$/.test(parsed.channelSource)) {
+        delete parsed.channelSource;
+      }
       return parsed as Partial<OnboardingFormData>;
     }
   } catch { /* ignore */ }
@@ -46,8 +53,8 @@ const defaultForm: OnboardingFormData = {
   serviceType: 'cc',
   sponsorLevel: '',
   channelType: 'O',
-  channelTypeCustom: '',
   channelSource: '',
+  channelGroup: 'main',
   agreementAccepted: false,
   baseUrl: '',
   apiKey: '',
@@ -176,6 +183,7 @@ export function useOnboarding() {
         sponsor_level: formData.sponsorLevel,
         channel_type: formData.channelType,
         channel_source: formData.channelSource,
+        channel_group: formData.channelGroup.trim() || 'main',
         base_url: ensureUrl(formData.baseUrl),
         api_key: formData.apiKey,
         test_proof: testProof,

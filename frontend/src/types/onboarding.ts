@@ -25,17 +25,18 @@ export interface TestTypeInfo {
   variants: { id: string; order: number }[];
 }
 
-/** 通道来源子项（二级） */
-export interface ChannelSourceSubOption {
-  id: string;
+/** 通道来源选项（受控词表条目，按 service 划分下发） */
+export interface ChannelSourceOption {
+  value: string;
   label: string;
+  category: string; // 仅用于前端分组展示（subscription/official/cloud/reverse/mixed）
 }
 
-/** 通道来源分类（一级） */
-export interface ChannelSourceCategory {
-  id: string;
-  label: string;
-  sub_options: ChannelSourceSubOption[] | null;
+/** 通道分组（channel_group）的同步校验规则 */
+export interface ChannelGroupRule {
+  pattern: string;
+  default: string;
+  max_length: number;
 }
 
 /** 申请表单元数据 */
@@ -43,8 +44,8 @@ export interface OnboardingMeta {
   service_types: string[];
   sponsor_levels: SponsorLevelInfo[];
   channel_types: ChannelTypeInfo[];
-  channel_sources: string[];
-  channel_source_groups?: Record<string, ChannelSourceCategory[]>;
+  channel_sources_by_service: Record<string, ChannelSourceOption[]>;
+  channel_group_rule: ChannelGroupRule;
   test_types: TestTypeInfo[];
   contact_info: string;
 }
@@ -58,8 +59,8 @@ export interface OnboardingFormData {
   serviceType: string;
   sponsorLevel: string;
   channelType: string;
-  channelTypeCustom: string;
   channelSource: string;
+  channelGroup: string;
   agreementAccepted: boolean;
 
   // Step 2: 连通性测试
@@ -91,6 +92,7 @@ export interface SubmitOnboardingRequest {
   sponsor_level: string;
   channel_type: string;
   channel_source: string;
+  channel_group: string;
   base_url: string;
   api_key: string;
   test_proof: string;
@@ -132,6 +134,7 @@ export interface AdminSubmission {
   sponsor_level: string;
   channel_type: string;
   channel_source: string;
+  channel_group: string;
   channel_code: string;
   target_provider: string;
   target_service: string;

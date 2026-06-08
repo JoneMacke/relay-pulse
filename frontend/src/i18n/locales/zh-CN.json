@@ -379,6 +379,12 @@
       "customSource": "自定义...",
       "customSourcePlaceholder": "输入自定义来源",
       "channelSourceCustomPlaceholder": "输入来源名称（大写字母/数字）",
+      "providerNameHint": "仅支持英文/数字/符号，不能包含中文",
+      "channelSourcePlaceholder": "请选择接入来源",
+      "channelSourceHint": "没有合适的来源？请联系运营补充（QQ:18058344）",
+      "channelGroup": "通道分组",
+      "channelGroupHint": "用于区分同一来源的多条通道（如 us、eu、v2），留空默认 main",
+      "sourceCategories": { "subscription": "订阅账户", "official": "官方 API", "cloud": "云平台", "reverse": "逆向", "mixed": "混合" },
       "channelCodePreview": "通道标识预览",
       "optional": "（可选）"
     },
@@ -576,6 +582,9 @@
       "monitors": "通道管理",
       "changes": "变更请求"
     },
+    "submissions": {
+      "searchPlaceholder": "按申请编号搜索（前 8 位或完整 UUID）"
+    },
     "monitors": {
       "backToList": "← 返回列表",
       "parentChannel": "父通道",
@@ -761,6 +770,7 @@
       "sponsorLevel": "赞助等级",
       "channelType": "通道类型",
       "channelSource": "通道来源",
+      "channelGroup": "通道分组",
       "channelName": "通道显示名称",
       "listedSince": "收录日期",
       "priceMin": "最低倍率",

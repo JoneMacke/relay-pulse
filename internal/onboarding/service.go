@@ -22,6 +22,76 @@ import (
 // pscSegmentPattern 校验 PSC 段仅允许小写字母、数字、短横线，且不能以短横线开头或结尾。
 var pscSegmentPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`)
 
+// 自助收录字段规范（提交即强制）：
+//   - provider_name 仅允许 ASCII 可打印字符（禁中文/日文/emoji 等），与下游 PSC provider slug 的小写约束保持一致
+//   - channel_source 必须是受控词表 ChannelSourceCatalog 中、对应 service 下的 2-5 位小写代码
+//   - channel_group 为用户自定义 1-8 位小写分组（中转商自己的分组），留空回退 channelGroupDefault
+const channelGroupDefault = "main"
+
+var (
+	providerNamePattern  = regexp.MustCompile(`^[\x20-\x7E]+$`)
+	channelSourcePattern = regexp.MustCompile(`^[a-z0-9]{2,5}$`)
+	channelGroupPattern  = regexp.MustCompile(`^[a-z0-9]{1,8}$`)
+)
+
+// ChannelSourceOption 是自助收录「通道来源」词表的单一真相源条目。
+// Category 仅用于前端分组展示，不参与 channel code 派生。
+type ChannelSourceOption struct {
+	Value    string `json:"value"`
+	Label    string `json:"label"`
+	Category string `json:"category"`
+}
+
+// ChannelSourceCatalog 是后端校验与前端 meta 下发共用的唯一「通道来源」词表，按 service_type 划分。
+// 人工新增/调整来源时只改这里，避免 Submit 校验、/meta 下发、前端选项三处漂移。
+// 约束：每个 Value 必须满足 channelSourcePattern（2-5 位小写字母/数字）。
+var ChannelSourceCatalog = map[string][]ChannelSourceOption{
+	"cc": {
+		{Value: "pro", Label: "Claude Pro 订阅", Category: "subscription"},
+		{Value: "max", Label: "Claude Max 订阅", Category: "subscription"},
+		{Value: "team", Label: "Claude Team", Category: "subscription"},
+		{Value: "ent", Label: "Claude Enterprise", Category: "subscription"},
+		{Value: "api", Label: "Anthropic Console API", Category: "official"},
+		{Value: "aws", Label: "AWS Bedrock", Category: "cloud"},
+		{Value: "azr", Label: "Azure AI Foundry", Category: "cloud"},
+		{Value: "gcp", Label: "Google Vertex AI", Category: "cloud"},
+		{Value: "kiro", Label: "Kiro（逆向）", Category: "reverse"},
+		{Value: "antg", Label: "Antigravity（逆向）", Category: "reverse"},
+		{Value: "mix", Label: "混合 / 多上游", Category: "mixed"},
+	},
+	"cx": {
+		{Value: "plus", Label: "ChatGPT Plus", Category: "subscription"},
+		{Value: "pro", Label: "ChatGPT Pro", Category: "subscription"},
+		{Value: "team", Label: "ChatGPT Team", Category: "subscription"},
+		{Value: "biz", Label: "ChatGPT Business", Category: "subscription"},
+		{Value: "ent", Label: "ChatGPT Enterprise", Category: "subscription"},
+		{Value: "api", Label: "OpenAI Platform API", Category: "official"},
+		{Value: "mix", Label: "混合 / 多上游", Category: "mixed"},
+	},
+	"gm": {
+		{Value: "free", Label: "Google 账号 Free", Category: "subscription"},
+		{Value: "adv", Label: "Gemini Advanced", Category: "subscription"},
+		{Value: "api", Label: "Gemini API (AI Studio)", Category: "official"},
+		{Value: "gcp", Label: "Google Vertex AI", Category: "cloud"},
+		{Value: "antg", Label: "Antigravity（逆向）", Category: "reverse"},
+		{Value: "mix", Label: "混合 / 多上游", Category: "mixed"},
+	},
+}
+
+// ChannelSourceOptionsByService 返回词表的深拷贝，供 API 层下发前端，避免外部修改污染真相源。
+func ChannelSourceOptionsByService() map[string][]ChannelSourceOption {
+	out := make(map[string][]ChannelSourceOption, len(ChannelSourceCatalog))
+	for service, opts := range ChannelSourceCatalog {
+		out[service] = append([]ChannelSourceOption(nil), opts...)
+	}
+	return out
+}
+
+// ChannelGroupRule 返回 channel_group 的校验规则，供前端做同步校验。
+func ChannelGroupRule() (pattern, defaultValue string, maxLength int) {
+	return channelGroupPattern.String(), channelGroupDefault, 8
+}
+
 // PSCConflictError 表示 PSC 冲突错误，包含冲突信息和建议值。
 type PSCConflictError struct {
 	Provider         string
@@ -77,14 +147,15 @@ func (s *Service) SetConfigMonitorCheck(fn func(string, string, string) bool) {
 
 // SubmitRequest 用户提交申请的请求参数
 type SubmitRequest struct {
-	ProviderName  string `json:"provider_name" binding:"required,max=100"`
+	ProviderName  string `json:"provider_name" binding:"max=100"` // 仅 ASCII，非空校验在 validateProviderName
 	WebsiteURL    string `json:"website_url" binding:"required,url,max=500"`
 	Category      string `json:"category" binding:"required,oneof=commercial public"`
 	ServiceType   string `json:"service_type" binding:"required,oneof=cc cx gm"`
 	TemplateName  string `json:"template_name" binding:"required,max=100"`
 	SponsorLevel  string `json:"sponsor_level" binding:"max=50"`
-	ChannelType   string `json:"channel_type" binding:"required,oneof=O R M X"`
-	ChannelSource string `json:"channel_source" binding:"required,max=50"`
+	ChannelType   string `json:"channel_type" binding:"required,oneof=O R M"`
+	ChannelSource string `json:"channel_source" binding:"required,max=5"`
+	ChannelGroup  string `json:"channel_group" binding:"max=8"` // 留空回退 main
 	BaseURL       string `json:"base_url" binding:"required,url,max=500"`
 	APIKey        string `json:"api_key" binding:"required,min=10,max=500"`
 	TestProof     string `json:"test_proof" binding:"required"`
@@ -107,6 +178,20 @@ func (s *Service) Submit(ctx context.Context, req *SubmitRequest, clientIP strin
 	// 停止受理 public/signal 自助赞助（2026-04-17 政策调整，详见 docs/user/sponsorship.md）
 	if req.SponsorLevel == "public" || req.SponsorLevel == "signal" {
 		return nil, fmt.Errorf("赞助等级 %q 已停止自助受理，请选择 pulse 或联系运营（QQ:18058344）", req.SponsorLevel)
+	}
+
+	// 规范化并校验提交字段（服务商名禁中文、来源受控词表、分组格式）
+	providerName, err := validateProviderName(req.ProviderName)
+	if err != nil {
+		return nil, err
+	}
+	channelSource, err := validateChannelSource(req.ServiceType, req.ChannelSource)
+	if err != nil {
+		return nil, err
+	}
+	channelGroup, err := normalizeGroup(req.ChannelGroup)
+	if err != nil {
+		return nil, err
 	}
 
 	// IP 限流
@@ -154,21 +239,22 @@ func (s *Service) Submit(ctx context.Context, req *SubmitRequest, clientIP strin
 		return nil, fmt.Errorf("测试证明无效: %w", err)
 	}
 
-	// 派生 channel code
-	channelCode := deriveChannelCode(req.ChannelType, req.ChannelSource)
+	// 派生 channel code（type-source-group 三段）
+	channelCode := deriveChannelCode(req.ChannelType, channelSource, channelGroup)
 
 	now := time.Now().Unix()
 	sub := &Submission{
 		PublicID:          uuid.New().String(),
 		Status:            StatusPending,
-		ProviderName:      req.ProviderName,
+		ProviderName:      providerName,
 		WebsiteURL:        req.WebsiteURL,
 		Category:          req.Category,
 		ServiceType:       req.ServiceType,
 		TemplateName:      req.TemplateName,
 		SponsorLevel:      req.SponsorLevel,
 		ChannelType:       req.ChannelType,
-		ChannelSource:     req.ChannelSource,
+		ChannelSource:     channelSource,
+		ChannelGroup:      channelGroup,
 		ChannelCode:       channelCode,
 		BaseURL:           req.BaseURL,
 		APIKeyEncrypted:   encrypted,
@@ -205,15 +291,16 @@ func (s *Service) GetStatus(ctx context.Context, publicID string) (*Submission, 
 	return s.store.GetByPublicID(ctx, publicID)
 }
 
-// AdminList 管理员列表查询
-func (s *Service) AdminList(ctx context.Context, status string, limit, offset int) ([]*Submission, int, error) {
+// AdminList 管理员列表查询。
+// search 为已在 handler 层完成 trim/ToLower/LIKE 转义的模式串，此处仅透传。
+func (s *Service) AdminList(ctx context.Context, status, search string, limit, offset int) ([]*Submission, int, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
 	if offset < 0 {
 		offset = 0
 	}
-	return s.store.List(ctx, status, limit, offset)
+	return s.store.List(ctx, status, search, limit, offset)
 }
 
 // AdminGetDetail 管理员获取详情（含解密后的 API Key）
@@ -241,9 +328,19 @@ func (s *Service) AdminUpdate(ctx context.Context, publicID string, updates map[
 		return nil, fmt.Errorf("申请不存在")
 	}
 
+	// 记录通道组成字段原值，用于判断是否需要重派生 channel_code（避免误改 legacy 两段记录）
+	origServiceType := sub.ServiceType
+	origChannelType := sub.ChannelType
+	origChannelSource := sub.ChannelSource
+	origChannelGroup := sub.ChannelGroup
+
 	// 应用允许的更新字段
 	if v, ok := updates["provider_name"].(string); ok && v != "" {
-		sub.ProviderName = v
+		name, err := validateProviderName(v)
+		if err != nil {
+			return nil, err
+		}
+		sub.ProviderName = name
 	}
 	if v, ok := updates["website_url"].(string); ok && v != "" {
 		sub.WebsiteURL = v
@@ -252,7 +349,11 @@ func (s *Service) AdminUpdate(ctx context.Context, publicID string, updates map[
 		sub.Category = v
 	}
 	if v, ok := updates["service_type"].(string); ok && v != "" {
-		sub.ServiceType = v
+		st := strings.ToLower(strings.TrimSpace(v))
+		if st != "cc" && st != "cx" && st != "gm" {
+			return nil, fmt.Errorf("service_type 无效（%q），仅支持 cc/cx/gm", v)
+		}
+		sub.ServiceType = st
 	}
 	if v, ok := updates["template_name"].(string); ok && v != "" {
 		sub.TemplateName = v
@@ -261,10 +362,17 @@ func (s *Service) AdminUpdate(ctx context.Context, publicID string, updates map[
 		sub.SponsorLevel = v
 	}
 	if v, ok := updates["channel_type"].(string); ok && v != "" {
-		sub.ChannelType = v
+		ct := strings.ToUpper(strings.TrimSpace(v))
+		if ct != "O" && ct != "R" && ct != "M" {
+			return nil, fmt.Errorf("channel_type 无效（%q），仅支持 O/R/M", v)
+		}
+		sub.ChannelType = ct
 	}
 	if v, ok := updates["channel_source"].(string); ok && v != "" {
-		sub.ChannelSource = v
+		sub.ChannelSource = strings.ToLower(strings.TrimSpace(v))
+	}
+	if v, ok := updates["channel_group"].(string); ok {
+		sub.ChannelGroup = strings.ToLower(strings.TrimSpace(v))
 	}
 	if v, ok := updates["target_provider"].(string); ok {
 		sub.TargetProvider = v
@@ -300,8 +408,24 @@ func (s *Service) AdminUpdate(ctx context.Context, publicID string, updates map[
 		sub.AdminConfigJSON = v
 	}
 
-	// 重新派生 channel code
-	sub.ChannelCode = deriveChannelCode(sub.ChannelType, sub.ChannelSource)
+	// 仅当通道组成字段（service/type/source/group）真正变化时才重新校验并派生 channel_code，
+	// 避免管理员仅编辑无关字段时把 legacy 两段记录意外改写成三段或撞新词表校验。
+	if sub.ServiceType != origServiceType ||
+		sub.ChannelType != origChannelType ||
+		sub.ChannelSource != origChannelSource ||
+		sub.ChannelGroup != origChannelGroup {
+		source, err := validateChannelSource(sub.ServiceType, sub.ChannelSource)
+		if err != nil {
+			return nil, err
+		}
+		group, err := normalizeGroup(sub.ChannelGroup)
+		if err != nil {
+			return nil, err
+		}
+		sub.ChannelSource = source
+		sub.ChannelGroup = group
+		sub.ChannelCode = deriveChannelCode(sub.ChannelType, source, group)
+	}
 	sub.UpdatedAt = time.Now().Unix()
 
 	if err := s.store.Update(ctx, sub); err != nil {
@@ -588,8 +712,63 @@ func (s *Service) suggestUniqueChannel(provider, service, channel string) string
 	return channel + "-new"
 }
 
-// deriveChannelCode 从通道类型和来源派生通道代码
-func deriveChannelCode(channelType, channelSource string) string {
-	source := strings.ToLower(strings.ReplaceAll(channelSource, " ", ""))
-	return fmt.Sprintf("%s-%s", strings.ToLower(channelType), source)
+// validateProviderName 校验服务商名称：非空、长度内、仅 ASCII 可打印字符。
+// 返回 TrimSpace 后的规范值。
+func validateProviderName(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", fmt.Errorf("provider_name 不能为空")
+	}
+	if len(value) > 100 {
+		return "", fmt.Errorf("provider_name 长度超过限制（最大 100）")
+	}
+	if !providerNamePattern.MatchString(value) {
+		return "", fmt.Errorf("provider_name 仅允许 ASCII 可打印字符，不能包含中文或其他非 ASCII 字符")
+	}
+	return value, nil
+}
+
+// validateChannelSource 校验 channel_source：必须是对应 service 受控词表中的合法值。
+// 词表成员资格是权威判定；格式正则仅用于在非法输入时给出更清晰的错误信息。
+// 返回小写规范值。
+func validateChannelSource(serviceType, source string) (string, error) {
+	serviceType = strings.ToLower(strings.TrimSpace(serviceType))
+	source = strings.ToLower(strings.TrimSpace(source))
+	if !channelSourcePattern.MatchString(source) {
+		return "", fmt.Errorf("channel_source 格式无效（%q），应为 2-5 位小写字母或数字", source)
+	}
+	options, ok := ChannelSourceCatalog[serviceType]
+	if !ok {
+		return "", fmt.Errorf("service_type %q 不支持", serviceType)
+	}
+	for _, opt := range options {
+		if opt.Value == source {
+			return source, nil
+		}
+	}
+	return "", fmt.Errorf("channel_source %q 不在 service_type=%q 的允许来源中，如需新增请联系运营（QQ:18058344）", source, serviceType)
+}
+
+// normalizeGroup 规范化 channel_group：留空回退默认值，并校验格式。返回小写规范值。
+func normalizeGroup(group string) (string, error) {
+	group = strings.ToLower(strings.TrimSpace(group))
+	if group == "" {
+		group = channelGroupDefault
+	}
+	if !channelGroupPattern.MatchString(group) {
+		return "", fmt.Errorf("channel_group 格式无效（%q），应为 1-8 位小写字母或数字", group)
+	}
+	return group, nil
+}
+
+// deriveChannelCode 从通道类型、来源、分组派生通道代码 {type}-{source}-{group}（全小写）。
+// group 为空时退化为两段 {type}-{source}，仅用于兼容旧申请与旧 monitors.d/ 通道。
+func deriveChannelCode(channelType, channelSource, channelGroup string) string {
+	t := strings.ToLower(strings.TrimSpace(channelType))
+	source := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(channelSource), " ", ""))
+	group := strings.ToLower(strings.TrimSpace(channelGroup))
+	if group == "" {
+		return fmt.Sprintf("%s-%s", t, source)
+	}
+	return fmt.Sprintf("%s-%s-%s", t, source, group)
 }

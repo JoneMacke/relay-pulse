@@ -15,72 +15,20 @@ import (
 
 // OnboardingMetaResponse 申请表单元数据
 type OnboardingMetaResponse struct {
-	ServiceTypes        []string                           `json:"service_types"`
-	SponsorLevels       []SponsorLevelInfo                 `json:"sponsor_levels"`
-	ChannelTypes        []ChannelTypeInfo                  `json:"channel_types"`
-	ChannelSources      []string                           `json:"channel_sources"`
-	ChannelSourceGroups map[string][]ChannelSourceCategory `json:"channel_source_groups"`
-	TestTypes           []OnboardingTestType               `json:"test_types"`
-	ContactInfo         string                             `json:"contact_info"`
+	ServiceTypes            []string                                    `json:"service_types"`
+	SponsorLevels           []SponsorLevelInfo                          `json:"sponsor_levels"`
+	ChannelTypes            []ChannelTypeInfo                           `json:"channel_types"`
+	ChannelSourcesByService map[string][]onboarding.ChannelSourceOption `json:"channel_sources_by_service"`
+	ChannelGroupRule        ChannelGroupRule                            `json:"channel_group_rule"`
+	TestTypes               []OnboardingTestType                        `json:"test_types"`
+	ContactInfo             string                                      `json:"contact_info"`
 }
 
-// ChannelSourceCategory 通道来源分类（一级）
-type ChannelSourceCategory struct {
-	ID         string                   `json:"id"`
-	Label      string                   `json:"label"`
-	SubOptions []ChannelSourceSubOption `json:"sub_options"`
-}
-
-// ChannelSourceSubOption 通道来源子项（二级）
-type ChannelSourceSubOption struct {
-	ID    string `json:"id"`
-	Label string `json:"label"`
-}
-
-// defaultChannelSourceGroups 硬编码的三服务来源分类。
-// 依据：
-//   - CC: Claude Code CLI 登录界面（subscription/console/3rd-party）
-//   - CX: OpenAI Codex 认证文档 https://developers.openai.com/codex/auth
-//   - GM: Gemini CLI 认证文档 https://github.com/google-gemini/gemini-cli/blob/HEAD/docs/get-started/authentication.md
-func defaultChannelSourceGroups() map[string][]ChannelSourceCategory {
-	return map[string][]ChannelSourceCategory{
-		"cc": {
-			{ID: "subscription", Label: "Claude 订阅账户", SubOptions: []ChannelSourceSubOption{
-				{ID: "pro", Label: "Pro"},
-				{ID: "max", Label: "Max"},
-				{ID: "team", Label: "Team"},
-				{ID: "enterprise", Label: "Enterprise"},
-			}},
-			{ID: "api", Label: "Anthropic Console API", SubOptions: nil},
-			{ID: "third-party", Label: "第三方平台", SubOptions: []ChannelSourceSubOption{
-				{ID: "bedrock", Label: "AWS Bedrock"},
-				{ID: "foundry", Label: "Microsoft Foundry"},
-				{ID: "vertex", Label: "Google Vertex AI"},
-			}},
-		},
-		"cx": {
-			{ID: "subscription", Label: "ChatGPT 订阅", SubOptions: []ChannelSourceSubOption{
-				{ID: "plus", Label: "Plus"},
-				{ID: "pro", Label: "Pro"},
-				{ID: "team", Label: "Team"},
-				{ID: "business", Label: "Business"},
-				{ID: "enterprise", Label: "Enterprise"},
-			}},
-			{ID: "api", Label: "OpenAI Platform API", SubOptions: nil},
-		},
-		"gm": {
-			{ID: "google-account", Label: "Google 账号 (OAuth)", SubOptions: []ChannelSourceSubOption{
-				{ID: "free", Label: "Free"},
-				{ID: "advanced", Label: "Gemini Advanced"},
-			}},
-			{ID: "api", Label: "Gemini API Key (AI Studio)", SubOptions: nil},
-			{ID: "vertex", Label: "Vertex AI", SubOptions: []ChannelSourceSubOption{
-				{ID: "adc", Label: "Application Default Credentials"},
-				{ID: "service-account", Label: "Service Account JSON"},
-				{ID: "api-key", Label: "Cloud API Key"},
-			}},
-		},
-	}
+// ChannelGroupRule 下发给前端的 channel_group 同步校验规则。
+type ChannelGroupRule struct {
+	Pattern   string `json:"pattern"`
+	Default   string `json:"default"`
+	MaxLength int    `json:"max_length"`
 }
 
 // OnboardingTestType 收录测试类型信息
@@ -142,6 +90,7 @@ func (h *Handler) GetOnboardingMeta(c *gin.Context) {
 		})
 	}
 
+	groupPattern, groupDefault, groupMaxLength := onboarding.ChannelGroupRule()
 	resp := OnboardingMetaResponse{
 		ServiceTypes: []string{"cc", "cx", "gm"},
 		SponsorLevels: []SponsorLevelInfo{
@@ -152,12 +101,15 @@ func (h *Handler) GetOnboardingMeta(c *gin.Context) {
 			{Value: "O", Label: "官方通道"},
 			{Value: "R", Label: "逆向通道"},
 			{Value: "M", Label: "混合通道"},
-			{Value: "X", Label: "其他"},
 		},
-		ChannelSources:      []string{},
-		ChannelSourceGroups: defaultChannelSourceGroups(),
-		TestTypes:           testTypes,
-		ContactInfo:         contactInfo,
+		ChannelSourcesByService: onboarding.ChannelSourceOptionsByService(),
+		ChannelGroupRule: ChannelGroupRule{
+			Pattern:   groupPattern,
+			Default:   groupDefault,
+			MaxLength: groupMaxLength,
+		},
+		TestTypes:   testTypes,
+		ContactInfo: contactInfo,
 	}
 
 	c.JSON(http.StatusOK, resp)

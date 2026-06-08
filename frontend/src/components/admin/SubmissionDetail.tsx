@@ -6,7 +6,7 @@ import { FormField, SelectField, ReadOnlyField } from './FormControls';
 /** 可编辑字段列表 — 用于本地 draft 初始化和脏检测 */
 const EDITABLE_FIELDS = [
   'provider_name', 'website_url', 'category', 'service_type',
-  'template_name', 'sponsor_level', 'channel_type', 'channel_source',
+  'template_name', 'sponsor_level', 'channel_type', 'channel_source', 'channel_group',
   'target_provider', 'target_service', 'target_channel',
   'channel_name', 'listed_since', 'expires_at',
   'price_min', 'price_max', 'base_url', 'admin_note',
@@ -317,14 +317,19 @@ export const SubmissionDetail: React.FC<SubmissionDetailProps> = ({
               { value: 'O', label: 'O - 官方直连' },
               { value: 'R', label: 'R - 逆向' },
               { value: 'M', label: 'M - 混合' },
-              { value: 'X', label: 'X - 其他' },
             ]}
           />
           <FormField
             label={t('admin.detail.channelSource')}
             value={draft.channel_source}
             onChange={(v) => updateField('channel_source', v)}
-            placeholder="API, Web, AWS, GCP..."
+            placeholder="max, api, aws, kiro..."
+          />
+          <FormField
+            label={t('admin.detail.channelGroup', { defaultValue: '通道分组' })}
+            value={draft.channel_group}
+            onChange={(v) => updateField('channel_group', v)}
+            placeholder="main, us, v2..."
           />
           <FormField
             label={t('admin.detail.channelName')}

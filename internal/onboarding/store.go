@@ -34,9 +34,10 @@ type Submission struct {
 	SponsorLevel string `json:"sponsor_level"` // public / signal / pulse
 
 	// 通道
-	ChannelType    string  `json:"channel_type"`    // O / R / M / X
-	ChannelSource  string  `json:"channel_source"`  // API / Web / AWS / GCP / App / custom
-	ChannelCode    string  `json:"channel_code"`    // 派生: {type}-{source}
+	ChannelType    string  `json:"channel_type"`    // O / R / M
+	ChannelSource  string  `json:"channel_source"`  // 受控词表代码（2-5 位小写，见 ChannelSourceCatalog）
+	ChannelGroup   string  `json:"channel_group"`   // 中转商分组（1-8 位小写）；新提交默认 main，旧数据可为空
+	ChannelCode    string  `json:"channel_code"`    // 派生: {type}-{source}-{group}（旧数据可为 {type}-{source}）
 	TargetProvider string  `json:"target_provider"` // 发布时 provider 覆盖（可选）
 	TargetService  string  `json:"target_service"`  // 发布时 service 覆盖（可选）
 	TargetChannel  string  `json:"target_channel"`  // 发布时 channel 覆盖（可选）
@@ -86,8 +87,9 @@ type Store interface {
 	// GetByID 按内部 ID 查询申请
 	GetByID(ctx context.Context, id int64) (*Submission, error)
 
-	// List 列表查询（支持状态过滤）
-	List(ctx context.Context, status string, limit, offset int) ([]*Submission, int, error)
+	// List 列表查询（支持状态过滤与 public_id 模糊搜索）。
+	// search 为已在调用层完成 LIKE 转义并包裹通配符的模式串；空串表示不按 public_id 过滤。
+	List(ctx context.Context, status, search string, limit, offset int) ([]*Submission, int, error)
 
 	// Update 更新申请字段
 	Update(ctx context.Context, s *Submission) error

@@ -971,7 +971,12 @@ Closes #42
 
 ### Onboarding 通道标识派生
 
-收录申请提交时，channel code 由 `deriveChannelCode(channelType, channelSource)` 自动派生：`strings.ToLower(type) + "-" + strings.ToLower(source)`。例如 channelType="O" + channelSource="FREE" → `o-free`。PSC 各段只允许小写字母、数字、短横线（`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`）。管理员可在发布前通过 `target_channel` 覆盖派生值。前端 `ChannelTypeIcon` 通过首字母（大小写不敏感）识别通道类型图标（o→官方、r→逆向、m→混合）。
+收录申请提交时，channel code 由 `deriveChannelCode(channelType, channelSource, channelGroup)` 派生为三段 `{type}-{source}-{group}`（全小写；group 为空时回退两段，仅用于兼容旧数据）。例如 type="O" + source="max" + group="us" → `o-max-us`。提交即强制校验（见 `internal/onboarding/service.go`）：
+- **provider_name** 仅允许 ASCII 可打印字符（`^[\x20-\x7E]+$`，禁中文）；
+- **channel_source** 必须是 `ChannelSourceCatalog`（per-service 受控词表，单一真相源，同时供 `/api/onboarding/meta` 下发前端）中的 2-5 位小写代码；如需新增来源改这一处 map；
+- **channel_group** 为 1-8 位小写字母/数字（中转商自定义分组），留空默认 `main`。
+
+PSC 各段仍只允许小写字母、数字、短横线（`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`）。`AdminUpdate` 仅当 service/type/source/group 四元组真正变化时才重派生 channel_code（保护 legacy 两段记录），并对 channel_type(O/R/M)、service_type(cc/cx/gm) 做枚举校验。管理员可在发布前通过 `target_channel` 覆盖派生值（**故意保留的逃生口，不受三段约束**，用于 legacy 与特殊命名）。前端 `ChannelTypeIcon` 通过首字母（大小写不敏感）识别通道类型图标（o→官方、r→逆向、m→混合）。
 
 ### 零 monitors 启动
 

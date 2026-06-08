@@ -16,6 +16,19 @@ import (
 	"monitor/internal/onboarding"
 )
 
+// buildLikePattern 把用户输入转成可安全用于 SQL LIKE 的模式串。
+// 先用 '!' 作为转义字符把 LIKE 元字符（! % _）转义，再用 % 包裹实现子串模糊匹配。
+// 对应的 SQL 须声明 ESCAPE '!'。返回空串表示无搜索条件。
+func buildLikePattern(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	escaped := strings.ReplaceAll(raw, "!", "!!")
+	escaped = strings.ReplaceAll(escaped, "%", "!%")
+	escaped = strings.ReplaceAll(escaped, "_", "!_")
+	return "%" + escaped + "%"
+}
+
 // checkAdminToken 验证管理员 Bearer token。
 // 返回 true 表示验证通过，false 表示已返回错误响应。
 func (h *Handler) checkAdminToken(c *gin.Context) bool {
@@ -69,7 +82,10 @@ func (h *Handler) AdminListSubmissions(c *gin.Context) {
 	limit, _ := strconv.Atoi(limitStr)
 	offset, _ := strconv.Atoi(offsetStr)
 
-	submissions, total, err := svc.AdminList(c.Request.Context(), status, limit, offset)
+	// 按编号（public_id，小写 hex UUID）模糊搜索：统一转小写后转义为 LIKE 模式串。
+	search := buildLikePattern(strings.ToLower(strings.TrimSpace(c.Query("q"))))
+
+	submissions, total, err := svc.AdminList(c.Request.Context(), status, search, limit, offset)
 	if err != nil {
 		apiError(c, http.StatusInternalServerError, ErrCodeInternalError, "查询申请列表失败")
 		return

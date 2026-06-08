@@ -3,6 +3,7 @@ package onboarding
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -37,6 +38,7 @@ func (s *PgxStore) InitTable(ctx context.Context) error {
 
 		channel_type TEXT NOT NULL,
 		channel_source TEXT NOT NULL,
+		channel_group TEXT NOT NULL DEFAULT '',
 		channel_code TEXT NOT NULL,
 		target_provider TEXT NOT NULL DEFAULT '',
 		target_service TEXT NOT NULL DEFAULT '',
@@ -86,6 +88,7 @@ func (s *PgxStore) InitTable(ctx context.Context) error {
 		`ALTER TABLE onboarding_submissions ADD COLUMN IF NOT EXISTS target_provider TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE onboarding_submissions ADD COLUMN IF NOT EXISTS target_service TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE onboarding_submissions ADD COLUMN IF NOT EXISTS target_channel TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE onboarding_submissions ADD COLUMN IF NOT EXISTS channel_group TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := s.pool.Exec(ctx, ddl); err != nil {
 			return fmt.Errorf("迁移 onboarding_submissions 失败: %w", err)
@@ -100,7 +103,7 @@ func (s *PgxStore) Save(ctx context.Context, sub *Submission) error {
 	INSERT INTO onboarding_submissions (
 		public_id, status, provider_name, website_url, category,
 		service_type, template_name, sponsor_level,
-		channel_type, channel_source, channel_code,
+		channel_type, channel_source, channel_group, channel_code,
 		target_provider, target_service, target_channel,
 		channel_name, listed_since, expires_at, price_min, price_max,
 		base_url, api_key_encrypted, api_key_fingerprint, api_key_last4,
@@ -108,13 +111,13 @@ func (s *PgxStore) Save(ctx context.Context, sub *Submission) error {
 		contact_info, submitter_ip_hash, locale,
 		admin_note, admin_config_json, reviewed_at,
 		created_at, updated_at
-	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35)
+	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36)
 	RETURNING id`
 
 	err := s.pool.QueryRow(ctx, query,
 		sub.PublicID, sub.Status, sub.ProviderName, sub.WebsiteURL, sub.Category,
 		sub.ServiceType, sub.TemplateName, sub.SponsorLevel,
-		sub.ChannelType, sub.ChannelSource, sub.ChannelCode,
+		sub.ChannelType, sub.ChannelSource, sub.ChannelGroup, sub.ChannelCode,
 		sub.TargetProvider, sub.TargetService, sub.TargetChannel,
 		sub.ChannelName, sub.ListedSince, sub.ExpiresAt, sub.PriceMin, sub.PriceMax,
 		sub.BaseURL, sub.APIKeyEncrypted, sub.APIKeyFingerprint, sub.APIKeyLast4,
@@ -140,25 +143,36 @@ func (s *PgxStore) GetByID(ctx context.Context, id int64) (*Submission, error) {
 }
 
 // List 列表查询
-func (s *PgxStore) List(ctx context.Context, status string, limit, offset int) ([]*Submission, int, error) {
-	var countQuery, listQuery string
-	var args []any
+func (s *PgxStore) List(ctx context.Context, status, search string, limit, offset int) ([]*Submission, int, error) {
+	// count 与 list 共用 where 条件；占位符按追加顺序编号（$1、$2…），
+	// list 再把分页参数接在过滤参数之后。
+	var conditions []string
+	var filterArgs []any
 
 	if status != "" && status != "all" {
-		countQuery = "SELECT COUNT(*) FROM onboarding_submissions WHERE status = $1"
-		listQuery = "SELECT " + pgxAllColumns + " FROM onboarding_submissions WHERE status = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3"
-		args = []any{status}
-	} else {
-		countQuery = "SELECT COUNT(*) FROM onboarding_submissions"
-		listQuery = "SELECT " + pgxAllColumns + " FROM onboarding_submissions ORDER BY created_at DESC LIMIT $1 OFFSET $2"
+		filterArgs = append(filterArgs, status)
+		conditions = append(conditions, fmt.Sprintf("status = $%d", len(filterArgs)))
+	}
+	if search != "" {
+		filterArgs = append(filterArgs, search)
+		conditions = append(conditions, fmt.Sprintf("public_id LIKE $%d ESCAPE '!'", len(filterArgs)))
 	}
 
+	whereClause := ""
+	if len(conditions) > 0 {
+		whereClause = " WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	countQuery := "SELECT COUNT(*) FROM onboarding_submissions" + whereClause
+	listQuery := "SELECT " + pgxAllColumns + " FROM onboarding_submissions" + whereClause +
+		fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d OFFSET $%d", len(filterArgs)+1, len(filterArgs)+2)
+
 	var total int
-	if err := s.pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := s.pool.QueryRow(ctx, countQuery, filterArgs...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("统计申请数失败: %w", err)
 	}
 
-	listArgs := append(args, limit, offset)
+	listArgs := append(append([]any{}, filterArgs...), limit, offset)
 	rows, err := s.pool.Query(ctx, listQuery, listArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("查询申请列表失败: %w", err)
@@ -182,19 +196,19 @@ func (s *PgxStore) Update(ctx context.Context, sub *Submission) error {
 	UPDATE onboarding_submissions SET
 		status = $1, provider_name = $2, website_url = $3, category = $4,
 		service_type = $5, template_name = $6, sponsor_level = $7,
-		channel_type = $8, channel_source = $9, channel_code = $10,
-		target_provider = $11, target_service = $12, target_channel = $13,
-		channel_name = $14, listed_since = $15, expires_at = $16, price_min = $17, price_max = $18,
-		base_url = $19,
-		contact_info = $20,
-		admin_note = $21, admin_config_json = $22, reviewed_at = $23,
-		updated_at = $24
-	WHERE id = $25`
+		channel_type = $8, channel_source = $9, channel_group = $10, channel_code = $11,
+		target_provider = $12, target_service = $13, target_channel = $14,
+		channel_name = $15, listed_since = $16, expires_at = $17, price_min = $18, price_max = $19,
+		base_url = $20,
+		contact_info = $21,
+		admin_note = $22, admin_config_json = $23, reviewed_at = $24,
+		updated_at = $25
+	WHERE id = $26`
 
 	_, err := s.pool.Exec(ctx, query,
 		sub.Status, sub.ProviderName, sub.WebsiteURL, sub.Category,
 		sub.ServiceType, sub.TemplateName, sub.SponsorLevel,
-		sub.ChannelType, sub.ChannelSource, sub.ChannelCode,
+		sub.ChannelType, sub.ChannelSource, sub.ChannelGroup, sub.ChannelCode,
 		sub.TargetProvider, sub.TargetService, sub.TargetChannel,
 		sub.ChannelName, sub.ListedSince, sub.ExpiresAt, sub.PriceMin, sub.PriceMax,
 		sub.BaseURL,
@@ -247,7 +261,7 @@ func (s *PgxStore) DeleteByPublicID(ctx context.Context, publicID string) error 
 const pgxAllColumns = `id, public_id, status,
 	provider_name, website_url, category,
 	service_type, template_name, sponsor_level,
-	channel_type, channel_source, channel_code,
+	channel_type, channel_source, channel_group, channel_code,
 	target_provider, target_service, target_channel,
 	channel_name, listed_since, expires_at, price_min, price_max,
 	base_url, api_key_encrypted, api_key_fingerprint, api_key_last4,
@@ -265,7 +279,7 @@ func pgxScanSubmission(row pgx.Row) (*Submission, error) {
 		&sub.ID, &sub.PublicID, &sub.Status,
 		&sub.ProviderName, &sub.WebsiteURL, &sub.Category,
 		&sub.ServiceType, &sub.TemplateName, &sub.SponsorLevel,
-		&sub.ChannelType, &sub.ChannelSource, &sub.ChannelCode,
+		&sub.ChannelType, &sub.ChannelSource, &sub.ChannelGroup, &sub.ChannelCode,
 		&sub.TargetProvider, &sub.TargetService, &sub.TargetChannel,
 		&sub.ChannelName, &sub.ListedSince, &sub.ExpiresAt, &sub.PriceMin, &sub.PriceMax,
 		&sub.BaseURL, &sub.APIKeyEncrypted, &sub.APIKeyFingerprint, &sub.APIKeyLast4,

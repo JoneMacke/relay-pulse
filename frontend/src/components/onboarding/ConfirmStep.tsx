@@ -1,7 +1,9 @@
 import { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronLeft, Copy, Check, RotateCcw } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { ChevronLeft, Copy, Check, RotateCcw, Search } from 'lucide-react';
 import type { OnboardingFormData, SubmitOnboardingResponse } from '../../types/onboarding';
+import { LANGUAGE_PATH_MAP, type SupportedLanguage } from '../../i18n';
 
 interface ConfirmStepProps {
   formData: OnboardingFormData;
@@ -64,10 +66,14 @@ function CopyableText({ text }: { text: string }) {
 
 /** Step 3: Review summary and submit. */
 export function ConfirmStep({ formData, submitResult, isSubmitting, onSubmit, onBack, onReset }: ConfirmStepProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const navigate = useNavigate();
+  const langPrefix = LANGUAGE_PATH_MAP[i18n.language as SupportedLanguage];
+  const buildPath = (path: string) => (langPrefix ? `/${langPrefix}${path}` : path);
 
+  // 显示层大写（type-source），分组原样；与 ProviderInfoStep 预览一致，存储层由后端统一小写
   const channelCode = formData.channelType && formData.channelSource
-    ? `${formData.channelType}-${formData.channelSource}`
+    ? `${formData.channelType.toUpperCase()}-${formData.channelSource.toUpperCase()}-${formData.channelGroup.trim() || 'main'}`
     : '';
 
   const maskApiKey = (key: string): string => {
@@ -119,12 +125,20 @@ export function ConfirmStep({ formData, submitResult, isSubmitting, onSubmit, on
           </div>
         )}
 
-        {/* Reset button */}
-        <div className="flex justify-center pt-2">
+        {/* Progress / reset buttons */}
+        <div className="flex flex-wrap justify-center gap-3 pt-2">
+          <button
+            type="button"
+            onClick={() => navigate(`${buildPath('/contact/status')}?id=${encodeURIComponent(submitResult.public_id)}`)}
+            className="flex items-center gap-2 px-6 py-3 bg-accent text-white rounded-lg font-medium hover:bg-accent-strong transition-colors"
+          >
+            <Search className="w-4 h-4" />
+            {t('statusQuery.viewProgress')}
+          </button>
           <button
             type="button"
             onClick={onReset}
-            className="flex items-center gap-2 px-6 py-3 bg-accent/10 border border-accent/40 text-accent rounded-lg font-medium hover:bg-accent/20 transition-colors"
+            className="flex items-center gap-2 px-6 py-3 bg-surface border border-muted text-secondary rounded-lg hover:bg-elevated transition-colors"
           >
             <RotateCcw className="w-4 h-4" />
             {t('onboarding.confirm.newSubmission')}
@@ -165,7 +179,8 @@ export function ConfirmStep({ formData, submitResult, isSubmitting, onSubmit, on
         />
         <SummaryRow
           label={t('onboarding.providerInfo.sponsorLevel')}
-          value={t(`onboarding.providerInfo.sponsorLevels.${formData.sponsorLevel}`, { defaultValue: formData.sponsorLevel })}
+          /* 自助收录仅 pulse 等级（无选择器），sponsorLevel 恒为空，回退展示 pulse 避免出现空行 */
+          value={t(`onboarding.providerInfo.sponsorLevels.${formData.sponsorLevel || 'pulse'}`, { defaultValue: formData.sponsorLevel || 'pulse' })}
         />
         <SummaryRow
           label={t('onboarding.providerInfo.channelCodePreview')}

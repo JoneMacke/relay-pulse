@@ -376,6 +376,12 @@
       "customSource": "Custom...",
       "customSourcePlaceholder": "Enter custom source",
       "channelSourceCustomPlaceholder": "Enter source name (uppercase/digits)",
+      "providerNameHint": "ASCII only (letters/digits/symbols); Chinese is not allowed",
+      "channelSourcePlaceholder": "Select an access source",
+      "channelSourceHint": "No suitable source? Contact ops to add one (QQ:18058344)",
+      "channelGroup": "Channel Group",
+      "channelGroupHint": "Distinguishes multiple channels of the same source (e.g. us, eu, v2); defaults to main",
+      "sourceCategories": { "subscription": "Subscription", "official": "Official API", "cloud": "Cloud", "reverse": "Reverse", "mixed": "Mixed" },
       "channelCodePreview": "Channel Code Preview",
       "optional": "(optional)"
     },
@@ -573,6 +579,9 @@
       "monitors": "Monitors",
       "changes": "Changes"
     },
+    "submissions": {
+      "searchPlaceholder": "Search by application ID (first 8 chars or full UUID)"
+    },
     "monitors": {
       "backToList": "← Back to list",
       "parentChannel": "Parent Channel",
@@ -758,6 +767,7 @@
       "sponsorLevel": "Sponsor Level",
       "channelType": "Channel Type",
       "channelSource": "Channel Source",
+      "channelGroup": "Channel Group",
       "channelName": "Channel Display Name",
       "listedSince": "Listed Since",
       "priceMin": "Min Price Ratio",

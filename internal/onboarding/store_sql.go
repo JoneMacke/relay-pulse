@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // SQLStore 基于 database/sql 的 Store 实现（适用于 SQLite）。
@@ -36,6 +37,7 @@ func (s *SQLStore) InitTable(ctx context.Context) error {
 
 		channel_type TEXT NOT NULL,
 		channel_source TEXT NOT NULL,
+		channel_group TEXT NOT NULL DEFAULT '',
 		channel_code TEXT NOT NULL,
 		target_provider TEXT NOT NULL DEFAULT '',
 		target_service TEXT NOT NULL DEFAULT '',
@@ -112,6 +114,7 @@ func (s *SQLStore) ensureColumns(ctx context.Context) error {
 		{"target_provider", `ALTER TABLE onboarding_submissions ADD COLUMN target_provider TEXT NOT NULL DEFAULT ''`},
 		{"target_service", `ALTER TABLE onboarding_submissions ADD COLUMN target_service TEXT NOT NULL DEFAULT ''`},
 		{"target_channel", `ALTER TABLE onboarding_submissions ADD COLUMN target_channel TEXT NOT NULL DEFAULT ''`},
+		{"channel_group", `ALTER TABLE onboarding_submissions ADD COLUMN channel_group TEXT NOT NULL DEFAULT ''`},
 	}
 	for _, m := range migrations {
 		if existing[m.name] {
@@ -130,7 +133,7 @@ func (s *SQLStore) Save(ctx context.Context, sub *Submission) error {
 	INSERT INTO onboarding_submissions (
 		public_id, status, provider_name, website_url, category,
 		service_type, template_name, sponsor_level,
-		channel_type, channel_source, channel_code,
+		channel_type, channel_source, channel_group, channel_code,
 		target_provider, target_service, target_channel,
 		channel_name, listed_since, expires_at, price_min, price_max,
 		base_url, api_key_encrypted, api_key_fingerprint, api_key_last4,
@@ -138,12 +141,12 @@ func (s *SQLStore) Save(ctx context.Context, sub *Submission) error {
 		contact_info, submitter_ip_hash, locale,
 		admin_note, admin_config_json, reviewed_at,
 		created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	result, err := s.db.ExecContext(ctx, query,
 		sub.PublicID, sub.Status, sub.ProviderName, sub.WebsiteURL, sub.Category,
 		sub.ServiceType, sub.TemplateName, sub.SponsorLevel,
-		sub.ChannelType, sub.ChannelSource, sub.ChannelCode,
+		sub.ChannelType, sub.ChannelSource, sub.ChannelGroup, sub.ChannelCode,
 		sub.TargetProvider, sub.TargetService, sub.TargetChannel,
 		sub.ChannelName, sub.ListedSince, sub.ExpiresAt, sub.PriceMin, sub.PriceMax,
 		sub.BaseURL, sub.APIKeyEncrypted, sub.APIKeyFingerprint, sub.APIKeyLast4,
@@ -174,25 +177,36 @@ func (s *SQLStore) GetByID(ctx context.Context, id int64) (*Submission, error) {
 }
 
 // List 列表查询
-func (s *SQLStore) List(ctx context.Context, status string, limit, offset int) ([]*Submission, int, error) {
-	var countQuery, listQuery string
-	var args []any
+func (s *SQLStore) List(ctx context.Context, status, search string, limit, offset int) ([]*Submission, int, error) {
+	// count 与 list 共用同一组 where 条件与过滤参数，list 再追加分页参数，
+	// 保证两次查询命中的行集合一致。
+	var conditions []string
+	var filterArgs []any
 
 	if status != "" && status != "all" {
-		countQuery = "SELECT COUNT(*) FROM onboarding_submissions WHERE status = ?"
-		listQuery = "SELECT " + allColumns + " FROM onboarding_submissions WHERE status = ? ORDER BY created_at DESC LIMIT ? OFFSET ?"
-		args = []any{status}
-	} else {
-		countQuery = "SELECT COUNT(*) FROM onboarding_submissions"
-		listQuery = "SELECT " + allColumns + " FROM onboarding_submissions ORDER BY created_at DESC LIMIT ? OFFSET ?"
+		conditions = append(conditions, "status = ?")
+		filterArgs = append(filterArgs, status)
+	}
+	if search != "" {
+		conditions = append(conditions, "public_id LIKE ? ESCAPE '!'")
+		filterArgs = append(filterArgs, search)
 	}
 
+	whereClause := ""
+	if len(conditions) > 0 {
+		whereClause = " WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	countQuery := "SELECT COUNT(*) FROM onboarding_submissions" + whereClause
+	listQuery := "SELECT " + allColumns + " FROM onboarding_submissions" + whereClause +
+		" ORDER BY created_at DESC LIMIT ? OFFSET ?"
+
 	var total int
-	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := s.db.QueryRowContext(ctx, countQuery, filterArgs...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("统计申请数失败: %w", err)
 	}
 
-	listArgs := append(args, limit, offset)
+	listArgs := append(append([]any{}, filterArgs...), limit, offset)
 	rows, err := s.db.QueryContext(ctx, listQuery, listArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("查询申请列表失败: %w", err)
@@ -216,7 +230,7 @@ func (s *SQLStore) Update(ctx context.Context, sub *Submission) error {
 	UPDATE onboarding_submissions SET
 		status = ?, provider_name = ?, website_url = ?, category = ?,
 		service_type = ?, template_name = ?, sponsor_level = ?,
-		channel_type = ?, channel_source = ?, channel_code = ?,
+		channel_type = ?, channel_source = ?, channel_group = ?, channel_code = ?,
 		target_provider = ?, target_service = ?, target_channel = ?,
 		channel_name = ?, listed_since = ?, expires_at = ?, price_min = ?, price_max = ?,
 		base_url = ?,
@@ -228,7 +242,7 @@ func (s *SQLStore) Update(ctx context.Context, sub *Submission) error {
 	_, err := s.db.ExecContext(ctx, query,
 		sub.Status, sub.ProviderName, sub.WebsiteURL, sub.Category,
 		sub.ServiceType, sub.TemplateName, sub.SponsorLevel,
-		sub.ChannelType, sub.ChannelSource, sub.ChannelCode,
+		sub.ChannelType, sub.ChannelSource, sub.ChannelGroup, sub.ChannelCode,
 		sub.TargetProvider, sub.TargetService, sub.TargetChannel,
 		sub.ChannelName, sub.ListedSince, sub.ExpiresAt, sub.PriceMin, sub.PriceMax,
 		sub.BaseURL,
@@ -282,7 +296,7 @@ func (s *SQLStore) DeleteByPublicID(ctx context.Context, publicID string) error 
 const allColumns = `id, public_id, status,
 	provider_name, website_url, category,
 	service_type, template_name, sponsor_level,
-	channel_type, channel_source, channel_code,
+	channel_type, channel_source, channel_group, channel_code,
 	target_provider, target_service, target_channel,
 	channel_name, listed_since, expires_at, price_min, price_max,
 	base_url, api_key_encrypted, api_key_fingerprint, api_key_last4,
@@ -305,7 +319,7 @@ func scanSubmission(s scanner) (*Submission, error) {
 		&sub.ID, &sub.PublicID, &sub.Status,
 		&sub.ProviderName, &sub.WebsiteURL, &sub.Category,
 		&sub.ServiceType, &sub.TemplateName, &sub.SponsorLevel,
-		&sub.ChannelType, &sub.ChannelSource, &sub.ChannelCode,
+		&sub.ChannelType, &sub.ChannelSource, &sub.ChannelGroup, &sub.ChannelCode,
 		&sub.TargetProvider, &sub.TargetService, &sub.TargetChannel,
 		&sub.ChannelName, &sub.ListedSince, &sub.ExpiresAt, &sub.PriceMin, &sub.PriceMax,
 		&sub.BaseURL, &sub.APIKeyEncrypted, &sub.APIKeyFingerprint, &sub.APIKeyLast4,
