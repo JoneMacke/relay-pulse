@@ -4,7 +4,7 @@
 如果你是人类开发者，请优先阅读 `README.md` 和 `CONTRIBUTING.md`，只在需要了解更多技术细节时再参考这里的内容。
 
 ### 同步检查点
-- **最后同步**: 2026-06-08（HEAD=9775104，自助收录通道标识改三段 `{type}-{source}-{group}`：新增 `deriveChannelCode(channelType, channelSource, channelGroup)` + 单一真相源 `ChannelSourceCatalog`（per-service 受控词表，同时供 /api/onboarding/meta 下发）+ provider_name 限 ASCII + store 新增 `channel_group` 列；AdminUpdate 仅四元组变化才重派生；新增查询进度页 /contact/status 与 admin 申请列表按编号搜索；变更申请收敛可改字段。已部署生产。上一同步 c626642 探测链路统一：InlineProber.ProbeConfig + config.ResolveSingleMonitor + onboarding.BuildServiceConfigFromSubmission 三个 helper 让三处 inline 测试与 scheduler 字段级一致 + GET /api/admin/monitors/:key/logs）
+- **最后同步**: 2026-06-08（HEAD=0d8384e，自助收录第二/三批改进：① 类型↔来源自洽 `channelTypeAllowedCategories`（service.go 单一真相源 + /api/onboarding/meta 下发，O→订阅/官方/云、R→逆向、M→mix，`validateChannelTypeSource` 把关 Submit/AdminUpdate）② 三类通道类型描述精简 ③《入驻须知与确认》5 条逐条勾选 + `agreement_accepted/at/version` 三列落库审计 ④ step2 探测失败结果面板渲染 `response_snippet`（HTTP 4xx/5xx 详情；error_message 此时恒空）⑤ step3 确认页摘要标签 testType→testVariant「请求模板」修正 + 赞助等级附代码「脉冲链路（pulse）」。已部署生产。上一同步 9775104 自助收录通道标识改三段 `{type}-{source}-{group}`：`deriveChannelCode` + 单一真相源 `ChannelSourceCatalog` + provider_name 限 ASCII + store 新增 `channel_group` 列 + 查询进度页 /contact/status + admin 申请列表按编号搜索）
 - 代码是唯一真相源。本文档为架构与模式摘要，字段级细节请查阅引用的源文件。
 
 ## 项目概览
@@ -974,9 +974,12 @@ Closes #42
 收录申请提交时，channel code 由 `deriveChannelCode(channelType, channelSource, channelGroup)` 派生为三段 `{type}-{source}-{group}`（全小写；group 为空时回退两段，仅用于兼容旧数据）。例如 type="O" + source="max" + group="us" → `o-max-us`。提交即强制校验（见 `internal/onboarding/service.go`）：
 - **provider_name** 仅允许 ASCII 可打印字符（`^[\x20-\x7E]+$`，禁中文）；
 - **channel_source** 必须是 `ChannelSourceCatalog`（per-service 受控词表，单一真相源，同时供 `/api/onboarding/meta` 下发前端）中的 2-5 位小写代码；如需新增来源改这一处 map；
+- **channel_type ↔ channel_source 须自洽**：`channelTypeAllowedCategories`（service.go 另一单一真相源，同样经 `/api/onboarding/meta` 下发）规定 O→{subscription,official,cloud}、R→{reverse}、M→{mixed}；`validateChannelTypeSource` 在 Submit 与 AdminUpdate 四元组重派生前校验所选来源的 Category 落在该类型允许集合内，否则拒绝（官方通道不可选 kiro 等逆向来源）。前端来源下拉据此 map 同步过滤；
 - **channel_group** 为 1-8 位小写字母/数字（中转商自定义分组），留空默认 `main`。
 
 PSC 各段仍只允许小写字母、数字、短横线（`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`）。`AdminUpdate` 仅当 service/type/source/group 四元组真正变化时才重派生 channel_code（保护 legacy 两段记录），并对 channel_type(O/R/M)、service_type(cc/cx/gm) 做枚举校验。管理员可在发布前通过 `target_channel` 覆盖派生值（**故意保留的逃生口，不受三段约束**，用于 legacy 与特殊命名）。前端 `ChannelTypeIcon` 通过首字母（大小写不敏感）识别通道类型图标（o→官方、r→逆向、m→混合）。
+
+**入驻须知逐条确认**：`SubmitRequest.AgreementAccepted` 必须为 true（前端 `ConfirmStep` 据《入驻须知与确认》拆 5 条独立勾选，全勾才放行），否则 Submit 在前置环节即拒。落库时后端盖戳 `agreement_accepted/agreement_accepted_at/agreement_version`（`const AgreementVersion`，不信客户端），store 三列沿用 `channel_group` 幂等迁移模式（sqlite PRAGMA 预检 / pgx `ADD COLUMN IF NOT EXISTS`）。
 
 ### 零 monitors 启动
 
