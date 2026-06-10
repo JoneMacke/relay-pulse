@@ -18,7 +18,20 @@
 1. proof_expires_at 缺失时从 proof token 尾部解析的 fallback——前端嵌入 Go 二进制为原子部署，后端必同时下发该字段，且后端 `Verify` 才是过期真闸，故不引入对 token 格式的耦合。
 2. 变更请求流程（`useChangeRequest`）的客户端 proof 过期预检——既存缺口非本次回归，`change.Submit` 后端 `Verify` 已强制校验过期，仅缺客户端 UX 预检，留作小 follow-up。
 
-**剩余：第二批（供应链 + 工程保障）整体待独立发版**，须在真实 CI/Docker 工具链实跑 `npm audit` / `govulncheck` 后再定版本（本机 Go 版本 ≠ Docker 镜像版本）。
+**第一批已发版 v2.41.1 并部署生产**（2026-06-10；commit 9d9a85c；生产 /api/version git_commit=9d9a85c，health/ready 均 200）。
+
+### 第二批已全部实现（2026-06-11，4 个独立 commit）
+
+经真实工具链实证后落地，scope 较原计划有一处重要修正：
+
+- **② react-router-dom 6.30.2 → 6.30.4（commit 2176d43）**：`npm audit --omit=dev` 报的 ghsa-2w69-qvjg-hvjx（开放重定向 XSS）修复落在 v6 线内的 6.30.4（非破坏性 patch，无 API 变更），不必迁移 v7。升级后生产面 0 高危。
+- **③ Go 版本字符串统一 1.25 线（commit d5ee69d）—— 非安全修复**：**实证推翻原计划的安全判断**。advisory 显示 GO-2026-5037 / GO-2026-5039 均 fixed in **go1.25.11**，而生产镜像（golang:1.25-alpine）构建出的二进制 `go_version=go1.25.11` 已含补丁，**生产不受影响**。本机 go1.26.3 的 govulncheck 告警只反映本机工具链，与生产无关（典型「本机 Go ≠ Docker 工具链」陷阱）。故本项仅做一致性清理：notifier 1.24→1.25（go.mod/Dockerfile/CI 三处）+ 文档 "Go 1.24+"→"Go 1.25+"；不强行升 1.26 线。
+- **④ pull_request 触发 + govulncheck 闸 + Makefile 聚合命令（commit ffc3f3f）**：ci-release.yml 加 pull_request（release/docker/tag-version 仍 main-push-only）；ci job setup-go 改 `go-version: '1.25'`（与生产同源、确保 govulncheck 跑在打补丁的 1.25.x 上）；新增 govulncheck 步骤防回归（仅 CI，不入 Makefile——本机更新的 Go 小版本会误报）；Makefile 补 embed-frontend/test/lint/build/ci。
+- **① 新增 /api/change/test 解耦 onboarding（commit 57f8468）**：抽 Handler 私有 helper runInlineTestProbe + inlineTestProbeResponse，两端共用探测编排；change.Service 加 IssueProofWithExpiry（复用其同源独立 proofIssuer）；前端 useChangeRequest 改调新端点；/api/onboarding/test 保留兼容。codex 二轮协作。
+
+验证：go vet / go build / go test ./...（全 pass）/ notifier go build/vet/test / 前端 tsc -b / vitest / npm run build 全通过。`make ci` 因本机无 make 二进制未实跑（recipe tab 缩进 + 底层命令已逐条验证）；govulncheck 闸与 go-version 改动将在下次 push 的 CI 首次实跑。
+
+**第二批待办**：push（触发 semantic-release，feat 会 bump minor → v2.42.0）+ 部署生产。
 
 ---
 
