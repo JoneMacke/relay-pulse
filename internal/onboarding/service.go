@@ -611,8 +611,14 @@ func (s *Service) AdminPublish(ctx context.Context, publicID, board string) erro
 // IssueProof 签发测试证明（供内联探测调用）。
 // 参数来自探测结果：jobID, testType, apiURL, apiKey。
 func (s *Service) IssueProof(jobID, testType, apiURL, apiKey string) string {
+	proof, _ := s.IssueProofWithExpiry(jobID, testType, apiURL, apiKey)
+	return proof
+}
+
+// IssueProofWithExpiry 签发测试证明，并返回其绝对过期时间（Unix 秒），供 API 层下发前端。
+func (s *Service) IssueProofWithExpiry(jobID, testType, apiURL, apiKey string) (string, int64) {
 	fingerprint := s.cipher.Fingerprint(apiKey)
-	return s.proofIssuer.Issue(jobID, testType, apiURL, fingerprint)
+	return s.proofIssuer.IssueWithExpiry(jobID, testType, apiURL, fingerprint)
 }
 
 // BuildServiceConfigFromSubmission 将 Submission（连同已解密的 apiKey）翻译成 ServiceConfig。

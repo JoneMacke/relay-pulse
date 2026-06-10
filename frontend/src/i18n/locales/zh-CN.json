@@ -225,7 +225,10 @@
     "invalid_request": "请求参数错误",
     "network_error": "连接失败",
     "response_timeout": "响应超时",
-    "content_mismatch": "内容校验失败"
+    "content_mismatch": "内容校验失败",
+    "redirect_blocked": "重定向被拦截",
+    "response_too_large": "响应体过大",
+    "concurrency_limited": "并发受限"
   },
   "tooltip": {
     "title": "数据详情",

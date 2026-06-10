@@ -385,9 +385,15 @@ func (c *AppConfig) normalizeChangeRequestConfig() {
 	}
 }
 
-// normalizeOnboardingConfig 规范化自助收录配置
+// normalizeOnboardingConfig 规范化自助收录配置。
+//
+// 注意：admin_token / encryption_key / proof_secret / proof_ttl 这组密钥是 onboarding 与
+// change_requests **共享**的（见 ChangeRequestConfig 注释；main.go 的变更请求初始化也读
+// cfg.Onboarding.* 这几项）。因此只要任一功能启用就必须在此完成默认值填充与必填校验——
+// 否则 change_requests 单开（onboarding 关闭）时 ProofTTLDuration 会留零值，proof 签发即刻
+// 过期，变更提交全被拒。
 func (c *AppConfig) normalizeOnboardingConfig() error {
-	if !c.Onboarding.Enabled {
+	if !c.Onboarding.Enabled && !c.ChangeRequests.Enabled {
 		return nil
 	}
 

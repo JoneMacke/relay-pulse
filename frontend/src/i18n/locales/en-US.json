@@ -225,7 +225,10 @@
     "invalid_request": "Invalid request parameters",
     "network_error": "Network error",
     "response_timeout": "Response timeout",
-    "content_mismatch": "Content validation failed"
+    "content_mismatch": "Content validation failed",
+    "redirect_blocked": "Redirect blocked",
+    "response_too_large": "Response too large",
+    "concurrency_limited": "Concurrency limited"
   },
   "tooltip": {
     "title": "Data details",

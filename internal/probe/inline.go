@@ -151,7 +151,9 @@ func classifyHTTPStatus(statusCode, latency int, slowLatency time.Duration) (int
 	}
 
 	if statusCode == 429 {
-		return 0, "rate_limited"
+		// 与 scheduler/storage 口径对齐（monitor/probe.go 用 "rate_limit"），
+		// 否则前端 i18n 与可用率统计会按两套字符串割裂。
+		return 0, "rate_limit"
 	}
 
 	if statusCode >= 500 {

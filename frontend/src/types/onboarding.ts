@@ -82,6 +82,8 @@ export interface OnboardingTestResult {
   response_snippet?: string;
   probe_id: string;
   test_proof?: string;
+  /** proof 绝对过期时间（Unix 秒），由后端按真实 proof_ttl 下发，供前端权威倒计时 */
+  proof_expires_at?: number;
 }
 
 /** 提交申请请求 */

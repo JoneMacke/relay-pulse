@@ -225,7 +225,10 @@
     "invalid_request": "リクエストパラメータのエラー",
     "network_error": "接続に失敗しました",
     "response_timeout": "応答タイムアウト",
-    "content_mismatch": "内容検証に失敗しました"
+    "content_mismatch": "内容検証に失敗しました",
+    "redirect_blocked": "リダイレクトがブロックされました",
+    "response_too_large": "レスポンスが大きすぎます",
+    "concurrency_limited": "同時実行数制限"
   },
   "tooltip": {
     "title": "データの詳細",

@@ -251,6 +251,24 @@ func TestService_Submit_DisallowedField(t *testing.T) {
 	}
 }
 
+// category / sponsor_level 须人工对接，不在用户自助白名单内——
+// 持有 API Key 的用户绕过 UI 直接提交也必须被拒（安全边界回归）。
+func TestService_Submit_RejectsAdminOnlyFields(t *testing.T) {
+	for _, field := range []string{"category", "sponsor_level"} {
+		t.Run(field, func(t *testing.T) {
+			svc, _ := newTestService(t)
+			req := &SubmitRequest{
+				APIKey:          "sk-test-key-12345",
+				TargetKey:       "testprov--cc--vip",
+				ProposedChanges: map[string]string{field: "x"},
+			}
+			if _, err := svc.Submit(context.Background(), req, "127.0.0.1"); err == nil {
+				t.Errorf("expected %q to be rejected for self-service change", field)
+			}
+		})
+	}
+}
+
 func TestService_Submit_IPRateLimit(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()

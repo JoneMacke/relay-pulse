@@ -261,10 +261,12 @@ func (h *Handler) OnboardingTest(c *gin.Context) {
 		"probe_id":         result.ProbeID,
 	}
 
-	// 探测成功时签发 proof
+	// 探测成功时签发 proof，并下发其绝对过期时间（Unix 秒），
+	// 让前端基于服务端真实 proof_ttl 做倒计时/提交前校验，而非硬编码。
 	if result.ProbeStatus == 1 {
-		proof := svc.IssueProof(result.ProbeID, req.ServiceType, req.BaseURL, req.APIKey)
+		proof, expiresAt := svc.IssueProofWithExpiry(result.ProbeID, req.ServiceType, req.BaseURL, req.APIKey)
 		resp["test_proof"] = proof
+		resp["proof_expires_at"] = expiresAt
 	}
 
 	c.JSON(http.StatusOK, resp)

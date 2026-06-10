@@ -15,6 +15,34 @@ import (
 	"monitor/internal/identity"
 )
 
+// classifyHTTPStatus 的 sub_status 字符串必须与 scheduler/storage 口径
+// （monitor/probe.go）一致，否则前端 i18n 与可用率统计会按两套字符串割裂。
+// 429 历史上 inline 误用 "rate_limited"（带 -ed），此处锁定为 "rate_limit"。
+func TestClassifyHTTPStatus_SubStatusMatchesScheduler(t *testing.T) {
+	const slow = 5 * time.Second
+	cases := []struct {
+		name       string
+		statusCode int
+		latency    int
+		wantStatus int
+		wantSub    string
+	}{
+		{"rate_limit", 429, 100, 0, "rate_limit"},
+		{"auth_error", 401, 100, 0, "auth_error"},
+		{"invalid_request", 400, 100, 0, "invalid_request"},
+		{"server_error", 503, 100, 0, "server_error"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotStatus, gotSub := classifyHTTPStatus(tc.statusCode, tc.latency, slow)
+			if gotStatus != tc.wantStatus || gotSub != tc.wantSub {
+				t.Errorf("classifyHTTPStatus(%d) = (%d, %q), want (%d, %q)",
+					tc.statusCode, gotStatus, gotSub, tc.wantStatus, tc.wantSub)
+			}
+		})
+	}
+}
+
 // TestInternalProber_InjectsUserID 验证 InlineProber 走真实 UserIDManager 时
 // 生成的请求 body 里 metadata.user_id 非空且格式正确。回归 TopRouterCN 403 bug。
 func TestInternalProber_InjectsUserID(t *testing.T) {

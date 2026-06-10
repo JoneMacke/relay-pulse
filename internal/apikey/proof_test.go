@@ -1,6 +1,7 @@
 package apikey
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,32 @@ func TestProofIssuer_IssueAndVerify(t *testing.T) {
 	err := pi.Verify(proof, "job-123", "cc", "https://api.example.com/v1", "fingerprint-abc")
 	if err != nil {
 		t.Fatalf("expected valid proof, got error: %v", err)
+	}
+}
+
+// IssueWithExpiry 返回的过期时间必须等于编码进 proof 尾部的同一值，
+// 且落在 (now, now+ttl] 区间——前端据此做权威倒计时。
+func TestProofIssuer_IssueWithExpiry(t *testing.T) {
+	ttl := 5 * time.Minute
+	pi := NewProofIssuer("test-secret", ttl)
+
+	before := time.Now().Unix()
+	proof, expiresAt := pi.IssueWithExpiry("job-1", "cc", "https://api.example.com", "fp")
+	after := time.Now().Unix()
+
+	// 与 token 尾部编码值一致
+	parts := strings.SplitN(proof, ".", 2)
+	if len(parts) != 2 || parts[1] != strconv.FormatInt(expiresAt, 10) {
+		t.Fatalf("expiresAt %d not encoded in proof %q", expiresAt, proof)
+	}
+	// 落在合理区间
+	if expiresAt < before+int64(ttl.Seconds()) || expiresAt > after+int64(ttl.Seconds()) {
+		t.Errorf("expiresAt %d outside expected window [%d, %d]",
+			expiresAt, before+int64(ttl.Seconds()), after+int64(ttl.Seconds()))
+	}
+	// Issue 与 IssueWithExpiry 行为一致（仍可验证）
+	if err := pi.Verify(proof, "job-1", "cc", "https://api.example.com", "fp"); err != nil {
+		t.Errorf("proof from IssueWithExpiry failed verify: %v", err)
 	}
 }
 

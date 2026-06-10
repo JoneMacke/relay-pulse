@@ -225,7 +225,10 @@
     "invalid_request": "Неверные параметры запроса",
     "network_error": "Ошибка соединения",
     "response_timeout": "Таймаут ответа",
-    "content_mismatch": "Несовпадение содержимого"
+    "content_mismatch": "Несовпадение содержимого",
+    "redirect_blocked": "Перенаправление заблокировано",
+    "response_too_large": "Слишком большой ответ",
+    "concurrency_limited": "Ограничение параллелизма"
   },
   "tooltip": {
     "title": "Подробные данные",

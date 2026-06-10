@@ -156,7 +156,8 @@ describe('ConnectionTestStep 探测结果显示（step2）', () => {
     expect(out).toContain('响应详情');
     expect(out).toContain('invalid model name'); // snippet 正文（引号会被 HTML 转义，正文不含特殊字符）
     expect(out).toContain('400');
-    expect(out).toContain('invalid_request');
+    // sub_status 现走 subStatus 词表翻译展示（不再裸码）；invalid_request → 「请求参数错误」
+    expect(out).toContain('请求参数错误');
   });
 
   it('response_snippet 与 error_message 相同时不重复展示详情', () => {

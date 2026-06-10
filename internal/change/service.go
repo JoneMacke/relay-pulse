@@ -24,13 +24,13 @@ var fieldsRequiringTest = map[string]bool{
 	"base_url": true,
 }
 
-// 允许用户自助变更的字段
+// allowedFields 是用户可自助变更的 proposed_changes 字段白名单。
+// 刻意排除 category / sponsor_level：二者涉及商业分类与赞助权益，须人工对接，
+// 仅 adminUpdateableFields 开放给管理员后台调整（与前端 ChangeRequestPage 的可选项一致）。
 var allowedFields = map[string]bool{
 	"provider_name": true,
 	"provider_url":  true,
 	"channel_name":  true,
-	"category":      true,
-	"sponsor_level": true,
 	"base_url":      true,
 }
 
@@ -154,13 +154,6 @@ func (s *Service) Submit(ctx context.Context, req *SubmitRequest, clientIP strin
 	for field := range req.ProposedChanges {
 		if !allowedFields[field] {
 			return nil, fmt.Errorf("字段 %q 不允许自助变更", field)
-		}
-	}
-
-	// 停止受理 public/signal 赞助等级变更（2026-04-17 政策调整，详见 docs/user/sponsorship.md）
-	if newLevel, ok := req.ProposedChanges["sponsor_level"]; ok {
-		if newLevel == "public" || newLevel == "signal" {
-			return nil, fmt.Errorf("赞助等级 %q 已停止自助受理，请选择 pulse 或联系运营（QQ:18058344）", newLevel)
 		}
 	}
 

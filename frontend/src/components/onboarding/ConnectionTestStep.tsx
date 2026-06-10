@@ -4,35 +4,36 @@ import { ChevronLeft, ChevronRight, Eye, EyeOff, Play, Clock, Loader2, CheckCirc
 import type { LucideIcon } from 'lucide-react';
 import type { OnboardingFormData, OnboardingMeta, OnboardingTestResult } from '../../types/onboarding';
 
-/** Default proof validity duration in seconds (15 minutes). */
-const PROOF_TTL_SECONDS = 900;
-
-/** Module-level countdown store for proof validity. */
+/**
+ * Module-level countdown store for proof validity.
+ * Driven by the absolute expiry (proof_expires_at) the backend issues from the
+ * real proof_ttl — never a hardcoded duration — so UI and server never disagree.
+ */
 const proofCountdownStore = (() => {
-  let acquiredAt: number | null = null;
-  let remaining: number | null = null;
+  let expiresAt: number | null = null; // absolute ms
+  let remaining: number | null = null; // seconds
   let timer: ReturnType<typeof setInterval> | null = null;
   const listeners = new Set<() => void>();
 
   function notify() { listeners.forEach((fn) => fn()); }
 
-  function start() {
-    stop();
-    acquiredAt = Date.now();
-    remaining = PROOF_TTL_SECONDS;
+  function tick() {
+    if (expiresAt == null) return;
+    remaining = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
     notify();
-    timer = setInterval(() => {
-      if (acquiredAt == null) return;
-      const elapsed = Math.floor((Date.now() - acquiredAt) / 1000);
-      remaining = Math.max(0, PROOF_TTL_SECONDS - elapsed);
-      notify();
-      if (remaining <= 0) { clearInterval(timer!); timer = null; }
-    }, 1000);
+    if (remaining <= 0 && timer) { clearInterval(timer); timer = null; }
+  }
+
+  function start(expiresAtMs: number) {
+    stop();
+    expiresAt = expiresAtMs;
+    tick();
+    timer = setInterval(tick, 1000);
   }
 
   function stop() {
     if (timer) { clearInterval(timer); timer = null; }
-    acquiredAt = null;
+    expiresAt = null;
     remaining = null;
     notify();
   }
@@ -45,15 +46,15 @@ const proofCountdownStore = (() => {
   };
 })();
 
-function useProofCountdown(testProof: string | null): number | null {
+function useProofCountdown(testProof: string | null, proofExpiresAt: number | null): number | null {
   useEffect(() => {
-    if (testProof) {
-      proofCountdownStore.start();
+    if (testProof && proofExpiresAt) {
+      proofCountdownStore.start(proofExpiresAt);
     } else {
       proofCountdownStore.stop();
     }
     return () => proofCountdownStore.stop();
-  }, [testProof]);
+  }, [testProof, proofExpiresAt]);
 
   return useSyncExternalStore(proofCountdownStore.subscribe, proofCountdownStore.getSnapshot);
 }
@@ -64,6 +65,7 @@ interface ConnectionTestStepProps {
   meta: OnboardingMeta | null;
   testResult: OnboardingTestResult | null;
   testProof: string | null;
+  proofExpiresAt: number | null;
   isTesting: boolean;
   onRunTest: () => void;
   onBack: () => void;
@@ -78,12 +80,12 @@ const probeStatusConfig: Record<number, { labelKey: string; colorClass: string; 
 
 /** Step 2: Connection test with API key and base URL. */
 export function ConnectionTestStep({
-  formData, updateField, meta, testResult, testProof,
+  formData, updateField, meta, testResult, testProof, proofExpiresAt,
   isTesting, onRunTest, onBack, onNext,
 }: ConnectionTestStepProps) {
   const { t } = useTranslation();
   const [showApiKey, setShowApiKey] = useState(false);
-  const proofRemaining = useProofCountdown(testProof);
+  const proofRemaining = useProofCountdown(testProof, proofExpiresAt);
 
   const filteredTestTypes = useMemo(() => {
     if (!meta) return [];
@@ -309,7 +311,8 @@ export function ConnectionTestStep({
             {testResult.sub_status && (
               <div className="flex items-center justify-between">
                 <span className="text-sm text-secondary">{t('onboarding.connectionTest.subStatus')}</span>
-                <span className="text-sm text-primary font-mono">{testResult.sub_status}</span>
+                {/* 走全局 subStatus 词表翻译；未知码回退原始字符串，避免裸码泄漏或缺键报错 */}
+                <span className="text-sm text-primary">{t(`subStatus.${testResult.sub_status}`, testResult.sub_status)}</span>
               </div>
             )}
 

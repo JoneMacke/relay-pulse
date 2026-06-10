@@ -34,6 +34,14 @@ func proofPayload(jobID, testType, apiURL, apiKeyFingerprint string, expiresAt i
 
 // Issue 签发测试证明。返回格式：signature.expiresAt
 func (pi *ProofIssuer) Issue(jobID, testType, apiURL, apiKeyFingerprint string) string {
+	proof, _ := pi.IssueWithExpiry(jobID, testType, apiURL, apiKeyFingerprint)
+	return proof
+}
+
+// IssueWithExpiry 签发测试证明，并额外返回该 proof 的绝对过期时间（Unix 秒）。
+// 过期时间即编码进 proof 字符串尾部的同一值，供前端做权威倒计时/提交前校验，
+// 避免前端硬编码 TTL 与后端 proof_ttl 漂移。
+func (pi *ProofIssuer) IssueWithExpiry(jobID, testType, apiURL, apiKeyFingerprint string) (string, int64) {
 	expiresAt := time.Now().Add(pi.ttl).Unix()
 	payload := proofPayload(jobID, testType, apiURL, apiKeyFingerprint, expiresAt)
 
@@ -41,7 +49,7 @@ func (pi *ProofIssuer) Issue(jobID, testType, apiURL, apiKeyFingerprint string) 
 	mac.Write([]byte(payload))
 	sig := hex.EncodeToString(mac.Sum(nil))
 
-	return fmt.Sprintf("%s.%d", sig, expiresAt)
+	return fmt.Sprintf("%s.%d", sig, expiresAt), expiresAt
 }
 
 // Verify 验证测试证明的签名和有效期。

@@ -5,16 +5,14 @@ import { ChevronLeft, Copy, Check, RotateCcw, Search, ExternalLink, AlertTriangl
 import type { OnboardingFormData, SubmitOnboardingResponse } from '../../types/onboarding';
 import { LANGUAGE_PATH_MAP, type SupportedLanguage } from '../../i18n';
 
-/** Proof TTL on server is 15 min; warn at 12 min, block at 15 min */
-const PROOF_WARN_MS = 12 * 60 * 1000;
-const PROOF_EXPIRE_MS = 15 * 60 * 1000;
-
 interface ConfirmStepProps {
   formData: OnboardingFormData;
   updateField: <K extends keyof OnboardingFormData>(key: K, value: OnboardingFormData[K]) => void;
   submitResult: SubmitOnboardingResponse | null;
   isSubmitting: boolean;
   testPassedAt: number | null;
+  /** proof 绝对过期时间（ms），由后端按真实 proof_ttl 下发；过期/预警据此计算，不再硬编码 */
+  proofExpiresAt: number | null;
   checkedClauses: Record<string, boolean>;
   onToggleClause: (key: string) => void;
   onSubmit: () => void;
@@ -86,7 +84,7 @@ function CopyableText({ text }: { text: string }) {
 }
 
 /** Step 3: Review summary and submit. */
-export function ConfirmStep({ formData, updateField, submitResult, isSubmitting, testPassedAt, checkedClauses, onToggleClause, onSubmit, onBack, onReset }: ConfirmStepProps) {
+export function ConfirmStep({ formData, updateField, submitResult, isSubmitting, testPassedAt, proofExpiresAt, checkedClauses, onToggleClause, onSubmit, onBack, onReset }: ConfirmStepProps) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const langPrefix = LANGUAGE_PATH_MAP[i18n.language as SupportedLanguage];
@@ -100,21 +98,26 @@ export function ConfirmStep({ formData, updateField, submitResult, isSubmitting,
     }
   }, [allClausesChecked, formData.agreementAccepted, updateField]);
 
-  // Proof 过期追踪：每 30s 更新一次 elapsed，避免在渲染期调用 Date.now()
-  const [proofElapsedMs, setProofElapsedMs] = useState(0);
+  // Proof 过期/预警基于后端下发的绝对过期时间 proofExpiresAt。
+  // 每 30s 采样一次 now（lazy 初始化，避免渲染期重复调用 Date.now()）。
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
     if (timerRef.current) clearInterval(timerRef.current);
-    if (!testPassedAt) { timerRef.current = null; return; }
-    timerRef.current = setInterval(
-      () => setProofElapsedMs(p => p + 30_000),
-      30_000,
-    );
+    if (!proofExpiresAt) { timerRef.current = null; return; }
+    // nowMs 已在 mount 时 lazy 初始化为当前时刻；后续每 30s 采样刷新过期/预警。
+    timerRef.current = setInterval(() => setNowMs(Date.now()), 30_000);
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [testPassedAt]);
+  }, [proofExpiresAt]);
 
-  const proofExpired = testPassedAt !== null && proofElapsedMs >= PROOF_EXPIRE_MS;
-  const proofWarning = testPassedAt !== null && proofElapsedMs >= PROOF_WARN_MS && !proofExpired;
+  const proofExpired = proofExpiresAt !== null && nowMs >= proofExpiresAt;
+  // 在生命周期最后 20%（至少 30s）内预警，自动适配服务端 proof_ttl，无需硬编码。
+  const proofWarning = (() => {
+    if (proofExpiresAt === null || testPassedAt === null || proofExpired) return false;
+    const total = proofExpiresAt - testPassedAt;
+    const warnAt = proofExpiresAt - Math.max(total * 0.2, 30_000);
+    return nowMs >= warnAt;
+  })();
 
   // 显示层大写（type-source），分组原样；与 ProviderInfoStep 预览一致，存储层由后端统一小写
   const channelCode = formData.channelType && formData.channelSource
@@ -302,13 +305,13 @@ export function ConfirmStep({ formData, updateField, submitResult, isSubmitting,
       {proofExpired && (
         <div className="flex items-center gap-2 p-3 bg-danger/10 border border-danger/20 rounded-lg text-sm text-danger" role="alert">
           <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-          <span>测试证明已过期（超过 15 分钟），请返回上一步重新测试</span>
+          <span>测试证明已过期，请返回上一步重新测试</span>
         </div>
       )}
       {proofWarning && (
         <div className="flex items-center gap-2 p-3 bg-warning/10 border border-warning/20 rounded-lg text-sm text-warning" role="status" aria-live="polite">
           <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-          <span>测试证明即将过期（有效期 15 分钟），请尽快提交</span>
+          <span>测试证明即将过期，请尽快提交</span>
         </div>
       )}
 

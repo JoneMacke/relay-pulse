@@ -19,6 +19,13 @@ func (h *Handler) AuthChange(c *gin.Context) {
 		return
 	}
 
+	// IP 限流：这是匿名 pre-auth 端点，按 API Key 指纹查候选通道，
+	// 不限流则可被高频枚举。复用公共探测 limiter（main.go 无条件初始化）。
+	if h.probeLimiter != nil && !h.probeLimiter.Allow(c.ClientIP()) {
+		apiError(c, http.StatusTooManyRequests, ErrCodeRateLimited, "请求过于频繁，请稍后再试")
+		return
+	}
+
 	var req change.AuthRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		apiError(c, http.StatusBadRequest, ErrCodeInvalidParam, "请求参数无效")

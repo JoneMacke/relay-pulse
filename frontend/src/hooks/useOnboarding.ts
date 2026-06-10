@@ -75,6 +75,9 @@ export function useOnboarding() {
   const [testResult, setTestResult] = useState<OnboardingTestResult | null>(null);
   const [testProof, setTestProof] = useState<string | null>(null);
   const [testPassedAt, setTestPassedAt] = useState<number | null>(null);
+  // proof 绝对过期时间（ms）。来源是后端按真实 proof_ttl 下发的 proof_expires_at，
+  // 取代前端硬编码 TTL，避免与后端 proof_ttl 漂移导致「前端显示有效、后端已过期」。
+  const [proofExpiresAt, setProofExpiresAt] = useState<number | null>(null);
   const [isTesting, setIsTesting] = useState(false);
 
   // Agreement clauses — lifted here so they survive step back-navigation
@@ -118,12 +121,14 @@ export function useOnboarding() {
       setTestResult(null);
       setTestProof(null);
       setTestPassedAt(null);
+      setProofExpiresAt(null);
       setIsTesting(false);
     } else if (invalidateProof && testProof) {
       setTestJobId(null);
       setTestResult(null);
       setTestProof(null);
       setTestPassedAt(null);
+      setProofExpiresAt(null);
     }
 
     setError(null);
@@ -142,6 +147,7 @@ export function useOnboarding() {
     setTestResult(null);
     setTestProof(null);
     setTestPassedAt(null);
+    setProofExpiresAt(null);
 
     try {
       const resp = await apiPost<OnboardingTestResult>('/api/onboarding/test', {
@@ -156,6 +162,8 @@ export function useOnboarding() {
       if (resp.test_proof) {
         setTestProof(resp.test_proof);
         setTestPassedAt(Date.now());
+        // proof_expires_at 为 Unix 秒；缺省时（理论上不会，前后端同体部署）置 null
+        setProofExpiresAt(resp.proof_expires_at ? resp.proof_expires_at * 1000 : null);
       }
     } catch (e) {
       setError(e instanceof ApiError ? e.message : '测试请求失败');
@@ -170,7 +178,7 @@ export function useOnboarding() {
       setError('请先通过连通性测试');
       return;
     }
-    if (testPassedAt && Date.now() - testPassedAt >= 15 * 60 * 1000) {
+    if (proofExpiresAt && Date.now() >= proofExpiresAt) {
       setError('测试证明已过期，请返回上一步重新测试');
       return;
     }
@@ -216,7 +224,7 @@ export function useOnboarding() {
     } finally {
       setIsSubmitting(false);
     }
-  }, [formData, testProof, testJobId, testResult, testPassedAt]);
+  }, [formData, testProof, testJobId, testResult, proofExpiresAt]);
 
   const toggleClause = useCallback((key: string) => {
     setCheckedClauses(prev => ({ ...prev, [key]: !prev[key] }));
@@ -229,6 +237,7 @@ export function useOnboarding() {
     setTestResult(null);
     setTestProof(null);
     setTestPassedAt(null);
+    setProofExpiresAt(null);
     setCheckedClauses({});
     setSubmitResult(null);
     setError(null);
@@ -244,6 +253,7 @@ export function useOnboarding() {
     testResult,
     testProof,
     testPassedAt,
+    proofExpiresAt,
     isTesting,
     isSubmitting,
     submitResult,
