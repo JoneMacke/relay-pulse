@@ -331,12 +331,17 @@ export function ChangeRequestList({
                     )}
 
                     {/* Actions */}
-                    <div className="flex gap-2 pt-2">
+                    <div className="flex gap-2 pt-2 flex-wrap">
+                      {hasEdits && canEdit && (
+                        <span className="text-xs text-warning self-center">● 有未保存修改，请先保存再审批</span>
+                      )}
                       {cr.status === 'pending' && (
                         <>
                           <button
                             onClick={() => onApprove(cr.public_id)}
-                            className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-accent/10 text-accent hover:bg-accent/20 transition"
+                            disabled={hasEdits && canEdit}
+                            title={hasEdits && canEdit ? '请先保存修改' : undefined}
+                            className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-accent/10 text-accent hover:bg-accent/20 transition disabled:opacity-40 disabled:cursor-not-allowed"
                           >
                             <Check size={12} />{t('admin.changes.approve')}
                           </button>
@@ -360,7 +365,9 @@ export function ChangeRequestList({
                       {cr.status === 'approved' && cr.apply_mode === 'auto' && (
                         <button
                           onClick={() => onApply(cr.public_id)}
-                          className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-success/10 text-success hover:bg-success/20 transition"
+                          disabled={hasEdits && canEdit}
+                          title={hasEdits && canEdit ? '请先保存修改' : undefined}
+                          className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-success/10 text-success hover:bg-success/20 transition disabled:opacity-40 disabled:cursor-not-allowed"
                         >
                           <Play size={12} />{t('admin.changes.apply')}
                         </button>

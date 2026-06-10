@@ -1,15 +1,22 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { ChevronLeft, Copy, Check, RotateCcw, Search, ExternalLink } from 'lucide-react';
 import type { OnboardingFormData, SubmitOnboardingResponse } from '../../types/onboarding';
 import { LANGUAGE_PATH_MAP, type SupportedLanguage } from '../../i18n';
 
+/** Proof TTL on server is 15 min; warn at 12 min, block at 15 min */
+const PROOF_WARN_MS = 12 * 60 * 1000;
+const PROOF_EXPIRE_MS = 15 * 60 * 1000;
+
 interface ConfirmStepProps {
   formData: OnboardingFormData;
   updateField: <K extends keyof OnboardingFormData>(key: K, value: OnboardingFormData[K]) => void;
   submitResult: SubmitOnboardingResponse | null;
   isSubmitting: boolean;
+  testPassedAt: number | null;
+  checkedClauses: Record<string, boolean>;
+  onToggleClause: (key: string) => void;
   onSubmit: () => void;
   onBack: () => void;
   onReset: () => void;
@@ -79,25 +86,35 @@ function CopyableText({ text }: { text: string }) {
 }
 
 /** Step 3: Review summary and submit. */
-export function ConfirmStep({ formData, updateField, submitResult, isSubmitting, onSubmit, onBack, onReset }: ConfirmStepProps) {
+export function ConfirmStep({ formData, updateField, submitResult, isSubmitting, testPassedAt, checkedClauses, onToggleClause, onSubmit, onBack, onReset }: ConfirmStepProps) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const langPrefix = LANGUAGE_PATH_MAP[i18n.language as SupportedLanguage];
   const buildPath = (path: string) => (langPrefix ? `/${langPrefix}${path}` : path);
 
-  // 逐条确认《入驻须知与确认》：每条独立勾选，全勾才放行提交。
-  // 本地维护各条勾选态，再把「是否全勾」同步到 formData.agreementAccepted（提交载荷据此上送后端）。
-  const [checkedClauses, setCheckedClauses] = useState<Record<string, boolean>>({});
+  // 全勾同步到 formData.agreementAccepted
   const allClausesChecked = AGREEMENT_CLAUSE_KEYS.every((k) => checkedClauses[k]);
-
   useEffect(() => {
     if (formData.agreementAccepted !== allClausesChecked) {
       updateField('agreementAccepted', allClausesChecked);
     }
   }, [allClausesChecked, formData.agreementAccepted, updateField]);
 
-  const toggleClause = (key: string) =>
-    setCheckedClauses((prev) => ({ ...prev, [key]: !prev[key] }));
+  // Proof 过期追踪：每 30s 更新一次 elapsed，避免在渲染期调用 Date.now()
+  const [proofElapsedMs, setProofElapsedMs] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    if (!testPassedAt) { timerRef.current = null; return; }
+    timerRef.current = setInterval(
+      () => setProofElapsedMs(p => p + 30_000),
+      30_000,
+    );
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [testPassedAt]);
+
+  const proofExpired = testPassedAt !== null && proofElapsedMs >= PROOF_EXPIRE_MS;
+  const proofWarning = testPassedAt !== null && proofElapsedMs >= PROOF_WARN_MS && !proofExpired;
 
   // 显示层大写（type-source），分组原样；与 ProviderInfoStep 预览一致，存储层由后端统一小写
   const channelCode = formData.channelType && formData.channelSource
@@ -257,7 +274,7 @@ export function ConfirmStep({ formData, updateField, submitResult, isSubmitting,
                 <input
                   type="checkbox"
                   checked={!!checkedClauses[key]}
-                  onChange={() => toggleClause(key)}
+                  onChange={() => onToggleClause(key)}
                   className="mt-0.5 w-4 h-4 flex-shrink-0 rounded border-muted accent-accent"
                 />
                 <span className="text-xs text-secondary leading-relaxed">
@@ -281,6 +298,18 @@ export function ConfirmStep({ formData, updateField, submitResult, isSubmitting,
         </p>
       </div>
 
+      {/* Proof expiry warning */}
+      {proofExpired && (
+        <div className="flex items-center gap-2 p-3 bg-danger/10 border border-danger/20 rounded-lg text-sm text-danger">
+          <span>测试证明已过期（超过 15 分钟），请返回上一步重新测试</span>
+        </div>
+      )}
+      {proofWarning && (
+        <div className="flex items-center gap-2 p-3 bg-warning/10 border border-warning/20 rounded-lg text-sm text-warning">
+          <span>测试证明即将过期（有效期 15 分钟），请尽快提交</span>
+        </div>
+      )}
+
       {/* Navigation buttons */}
       <div className="flex flex-col items-stretch gap-2 pt-2 sm:flex-row sm:items-center sm:justify-between">
         <button
@@ -295,7 +324,7 @@ export function ConfirmStep({ formData, updateField, submitResult, isSubmitting,
           <button
             type="button"
             onClick={onSubmit}
-            disabled={isSubmitting || !allClausesChecked}
+            disabled={isSubmitting || !allClausesChecked || proofExpired}
             className="px-6 py-3 bg-accent text-white rounded-lg font-medium hover:bg-accent-strong transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isSubmitting ? t('onboarding.confirm.submitting') : t('onboarding.confirm.submit')}

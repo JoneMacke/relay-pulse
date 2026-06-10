@@ -208,6 +208,145 @@ export const SubmissionDetail: React.FC<SubmissionDetailProps> = ({
     }
   };
 
+  const dirtyTitle = dirty ? '请先保存修改' : undefined;
+  const statusBadgeClass: Record<string, string> = {
+    pending: 'bg-warning/15 text-warning',
+    approved: 'bg-accent/15 text-accent',
+    rejected: 'bg-danger/15 text-danger',
+    published: 'bg-success/15 text-success',
+  };
+
+  const actionButtons = (
+    <>
+      {dirty && (
+        <button
+          onClick={handleSave}
+          disabled={isSaving}
+          className="px-4 py-2 text-sm font-medium rounded-md border
+                     bg-accent/10 border-accent/40 text-accent
+                     hover:bg-accent/20 transition-colors
+                     disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {isSaving ? t('admin.detail.saving') : t('admin.detail.save')}
+        </button>
+      )}
+
+      <button
+        onClick={handleTest}
+        disabled={isTesting || dirty}
+        title={dirtyTitle}
+        className="px-4 py-2 text-sm font-medium rounded-md border
+                   border-default text-secondary
+                   hover:bg-elevated transition-colors
+                   disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        {isTesting ? t('admin.detail.testing') : t('admin.detail.test')}
+      </button>
+
+      {canPublish && (
+        <>
+          <SelectField
+            label="发布版块"
+            value={publishBoard}
+            onChange={setPublishBoard}
+            options={[
+              { value: 'hot', label: '主板' },
+              { value: 'secondary', label: '备板' },
+              { value: 'cold', label: '冷板' },
+            ]}
+          />
+          <button
+            onClick={() => onPublish(publishBoard)}
+            disabled={dirty}
+            title={dirtyTitle}
+            className="px-4 py-2 text-sm font-medium rounded-md border
+                       bg-success/10 border-success/30 text-success
+                       hover:bg-success/20 transition-colors
+                       disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {t('admin.detail.publish')}
+          </button>
+        </>
+      )}
+
+      {canReject && (
+        !showRejectInput ? (
+          <button
+            onClick={() => setShowRejectInput(true)}
+            className="px-4 py-2 text-sm font-medium rounded-md border
+                       bg-danger/10 border-danger/30 text-danger
+                       hover:bg-danger/20 transition-colors"
+          >
+            {t('admin.detail.reject')}
+          </button>
+        ) : (
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={rejectNote}
+              onChange={(e) => setRejectNote(e.target.value)}
+              placeholder={t('admin.detail.rejectNotePlaceholder')}
+              className="px-3 py-2 bg-elevated border border-default rounded-md
+                         text-primary placeholder:text-muted text-sm w-48
+                         focus:outline-none focus:border-danger focus:ring-1 focus:ring-accent
+                         transition-colors"
+              autoFocus
+            />
+            <button
+              onClick={handleRejectConfirm}
+              className="px-3 py-2 text-sm font-medium rounded-md border
+                         bg-danger/10 border-danger/30 text-danger
+                         hover:bg-danger/20 transition-colors"
+            >
+              {t('admin.detail.confirmReject')}
+            </button>
+            <button
+              onClick={() => { setShowRejectInput(false); setRejectNote(''); }}
+              className="px-3 py-2 text-sm rounded-md border
+                         border-default text-muted hover:text-secondary
+                         hover:bg-elevated transition-colors"
+            >
+              {t('admin.detail.cancel')}
+            </button>
+          </div>
+        )
+      )}
+
+      {canDelete && (
+        !showDeleteConfirm ? (
+          <button
+            onClick={() => setShowDeleteConfirm(true)}
+            className="px-4 py-2 text-sm font-medium rounded-md border
+                       border-default text-muted
+                       hover:bg-danger/10 hover:text-danger hover:border-danger/30
+                       transition-colors"
+          >
+            {t('admin.detail.delete')}
+          </button>
+        ) : (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => { onDelete(); setShowDeleteConfirm(false); }}
+              className="px-3 py-2 text-sm font-medium rounded-md border
+                         bg-danger/10 border-danger/30 text-danger
+                         hover:bg-danger/20 transition-colors"
+            >
+              {t('admin.detail.confirmDelete')}
+            </button>
+            <button
+              onClick={() => setShowDeleteConfirm(false)}
+              className="px-3 py-2 text-sm rounded-md border
+                         border-default text-muted hover:text-secondary
+                         hover:bg-elevated transition-colors"
+            >
+              {t('admin.detail.cancel')}
+            </button>
+          </div>
+        )
+      )}
+    </>
+  );
+
   return (
     <div className="space-y-6">
       {/* Header with back button */}
@@ -223,6 +362,24 @@ export const SubmissionDetail: React.FC<SubmissionDetailProps> = ({
           {t('admin.detail.title')}
         </h2>
         <span className="text-xs text-muted font-mono">{submission.public_id}</span>
+      </div>
+
+      {/* Sticky action bar */}
+      <div className="sticky top-0 z-10 bg-surface border border-default rounded-lg px-4 py-3 shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
+            <code className="text-xs text-muted font-mono">{submission.public_id}</code>
+            <span className={`px-2 py-0.5 rounded text-xs font-medium ${statusBadgeClass[submission.status] ?? 'bg-muted/15 text-muted'}`}>
+              {t(`admin.status.${submission.status}`)}
+            </span>
+            {dirty && (
+              <span className="text-xs text-warning">● 有未保存修改</span>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+            {actionButtons}
+          </div>
+        </div>
       </div>
 
       {/* Main content card */}
@@ -454,136 +611,6 @@ export const SubmissionDetail: React.FC<SubmissionDetailProps> = ({
           multiline
         />
 
-      </div>
-
-      {/* Action buttons */}
-      <div className="flex flex-wrap items-center gap-3">
-        {/* Save — only visible when there are unsaved changes */}
-        {dirty && (
-          <button
-            onClick={handleSave}
-            disabled={isSaving}
-            className="px-4 py-2 text-sm font-medium rounded-md border
-                       bg-accent/10 border-accent/40 text-accent
-                       hover:bg-accent/20 transition-colors
-                       disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {isSaving ? t('admin.detail.saving') : t('admin.detail.save')}
-          </button>
-        )}
-
-        <button
-          onClick={handleTest}
-          disabled={isTesting}
-          className="px-4 py-2 text-sm font-medium rounded-md border
-                     border-default text-secondary
-                     hover:bg-elevated transition-colors
-                     disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          {isTesting ? t('admin.detail.testing') : t('admin.detail.test')}
-        </button>
-
-        {canPublish && (
-          <>
-            <SelectField
-              label="发布版块"
-              value={publishBoard}
-              onChange={setPublishBoard}
-              options={[
-                { value: 'hot', label: '主板' },
-                { value: 'secondary', label: '备板' },
-                { value: 'cold', label: '冷板' },
-              ]}
-            />
-            <button
-              onClick={() => onPublish(publishBoard)}
-              className="px-4 py-2 text-sm font-medium rounded-md border
-                         bg-success/10 border-success/30 text-success
-                         hover:bg-success/20 transition-colors"
-            >
-              {t('admin.detail.publish')}
-            </button>
-          </>
-        )}
-
-        {canReject && (
-          !showRejectInput ? (
-            <button
-              onClick={() => setShowRejectInput(true)}
-              className="px-4 py-2 text-sm font-medium rounded-md border
-                         bg-danger/10 border-danger/30 text-danger
-                         hover:bg-danger/20 transition-colors"
-            >
-              {t('admin.detail.reject')}
-            </button>
-          ) : (
-            <div className="flex items-center gap-2 flex-1 min-w-[280px]">
-              <input
-                type="text"
-                value={rejectNote}
-                onChange={(e) => setRejectNote(e.target.value)}
-                placeholder={t('admin.detail.rejectNotePlaceholder')}
-                className="flex-1 px-3 py-2 bg-elevated border border-default rounded-md
-                           text-primary placeholder:text-muted text-sm
-                           focus:outline-none focus:border-danger focus:ring-1 focus:ring-accent
-                           transition-colors"
-                autoFocus
-              />
-              <button
-                onClick={handleRejectConfirm}
-                className="px-3 py-2 text-sm font-medium rounded-md border
-                           bg-danger/10 border-danger/30 text-danger
-                           hover:bg-danger/20 transition-colors"
-              >
-                {t('admin.detail.confirmReject')}
-              </button>
-              <button
-                onClick={() => {
-                  setShowRejectInput(false);
-                  setRejectNote('');
-                }}
-                className="px-3 py-2 text-sm rounded-md border
-                           border-default text-muted hover:text-secondary
-                           hover:bg-elevated transition-colors"
-              >
-                {t('admin.detail.cancel')}
-              </button>
-            </div>
-          )
-        )}
-
-        {canDelete && (
-          !showDeleteConfirm ? (
-            <button
-              onClick={() => setShowDeleteConfirm(true)}
-              className="px-4 py-2 text-sm font-medium rounded-md border
-                         border-default text-muted
-                         hover:bg-danger/10 hover:text-danger hover:border-danger/30
-                         transition-colors"
-            >
-              {t('admin.detail.delete')}
-            </button>
-          ) : (
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => { onDelete(); setShowDeleteConfirm(false); }}
-                className="px-3 py-2 text-sm font-medium rounded-md border
-                           bg-danger/10 border-danger/30 text-danger
-                           hover:bg-danger/20 transition-colors"
-              >
-                {t('admin.detail.confirmDelete')}
-              </button>
-              <button
-                onClick={() => setShowDeleteConfirm(false)}
-                className="px-3 py-2 text-sm rounded-md border
-                           border-default text-muted hover:text-secondary
-                           hover:bg-elevated transition-colors"
-              >
-                {t('admin.detail.cancel')}
-              </button>
-            </div>
-          )
-        )}
       </div>
 
       {/* Test result */}

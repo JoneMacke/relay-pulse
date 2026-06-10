@@ -74,7 +74,11 @@ export function useOnboarding() {
   const [testJobId, setTestJobId] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<OnboardingTestResult | null>(null);
   const [testProof, setTestProof] = useState<string | null>(null);
+  const [testPassedAt, setTestPassedAt] = useState<number | null>(null);
   const [isTesting, setIsTesting] = useState(false);
+
+  // Agreement clauses — lifted here so they survive step back-navigation
+  const [checkedClauses, setCheckedClauses] = useState<Record<string, boolean>>({});
 
   // Submit state
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -113,11 +117,13 @@ export function useOnboarding() {
       setTestJobId(null);
       setTestResult(null);
       setTestProof(null);
+      setTestPassedAt(null);
       setIsTesting(false);
     } else if (invalidateProof && testProof) {
       setTestJobId(null);
       setTestResult(null);
       setTestProof(null);
+      setTestPassedAt(null);
     }
 
     setError(null);
@@ -135,6 +141,7 @@ export function useOnboarding() {
     setTestJobId(null);
     setTestResult(null);
     setTestProof(null);
+    setTestPassedAt(null);
 
     try {
       const resp = await apiPost<OnboardingTestResult>('/api/onboarding/test', {
@@ -148,6 +155,7 @@ export function useOnboarding() {
       setTestJobId(resp.probe_id);
       if (resp.test_proof) {
         setTestProof(resp.test_proof);
+        setTestPassedAt(Date.now());
       }
     } catch (e) {
       setError(e instanceof ApiError ? e.message : '测试请求失败');
@@ -160,6 +168,10 @@ export function useOnboarding() {
   const submit = useCallback(async () => {
     if (!testProof || !testJobId || !testResult) {
       setError('请先通过连通性测试');
+      return;
+    }
+    if (testPassedAt && Date.now() - testPassedAt >= 15 * 60 * 1000) {
+      setError('测试证明已过期，请返回上一步重新测试');
       return;
     }
 
@@ -204,7 +216,11 @@ export function useOnboarding() {
     } finally {
       setIsSubmitting(false);
     }
-  }, [formData, testProof, testJobId, testResult]);
+  }, [formData, testProof, testJobId, testResult, testPassedAt]);
+
+  const toggleClause = useCallback((key: string) => {
+    setCheckedClauses(prev => ({ ...prev, [key]: !prev[key] }));
+  }, []);
 
   const reset = useCallback(() => {
     setStep(1);
@@ -212,6 +228,8 @@ export function useOnboarding() {
     setTestJobId(null);
     setTestResult(null);
     setTestProof(null);
+    setTestPassedAt(null);
+    setCheckedClauses({});
     setSubmitResult(null);
     setError(null);
     clearDraft();
@@ -225,10 +243,13 @@ export function useOnboarding() {
     testJobId,
     testResult,
     testProof,
+    testPassedAt,
     isTesting,
     isSubmitting,
     submitResult,
     error,
+    checkedClauses,
+    toggleClause,
     updateField,
     goToStep,
     runTest,

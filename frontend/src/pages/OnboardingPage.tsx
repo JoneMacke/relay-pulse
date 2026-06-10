@@ -8,8 +8,9 @@ import { ConfirmStep } from '../components/onboarding/ConfirmStep';
 export default function OnboardingPage() {
   const { t } = useTranslation();
   const {
-    step, meta, metaError, formData, testResult, testProof,
+    step, meta, metaError, formData, testResult, testProof, testPassedAt,
     isTesting, isSubmitting, submitResult, error,
+    checkedClauses, toggleClause,
     updateField, goToStep, runTest, submit, reset,
   } = useOnboarding();
 
@@ -102,6 +103,9 @@ export default function OnboardingPage() {
                   updateField={updateField}
                   submitResult={submitResult}
                   isSubmitting={isSubmitting}
+                  testPassedAt={testPassedAt}
+                  checkedClauses={checkedClauses}
+                  onToggleClause={toggleClause}
                   onSubmit={submit}
                   onBack={() => goToStep(2)}
                   onReset={reset}
