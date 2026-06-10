@@ -4,7 +4,7 @@
 如果你是人类开发者，请优先阅读 `README.md` 和 `CONTRIBUTING.md`，只在需要了解更多技术细节时再参考这里的内容。
 
 ### 同步检查点
-- **最后同步**: 2026-06-08（HEAD=0d8384e，自助收录第二/三批改进：① 类型↔来源自洽 `channelTypeAllowedCategories`（service.go 单一真相源 + /api/onboarding/meta 下发，O→订阅/官方/云、R→逆向、M→mix，`validateChannelTypeSource` 把关 Submit/AdminUpdate）② 三类通道类型描述精简 ③《入驻须知与确认》5 条逐条勾选 + `agreement_accepted/at/version` 三列落库审计 ④ step2 探测失败结果面板渲染 `response_snippet`（HTTP 4xx/5xx 详情；error_message 此时恒空）⑤ step3 确认页摘要标签 testType→testVariant「请求模板」修正 + 赞助等级附代码「脉冲链路（pulse）」。已部署生产。上一同步 9775104 自助收录通道标识改三段 `{type}-{source}-{group}`：`deriveChannelCode` + 单一真相源 `ChannelSourceCatalog` + provider_name 限 ASCII + store 新增 `channel_group` 列 + 查询进度页 /contact/status + admin 申请列表按编号搜索）
+- **最后同步**: 2026-06-10（HEAD=847fe37，收录/变更请求/admin 后台 UX polish：① 变更请求详情字段中文化——`admin.changes.fields` i18n 映射（4 locale）+ `fieldLabel` helper 回退原 key，可编辑网格从 3 列改 4 列加「字段·当前·改为」列头 + ArrowRight 方向箭头 ② onboarding 连通性测试探测状态 emoji🟢🟡🔴→Lucide CheckCircle2/AlertTriangle/XCircle ③ onboarding 步骤指示器 div→ol/li 加文字标签 `onboarding.steps.*` + ✓→Lucide Check + aria-current ④ 测试已出结果后运行按钮文案切 `rerunTest`「重新测试」⑤ SubmissionDetail 详情 header flex-wrap + 标题 whitespace-nowrap 修 375px 断词 ⑥ 修 `onboardingDisplay.test.tsx` 渲染 ConfirmStep 缺 3 个上一轮提升为必传的 prop（`checkedClauses`/`onToggleClause`/`testPassedAt`）——**test 文件不在 `tsc -b` build scope，仅 vitest 暴露**。已部署生产。上一同步 0d8384e 自助收录第二/三批改进：类型↔来源自洽 `channelTypeAllowedCategories` + 协议 5 条逐条勾选落库审计 + step2 渲染 `response_snippet` + step3 标签 testType→testVariant 修正）
 - 代码是唯一真相源。本文档为架构与模式摘要，字段级细节请查阅引用的源文件。
 
 ## 项目概览
