@@ -350,19 +350,19 @@ export const SubmissionDetail: React.FC<SubmissionDetailProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Header with back button */}
-      <div className="flex items-center gap-3">
+      {/* Header with back button：窄屏允许换行，标题整词不断行，长 UUID 折到次行 */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <button
           onClick={onBack}
-          className="px-3 py-1.5 text-sm rounded-md border
+          className="shrink-0 px-3 py-1.5 text-sm rounded-md border
                      border-default text-secondary hover:bg-elevated transition-colors"
         >
           {t('admin.detail.back')}
         </button>
-        <h2 className="text-lg font-semibold text-primary">
+        <h2 className="text-lg font-semibold text-primary whitespace-nowrap">
           {t('admin.detail.title')}
         </h2>
-        <span className="text-xs text-muted font-mono">{submission.public_id}</span>
+        <span className="text-xs text-muted font-mono break-all">{submission.public_id}</span>
       </div>
 
       {/* Sticky action bar */}

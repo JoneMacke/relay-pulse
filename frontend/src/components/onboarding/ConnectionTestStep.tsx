@@ -259,7 +259,7 @@ export function ConnectionTestStep({
         ) : (
           <>
             <Play className="w-4 h-4" />
-            {t('onboarding.connectionTest.runTest')}
+            {t(testResult ? 'onboarding.connectionTest.rerunTest' : 'onboarding.connectionTest.runTest')}
           </>
         )}
       </button>

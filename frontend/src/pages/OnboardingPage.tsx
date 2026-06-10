@@ -1,5 +1,6 @@
 import { Helmet } from 'react-helmet-async';
 import { useTranslation } from 'react-i18next';
+import { Check } from 'lucide-react';
 import { useOnboarding } from '../hooks/useOnboarding';
 import { ProviderInfoStep } from '../components/onboarding/ProviderInfoStep';
 import { ConnectionTestStep } from '../components/onboarding/ConnectionTestStep';
@@ -48,25 +49,39 @@ export default function OnboardingPage() {
           {/* meta 加载成功后显示步骤 */}
           {meta && !metaError && (
             <>
-              {/* 步骤指示器 */}
-              <div className="flex items-center justify-center gap-2">
-                {[1, 2, 3].map(s => (
-                  <div key={s} className="flex items-center gap-2">
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold transition-colors ${
-                      s === step
-                        ? 'bg-accent text-white'
-                        : s < step
-                          ? 'bg-success/20 text-success'
-                          : 'bg-muted text-muted'
-                    }`}>
-                      {s < step ? '✓' : s}
+              {/* 步骤指示器：圆点 + 文字标签，当前步高亮 */}
+              <ol className="flex items-start justify-center gap-1">
+                {([
+                  { n: 1, labelKey: 'onboarding.steps.provider' },
+                  { n: 2, labelKey: 'onboarding.steps.connection' },
+                  { n: 3, labelKey: 'onboarding.steps.confirm' },
+                ] as const).map(({ n, labelKey }) => (
+                  <li key={n} className="flex items-start gap-1">
+                    <div className="flex w-16 flex-col items-center gap-1.5">
+                      <div
+                        aria-current={n === step ? 'step' : undefined}
+                        className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold transition-colors ${
+                          n === step
+                            ? 'bg-accent text-white'
+                            : n < step
+                              ? 'bg-success/20 text-success'
+                              : 'bg-muted text-muted'
+                        }`}
+                      >
+                        {n < step ? <Check className="w-4 h-4" aria-hidden="true" /> : n}
+                      </div>
+                      <span className={`text-[11px] leading-tight text-center ${
+                        n === step ? 'text-accent font-medium' : 'text-muted'
+                      }`}>
+                        {t(labelKey)}
+                      </span>
                     </div>
-                    {s < 3 && (
-                      <div className={`w-12 h-0.5 ${s < step ? 'bg-success/40' : 'bg-muted/30'}`} />
+                    {n < 3 && (
+                      <div className={`mt-4 h-0.5 w-6 sm:w-10 ${n < step ? 'bg-success/40' : 'bg-muted/30'}`} />
                     )}
-                  </div>
+                  </li>
                 ))}
-              </div>
+              </ol>
 
               {/* 错误提示 */}
               {error && (

@@ -335,6 +335,11 @@
     "description": "Submit your API service info and pass the connectivity test to apply",
     "loading": "Loading form configuration...",
     "metaErrorHint": "This feature may not be enabled yet. Please contact the administrator.",
+    "steps": {
+      "provider": "Provider",
+      "connection": "Test",
+      "confirm": "Confirm"
+    },
     "next": "Next",
     "back": "Back",
     "providerInfo": {
@@ -402,6 +407,7 @@
         "cc-haiku-pro-2184": "Haiku Pro (2.1.84)"
       },
       "runTest": "Run Test",
+      "rerunTest": "Re-test",
       "testing": "Testing...",
       "resultTitle": "Test Result",
       "probeStatus": "Probe Status",

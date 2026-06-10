@@ -335,6 +335,11 @@
     "description": "APIサービス情報を入力し、接続テストに合格して申請してください",
     "loading": "フォーム設定を読み込み中...",
     "metaErrorHint": "この機能はまだ有効になっていない可能性があります。管理者にお問い合わせください。",
+    "steps": {
+      "provider": "プロバイダー",
+      "connection": "テスト",
+      "confirm": "確認"
+    },
     "next": "次へ", "back": "戻る",
     "providerInfo": {
       "title": "プロバイダー情報",
@@ -381,7 +386,7 @@
       "testType": "サービスタイプ", "testVariant": "リクエストテンプレート",
       "variantHint": "テストに使用するモデルテンプレートを選択（モデルごとに認証ポリシーが異なる場合があります）",
       "variants": { "cc-haiku-pro-2184": "Haiku Pro (2.1.84)" },
-      "runTest": "テスト実行", "testing": "テスト中...",
+      "runTest": "テスト実行", "rerunTest": "再テスト", "testing": "テスト中...",
       "resultTitle": "テスト結果", "probeStatus": "探査状態",
       "latency": "遅延", "httpCode": "HTTPコード", "subStatus": "詳細状態", "error": "エラー", "responseDetail": "レスポンス詳細",
       "proofValid": "テスト証明有効（残り {{time}}）", "proofExpired": "テスト証明の期限切れ。再テストしてください"
