@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Loader2, AlertCircle, ChevronDown, ChevronUp, Check, X, Play, Trash2, Save } from 'lucide-react';
+import { Loader2, AlertCircle, ChevronDown, ChevronUp, Check, X, Play, Trash2, Save, ArrowRight } from 'lucide-react';
 import type { AdminChangeRequest, ChangeRequestStatus } from '../../types/change';
 
 // ── 编辑相关常量与工具 ──────────────────────────────────
@@ -106,6 +106,9 @@ export function ChangeRequestList({
   const [rejectNote, setRejectNote] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [editDrafts, setEditDrafts] = useState<Record<string, EditDraft>>({});
+
+  // 字段键 → 本地化标签；未收录的键回退原始键名，避免漏译时出现空白
+  const fieldLabel = (key: string) => t(`admin.changes.fields.${key}`, { defaultValue: key });
 
   const statusLabel = (status: string) => {
     const map: Record<string, string> = {
@@ -217,7 +220,7 @@ export function ChangeRequestList({
                       <div className="space-y-1">
                         {Object.entries(proposedChanges).map(([k, v]) => (
                           <div key={k} className="flex gap-2 text-sm">
-                            <span className="text-muted min-w-[100px]">{k}:</span>
+                            <span className="text-muted min-w-[100px]">{fieldLabel(k)}:</span>
                             <span className="text-primary font-medium">{v}</span>
                           </div>
                         ))}
@@ -235,7 +238,7 @@ export function ChangeRequestList({
 
                       {/* admin_note */}
                       <div>
-                        <div className="text-xs text-muted mb-1">admin_note</div>
+                        <div className="text-xs text-muted mb-1">{t('admin.changes.adminNote')}</div>
                         <textarea
                           value={draft.admin_note}
                           readOnly={!canEdit}
@@ -253,10 +256,18 @@ export function ChangeRequestList({
 
                       {/* Editable proposed fields */}
                       <div className="space-y-1.5">
+                        {/* 列头：字段 / 当前 → 改为，避免管理员分不清哪列是现值哪列是改后 */}
+                        <div className="grid grid-cols-[110px_1fr_auto_1fr] gap-2 items-center text-[11px] font-medium uppercase tracking-wide text-muted/70">
+                          <span>{t('admin.changes.colField')}</span>
+                          <span>{t('admin.changes.colCurrent')}</span>
+                          <span aria-hidden="true" />
+                          <span>{t('admin.changes.colProposed')}</span>
+                        </div>
                         {EDITABLE_PROPOSED_FIELDS.map(field => (
-                          <div key={field} className="grid grid-cols-[120px_1fr_1fr] gap-2 items-center">
-                            <span className="text-xs text-muted truncate">{field}</span>
-                            <span className="text-xs text-muted truncate">{currentSnapshot[field] || '—'}</span>
+                          <div key={field} className="grid grid-cols-[110px_1fr_auto_1fr] gap-2 items-center">
+                            <span className="text-xs text-muted truncate" title={field}>{fieldLabel(field)}</span>
+                            <span className="text-xs text-secondary truncate" title={currentSnapshot[field] || ''}>{currentSnapshot[field] || '—'}</span>
+                            <ArrowRight className="w-3 h-3 flex-shrink-0 text-muted/50" aria-hidden="true" />
                             {field === 'sponsor_level' ? (
                               <select
                                 value={draft.proposed.sponsor_level}

@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronLeft, ChevronRight, Eye, EyeOff, Play, Clock, Loader2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Eye, EyeOff, Play, Clock, Loader2, CheckCircle2, AlertTriangle, XCircle, CircleHelp } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import type { OnboardingFormData, OnboardingMeta, OnboardingTestResult } from '../../types/onboarding';
 
 /** Default proof validity duration in seconds (15 minutes). */
@@ -69,10 +70,10 @@ interface ConnectionTestStepProps {
   onNext: () => void;
 }
 
-const probeStatusConfig: Record<number, { labelKey: string; colorClass: string; icon: string }> = {
-  1: { labelKey: 'onboarding.test.statusAvailable', colorClass: 'text-success', icon: '🟢' },
-  2: { labelKey: 'onboarding.test.statusDegraded', colorClass: 'text-warning', icon: '🟡' },
-  0: { labelKey: 'onboarding.test.statusUnavailable', colorClass: 'text-danger', icon: '🔴' },
+const probeStatusConfig: Record<number, { labelKey: string; colorClass: string; Icon: LucideIcon }> = {
+  1: { labelKey: 'onboarding.test.statusAvailable', colorClass: 'text-success', Icon: CheckCircle2 },
+  2: { labelKey: 'onboarding.test.statusDegraded', colorClass: 'text-warning', Icon: AlertTriangle },
+  0: { labelKey: 'onboarding.test.statusUnavailable', colorClass: 'text-danger', Icon: XCircle },
 };
 
 /** Step 2: Connection test with API key and base URL. */
@@ -275,10 +276,16 @@ export function ConnectionTestStep({
             {testResult.probe_status !== undefined && (
               <div className="flex items-center justify-between">
                 <span className="text-sm text-secondary">{t('onboarding.connectionTest.probeStatus')}</span>
-                <span className={`flex items-center gap-1.5 text-sm font-medium ${probeStatusConfig[testResult.probe_status]?.colorClass ?? 'text-muted'}`}>
-                  <span>{probeStatusConfig[testResult.probe_status]?.icon ?? '⚪'}</span>
-                  {t(probeStatusConfig[testResult.probe_status]?.labelKey ?? 'onboarding.test.statusUnknown')}
-                </span>
+                {(() => {
+                  const cfg = probeStatusConfig[testResult.probe_status];
+                  const StatusIcon = cfg?.Icon ?? CircleHelp;
+                  return (
+                    <span className={`flex items-center gap-1.5 text-sm font-medium ${cfg?.colorClass ?? 'text-muted'}`}>
+                      <StatusIcon className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
+                      {t(cfg?.labelKey ?? 'onboarding.test.statusUnknown')}
+                    </span>
+                  );
+                })()}
               </div>
             )}
 
