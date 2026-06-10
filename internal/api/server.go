@@ -181,6 +181,7 @@ func NewServer(store storage.Storage, cfg *config.AppConfig, port string, autoMo
 
 	// 变更请求 API 路由
 	router.POST("/api/change/auth", handler.AuthChange)
+	router.POST("/api/change/test", handler.ChangeTest)
 	router.POST("/api/change/submit", handler.SubmitChange)
 	router.GET("/api/change/:id", handler.GetChangeStatus)
 

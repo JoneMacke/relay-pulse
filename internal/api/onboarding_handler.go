@@ -182,45 +182,43 @@ func (h *Handler) GetOnboardingStatus(c *gin.Context) {
 	})
 }
 
-// onboardingTestRequest 内联探测请求
-type onboardingTestRequest struct {
+// inlineTestRequest 内联探测请求体，由 /api/onboarding/test 与 /api/change/test 共用。
+type inlineTestRequest struct {
 	ServiceType  string `json:"service_type" binding:"required"`
 	TemplateName string `json:"template_name" binding:"required"`
 	BaseURL      string `json:"base_url" binding:"required"`
 	APIKey       string `json:"api_key" binding:"required"`
 }
 
-// OnboardingTest 收录内联探测测试
-// POST /api/onboarding/test
-func (h *Handler) OnboardingTest(c *gin.Context) {
-	svc := h.getOnboardingService()
-	if svc == nil {
-		apiError(c, http.StatusServiceUnavailable, ErrCodeFeatureDisabled, "自助收录功能未启用")
-		return
-	}
+// runInlineTestProbe 执行自助收录 / 变更请求共用的内联探测编排：
+// 探测器就绪检查 → IP 限流 → 参数绑定 → SSRF 校验 → 构造 ServiceConfig →
+// 与 loader 一致的 ResolveSingleMonitor（模板填充 + Duration 派生）→ 30s 超时探测。
+// 调用方各自负责功能开关判断（onboarding / change service）与探测成功后的 proof 签发。
+// 任一前置校验失败时已写入响应并返回 ok=false，调用方应直接返回。
+func (h *Handler) runInlineTestProbe(c *gin.Context) (inlineTestRequest, *probe.Result, bool) {
+	var req inlineTestRequest
 
 	if h.inlineProber == nil {
 		apiError(c, http.StatusServiceUnavailable, ErrCodeFeatureDisabled, "内联探测器未初始化")
-		return
+		return req, nil, false
 	}
 
 	// IP 限流
 	if h.probeLimiter != nil && !h.probeLimiter.Allow(c.ClientIP()) {
 		apiError(c, http.StatusTooManyRequests, ErrCodeRateLimited, "请求过于频繁，请稍后再试")
-		return
+		return req, nil, false
 	}
 
-	var req onboardingTestRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		apiError(c, http.StatusBadRequest, ErrCodeInvalidParam, "请求参数无效: "+err.Error())
-		return
+		return req, nil, false
 	}
 
 	// SSRF 前置校验
 	guard := probe.NewSSRFGuard()
 	if err := guard.ValidateURL(req.BaseURL); err != nil {
 		apiError(c, http.StatusBadRequest, ErrCodeInvalidParam, "URL 安全校验失败: "+err.Error())
-		return
+		return req, nil, false
 	}
 
 	// 走与 AdminPublish 同一映射器构造 ServiceConfig，再经 ResolveSingleMonitor 走与 loader 一致
@@ -238,20 +236,23 @@ func (h *Handler) OnboardingTest(c *gin.Context) {
 	appCfg := h.snapshotAppConfig()
 	if appCfg == nil {
 		apiError(c, http.StatusServiceUnavailable, ErrCodeServiceUnavailable, "运行时配置未就绪")
-		return
+		return req, nil, false
 	}
 	if err := config.ResolveSingleMonitor(appCfg, &cfg, h.configDir()); err != nil {
 		apiError(c, http.StatusBadRequest, ErrCodeInvalidParam, "解析测试配置失败: "+err.Error())
-		return
+		return req, nil, false
 	}
 
 	// 30 秒总超时
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
-	result := h.inlineProber.ProbeConfig(ctx, cfg)
+	return req, h.inlineProber.ProbeConfig(ctx, cfg), true
+}
 
-	resp := gin.H{
+// inlineTestProbeResponse 组装内联探测结果的公共响应字段（不含 proof，由各端点按需追加）。
+func inlineTestProbeResponse(result *probe.Result) gin.H {
+	return gin.H{
 		"probe_status":     result.ProbeStatus,
 		"sub_status":       result.SubStatus,
 		"http_code":        result.HTTPCode,
@@ -260,6 +261,23 @@ func (h *Handler) OnboardingTest(c *gin.Context) {
 		"response_snippet": result.ResponseSnippet,
 		"probe_id":         result.ProbeID,
 	}
+}
+
+// OnboardingTest 收录内联探测测试
+// POST /api/onboarding/test
+func (h *Handler) OnboardingTest(c *gin.Context) {
+	svc := h.getOnboardingService()
+	if svc == nil {
+		apiError(c, http.StatusServiceUnavailable, ErrCodeFeatureDisabled, "自助收录功能未启用")
+		return
+	}
+
+	req, result, ok := h.runInlineTestProbe(c)
+	if !ok {
+		return
+	}
+
+	resp := inlineTestProbeResponse(result)
 
 	// 探测成功时签发 proof，并下发其绝对过期时间（Unix 秒），
 	// 让前端基于服务端真实 proof_ttl 做倒计时/提交前校验，而非硬编码。

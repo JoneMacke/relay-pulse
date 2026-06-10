@@ -168,8 +168,10 @@ export function useChangeRequest() {
       const testBaseUrl = changes['base_url'] || selectedCandidate.base_url;
       const testKey = newApiKey || apiKey;
 
-      // 调用内联探测 API（同步返回结果）
-      const resp = await apiPost<InlineTestResult>('/api/onboarding/test', {
+      // 调用变更请求专用内联探测 API（同步返回结果）。
+      // 走 /api/change/test 而非 /api/onboarding/test：变更流程只依赖 change_requests
+      // 开关，未启用 onboarding 时也能测通（两端共用探测编排，proof 同源可被 submit 验证）。
+      const resp = await apiPost<InlineTestResult>('/api/change/test', {
         service_type: selectedCandidate.test_type || selectedCandidate.service,
         template_name: selectedVariant || '',
         base_url: testBaseUrl,

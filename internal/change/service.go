@@ -292,8 +292,17 @@ func (s *Service) GetStatus(ctx context.Context, publicID string) (*ChangeReques
 
 // IssueProof 签发测试证明（供内联探测调用）。
 func (s *Service) IssueProof(jobID, testType, apiURL, apiKey string) string {
+	proof, _ := s.IssueProofWithExpiry(jobID, testType, apiURL, apiKey)
+	return proof
+}
+
+// IssueProofWithExpiry 签发测试证明，并返回其绝对过期时间（Unix 秒），供 API 层下发前端。
+// 与 onboarding.Service.IssueProofWithExpiry 同口径：change.Service 持有独立但
+// 同源（共享 onboarding.proof_secret）的 proofIssuer，故 /api/change/test 不依赖
+// onboarding 是否启用，签发的 proof 也能被 change.Submit 的同一 proofIssuer 验证。
+func (s *Service) IssueProofWithExpiry(jobID, testType, apiURL, apiKey string) (string, int64) {
 	fingerprint := s.cipher.Fingerprint(apiKey)
-	return s.proofIssuer.Issue(jobID, testType, apiURL, fingerprint)
+	return s.proofIssuer.IssueWithExpiry(jobID, testType, apiURL, fingerprint)
 }
 
 // === 管理端 API ===

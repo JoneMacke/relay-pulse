@@ -42,6 +42,37 @@ func (h *Handler) AuthChange(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+// ChangeTest 变更请求内联探测测试
+// POST /api/change/test
+//
+// 与 /api/onboarding/test 共用 runInlineTestProbe 探测编排，但只依赖 change service
+// 是否启用（而非 onboarding）。这样仅开启 change_requests、未开 onboarding 时，
+// 涉及 base_url / API Key 轮换的变更流程不再因 onboarding 未启用而卡 503。
+// 成功时用 change service 自己的 proofIssuer 签发 proof，可被 change.Submit 验证。
+func (h *Handler) ChangeTest(c *gin.Context) {
+	svc := h.getChangeService()
+	if svc == nil {
+		apiError(c, http.StatusServiceUnavailable, ErrCodeFeatureDisabled, "变更请求功能未启用")
+		return
+	}
+
+	req, result, ok := h.runInlineTestProbe(c)
+	if !ok {
+		return
+	}
+
+	resp := inlineTestProbeResponse(result)
+
+	// 探测成功时签发 proof，并下发其绝对过期时间（Unix 秒），供前端做倒计时/提交前校验。
+	if result.ProbeStatus == 1 {
+		proof, expiresAt := svc.IssueProofWithExpiry(result.ProbeID, req.ServiceType, req.BaseURL, req.APIKey)
+		resp["test_proof"] = proof
+		resp["proof_expires_at"] = expiresAt
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
+
 // SubmitChange 提交变更请求
 // POST /api/change/submit
 func (h *Handler) SubmitChange(c *gin.Context) {
