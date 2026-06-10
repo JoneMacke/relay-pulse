@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, Copy, Check, RotateCcw, Search, ExternalLink } from 'lucide-react';
+import { ChevronLeft, Copy, Check, RotateCcw, Search, ExternalLink, AlertTriangle } from 'lucide-react';
 import type { OnboardingFormData, SubmitOnboardingResponse } from '../../types/onboarding';
 import { LANGUAGE_PATH_MAP, type SupportedLanguage } from '../../i18n';
 
@@ -270,14 +270,14 @@ export function ConfirmStep({ formData, updateField, submitResult, isSubmitting,
         <ul className="space-y-2.5">
           {AGREEMENT_CLAUSE_KEYS.map((key) => (
             <li key={key}>
-              <label className="flex items-start gap-3 cursor-pointer">
+              <label className="flex items-start gap-3 cursor-pointer py-1">
                 <input
                   type="checkbox"
                   checked={!!checkedClauses[key]}
                   onChange={() => onToggleClause(key)}
                   className="mt-0.5 w-4 h-4 flex-shrink-0 rounded border-muted accent-accent"
                 />
-                <span className="text-xs text-secondary leading-relaxed">
+                <span className="text-sm text-secondary leading-relaxed">
                   {t(`onboarding.confirm.agreement.${key}`)}
                 </span>
               </label>
@@ -300,12 +300,14 @@ export function ConfirmStep({ formData, updateField, submitResult, isSubmitting,
 
       {/* Proof expiry warning */}
       {proofExpired && (
-        <div className="flex items-center gap-2 p-3 bg-danger/10 border border-danger/20 rounded-lg text-sm text-danger">
+        <div className="flex items-center gap-2 p-3 bg-danger/10 border border-danger/20 rounded-lg text-sm text-danger" role="alert">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
           <span>测试证明已过期（超过 15 分钟），请返回上一步重新测试</span>
         </div>
       )}
       {proofWarning && (
-        <div className="flex items-center gap-2 p-3 bg-warning/10 border border-warning/20 rounded-lg text-sm text-warning">
+        <div className="flex items-center gap-2 p-3 bg-warning/10 border border-warning/20 rounded-lg text-sm text-warning" role="status" aria-live="polite">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
           <span>测试证明即将过期（有效期 15 分钟），请尽快提交</span>
         </div>
       )}
@@ -325,6 +327,13 @@ export function ConfirmStep({ formData, updateField, submitResult, isSubmitting,
             type="button"
             onClick={onSubmit}
             disabled={isSubmitting || !allClausesChecked || proofExpired}
+            title={
+              proofExpired
+                ? '测试证明已过期，请返回上一步重新测试'
+                : !allClausesChecked
+                  ? '请先勾选所有条款'
+                  : undefined
+            }
             className="px-6 py-3 bg-accent text-white rounded-lg font-medium hover:bg-accent-strong transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isSubmitting ? t('onboarding.confirm.submitting') : t('onboarding.confirm.submit')}

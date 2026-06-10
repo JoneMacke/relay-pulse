@@ -331,17 +331,21 @@ export function ChangeRequestList({
                     )}
 
                     {/* Actions */}
-                    <div className="flex gap-2 pt-2 flex-wrap">
+                    <div className="space-y-2 pt-2">
                       {hasEdits && canEdit && (
-                        <span className="text-xs text-warning self-center">● 有未保存修改，请先保存再审批</span>
+                        <div className="flex items-center gap-1 text-xs text-warning" role="alert" aria-live="assertive">
+                          <AlertCircle className="w-3 h-3 flex-shrink-0" />
+                          有未保存修改，请先保存再审批
+                        </div>
                       )}
+                      <div className="flex gap-2 flex-wrap">
                       {cr.status === 'pending' && (
                         <>
                           <button
                             onClick={() => onApprove(cr.public_id)}
                             disabled={hasEdits && canEdit}
                             title={hasEdits && canEdit ? '请先保存修改' : undefined}
-                            className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-accent/10 text-accent hover:bg-accent/20 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                            className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-accent/10 text-accent hover:bg-accent/20 transition disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             <Check size={12} />{t('admin.changes.approve')}
                           </button>
@@ -367,7 +371,7 @@ export function ChangeRequestList({
                           onClick={() => onApply(cr.public_id)}
                           disabled={hasEdits && canEdit}
                           title={hasEdits && canEdit ? '请先保存修改' : undefined}
-                          className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-success/10 text-success hover:bg-success/20 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                          className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-success/10 text-success hover:bg-success/20 transition disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           <Play size={12} />{t('admin.changes.apply')}
                         </button>
@@ -396,6 +400,7 @@ export function ChangeRequestList({
                           <Trash2 size={12} />{t('admin.changes.delete')}
                         </button>
                       )}
+                      </div>
                     </div>
                   </div>
                 )}

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Lock } from 'lucide-react';
 import type { AdminSubmission, OnboardingTestResult } from '../../types/onboarding';
 import { FormField, SelectField, ReadOnlyField } from './FormControls';
 
@@ -225,7 +226,7 @@ export const SubmissionDetail: React.FC<SubmissionDetailProps> = ({
           className="px-4 py-2 text-sm font-medium rounded-md border
                      bg-accent/10 border-accent/40 text-accent
                      hover:bg-accent/20 transition-colors
-                     disabled:opacity-40 disabled:cursor-not-allowed"
+                     disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {isSaving ? t('admin.detail.saving') : t('admin.detail.save')}
         </button>
@@ -238,7 +239,7 @@ export const SubmissionDetail: React.FC<SubmissionDetailProps> = ({
         className="px-4 py-2 text-sm font-medium rounded-md border
                    border-default text-secondary
                    hover:bg-elevated transition-colors
-                   disabled:opacity-40 disabled:cursor-not-allowed"
+                   disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {isTesting ? t('admin.detail.testing') : t('admin.detail.test')}
       </button>
@@ -262,7 +263,7 @@ export const SubmissionDetail: React.FC<SubmissionDetailProps> = ({
             className="px-4 py-2 text-sm font-medium rounded-md border
                        bg-success/10 border-success/30 text-success
                        hover:bg-success/20 transition-colors
-                       disabled:opacity-40 disabled:cursor-not-allowed"
+                       disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {t('admin.detail.publish')}
           </button>
@@ -365,7 +366,7 @@ export const SubmissionDetail: React.FC<SubmissionDetailProps> = ({
       </div>
 
       {/* Sticky action bar */}
-      <div className="sticky top-0 z-10 bg-surface border border-default rounded-lg px-4 py-3 shadow-sm">
+      <div className="sticky top-4 z-10 bg-surface border border-default rounded-lg px-4 py-3 shadow-sm">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-wrap items-center gap-2 min-w-0">
             <code className="text-xs text-muted font-mono">{submission.public_id}</code>
@@ -373,7 +374,10 @@ export const SubmissionDetail: React.FC<SubmissionDetailProps> = ({
               {t(`admin.status.${submission.status}`)}
             </span>
             {dirty && (
-              <span className="text-xs text-warning">● 有未保存修改</span>
+              <span className="flex items-center gap-1 text-xs text-warning" role="status" aria-live="polite">
+                <Lock className="w-3 h-3 flex-shrink-0" />
+                有未保存修改，测试/发布已锁定
+              </span>
             )}
           </div>
           <div className="flex flex-wrap items-center gap-2 lg:justify-end">
