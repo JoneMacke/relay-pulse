@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "@types/react-window": "^2.0.0",
-    "country-flag-icons": "^1.6.4",
+    "country-flag-icons": "^1.6.15",
     "i18next": "^25.8.18",
     "i18next-browser-languagedetector": "^8.2.1",
     "lucide-react": "^0.577.0",
@@ -51,6 +51,6 @@
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.46.3",
     "vite": "^7.2.2",
-    "vitest": "^4.0.14"
+    "vitest": "^4.1.0"
   }
 }
