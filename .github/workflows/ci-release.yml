@@ -40,9 +40,13 @@ jobs:
         uses: actions/setup-go@v6
         with:
           # 跟随最新 1.25.x（与生产 Dockerfile golang:1.25-alpine 一致），
-          # 确保 govulncheck 跑在含安全补丁的工具链上（go.mod 的 1.25.0 可能
-          # 让 setup-go 装精确 1.25.0，落后于已修复 CVE 的 1.25.11）。
+          # 确保 govulncheck 跑在含安全补丁的工具链上。
           go-version: '1.25'
+          # check-latest 必开：否则 setup-go 优先用 runner 预装/缓存的 Go（常滞后一个
+          # 补丁，如 1.25.10），而新 stdlib CVE（GO-2026-5037/5039，fixed in 1.25.11）
+          # 一发布 govulncheck 立即判红、阻断所有 release——这是 toolchain-lag race，
+          # 与代码无关。check-latest=true 强制从 go.dev manifest 取最新匹配补丁，根治。
+          check-latest: true
           cache: true
 
       - name: Set up Node.js
