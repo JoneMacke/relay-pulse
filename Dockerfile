@@ -88,7 +88,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH:-amd64} \
 # ============================================
 # Stage 3: Runtime (Minimal Image)
 # ============================================
-FROM alpine:3.19
+FROM alpine:3.23
 
 # OCI 镜像标签
 ARG VERSION=dev
