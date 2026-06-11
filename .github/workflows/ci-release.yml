@@ -3,6 +3,16 @@ name: CI & Release
 on:
   push:
     branches: [main]
+    # 纯文档改动不触发整条流水线：**.md / docs/** 不进 //go:embed 的 frontend/dist
+    # （embed 只吃 dist，见 internal/api/server.go），不影响二进制；且 .releaserc 里
+    # docs/test/ci/style 本就 release:false，跑满 CI+docker+release 评估纯白烧 ~4min。
+    # 仅当本次 push 的全部改动文件都匹配时才跳过——混合改动（含任一非文档文件）照常跑。
+    # 副作用：纯文档的 chore/refactor/perf 等（release:true 类型）只动 .md 时也被跳过→不发版；
+    # 文档无产物变化本不该 bump 镜像版本，需要时同 push 带一个代码文件即可。
+    # 只加在 push（直推 main 的实际流程）；不加 pull_request，避免必需检查 pending 卡合并。
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   pull_request:
     branches: [main]
   workflow_dispatch:
