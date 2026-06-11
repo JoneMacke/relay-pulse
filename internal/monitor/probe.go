@@ -694,9 +694,12 @@ func (p *Prober) determineStatus(statusCode, latency int, slowLatency time.Durat
 		return 1, storage.SubStatusNone
 	}
 
-	// 3xx = 绿色（重定向，通常由客户端自动处理，视为正常）
+	// 3xx = 红色（不合规）。HTTP client 默认已自动跟随重定向（最多 10 跳），
+	// 合规的 http→https / 尾斜杠跳转早被透明跟完，到这里只剩跟不动的畸形重定向
+	// （无 Location 头、非法 scheme、超跳数等）——对 LLM API 而言这不是可用响应，
+	// 与 inline 自助探测的 redirect_blocked 口径一致，归入 client_error 桶。
 	if statusCode >= 300 && statusCode < 400 {
-		return 1, storage.SubStatusNone
+		return 0, storage.SubStatusClientError
 	}
 
 	// 401/403 = 红色（认证/权限失败）

@@ -136,8 +136,9 @@ func TestDetermineStatus(t *testing.T) {
 		{"200_at_threshold", 200, 100, 1, storage.SubStatusNone}, // equal to threshold, not exceeding
 		{"201_created", 201, 10, 1, storage.SubStatusNone},       // other 2xx
 		{"204_no_content", 204, 10, 1, storage.SubStatusNone},    // other 2xx
-		{"301_redirect", 301, 10, 1, storage.SubStatusNone},      // 3xx
-		{"302_redirect", 302, 10, 1, storage.SubStatusNone},      // 3xx
+		{"301_redirect", 301, 10, 0, storage.SubStatusClientError}, // 3xx 判红：client 已自动跟随合规重定向，漏到此处的是畸形重定向
+		{"302_redirect", 302, 10, 0, storage.SubStatusClientError}, // 同上
+		{"304_not_modified", 304, 10, 0, storage.SubStatusClientError},
 		{"400_bad_request", 400, 10, 0, storage.SubStatusInvalidRequest},
 		{"401_unauthorized", 401, 10, 0, storage.SubStatusAuthError},
 		{"403_forbidden", 403, 10, 0, storage.SubStatusAuthError},
