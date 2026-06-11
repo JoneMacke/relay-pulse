@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { X } from 'lucide-react';
 import type { MonitorConfig, MonitorFile } from '../../types/monitor';
 import { FormField, SelectField, CheckboxField } from './FormControls';
 
@@ -338,10 +339,11 @@ export function MonitorForm({ fetchTemplates, onSave, onCancel }: MonitorFormPro
             <button
               type="button"
               onClick={() => removeChild(i)}
-              className="px-2 py-2 text-danger hover:text-danger/80 text-sm transition"
+              className="px-2 py-2 text-danger hover:text-danger/80 transition"
               title={t('admin.monitors.removeChild')}
+              aria-label={t('admin.monitors.removeChild')}
             >
-              &times;
+              <X className="w-4 h-4" aria-hidden="true" />
             </button>
           </div>
         ))}

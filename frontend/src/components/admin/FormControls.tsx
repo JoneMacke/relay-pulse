@@ -1,10 +1,6 @@
 /** 管理后台共享表单控件 */
 import type React from 'react';
-
-const inputClasses = `w-full px-3 py-2 bg-elevated border border-default rounded-md
-  text-primary placeholder:text-muted text-sm
-  focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent
-  transition-colors`;
+import { fieldInputClass, fieldSelectClass } from './fieldStyles';
 
 /** 文本 / 数字 / URL 输入框（支持多行 textarea） */
 export function FormField({
@@ -36,7 +32,7 @@ export function FormField({
           onBlur={() => { const trimmed = value.trim(); if (trimmed !== value) onChange(trimmed); }}
           placeholder={placeholder}
           rows={3}
-          className={`${inputClasses} resize-y`}
+          className={`${fieldInputClass()} resize-y`}
         />
       ) : (
         <input
@@ -46,7 +42,7 @@ export function FormField({
           onChange={(e) => onChange(e.target.value)}
           onBlur={() => { const trimmed = value.trim(); if (trimmed !== value) onChange(trimmed); }}
           placeholder={placeholder}
-          className={`${inputClasses} ${error ? 'border-danger focus:border-danger focus:ring-danger' : ''}`}
+          className={fieldInputClass({ error: !!error })}
         />
       )}
       {error && <p className="mt-1 text-xs text-danger">{error}</p>}
@@ -75,10 +71,7 @@ export function SelectField({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
-        className={`w-full px-3 py-2 bg-elevated border border-default rounded-md
-          text-primary text-sm appearance-none
-          focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent
-          transition-colors ${disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}`}
+        className={`${fieldSelectClass()} ${disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}`}
       >
         {options.map((opt) => (
           <option key={opt.value} value={opt.value}>{opt.label}</option>

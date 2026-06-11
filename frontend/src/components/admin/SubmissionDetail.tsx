@@ -290,7 +290,7 @@ export const SubmissionDetail: React.FC<SubmissionDetailProps> = ({
               placeholder={t('admin.detail.rejectNotePlaceholder')}
               className="px-3 py-2 bg-elevated border border-default rounded-md
                          text-primary placeholder:text-muted text-sm w-48
-                         focus:outline-none focus:border-danger focus:ring-1 focus:ring-accent
+                         focus:outline-none focus:border-danger focus:ring-1 focus:ring-danger
                          transition-colors"
               autoFocus
             />

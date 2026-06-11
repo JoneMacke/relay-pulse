@@ -1,10 +1,11 @@
 import { useEffect, useState, type InputHTMLAttributes } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Eye, EyeOff, Copy, Check } from 'lucide-react';
+import { Eye, EyeOff, Copy, Check, X } from 'lucide-react';
 import type { MonitorConfig, MonitorFile, ProbeHistoryEntry } from '../../types/monitor';
 import type { ProbeResult } from '../../hooks/useMonitorAdmin';
 import { MonitorLogsTab } from './MonitorLogsTab';
 import { CurlCommandBlock } from './CurlCommandBlock';
+import { fieldInputClass, fieldShapeClass } from './fieldStyles';
 
 type DetailTab = 'detail' | 'logs';
 
@@ -538,7 +539,7 @@ export function MonitorDetail({
                       value={child.model}
                       onChange={e => updateChild(i, 'model', e.target.value)}
                       placeholder={t('admin.monitors.form.modelPlaceholder')}
-                      className="w-full px-2 py-1 rounded bg-elevated border border-default text-primary text-sm placeholder:text-muted/50 focus:outline-none focus:border-accent"
+                      className={fieldInputClass({ dense: true })}
                     />
                   </div>
                   <div>
@@ -546,7 +547,7 @@ export function MonitorDetail({
                     <select
                       value={child.template}
                       onChange={e => updateChild(i, 'template', e.target.value)}
-                      className="w-full px-2 py-1 rounded bg-elevated border border-default text-primary text-sm focus:outline-none focus:border-accent"
+                      className={`w-full ${fieldShapeClass({ dense: true })}`}
                     >
                       {withCurrentOption(templateOptions, child.template).map(opt => (
                         <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -558,7 +559,7 @@ export function MonitorDetail({
                     <input
                       value={child.base_url}
                       onChange={e => updateChild(i, 'base_url', e.target.value)}
-                      className="w-full px-2 py-1 rounded bg-elevated border border-default text-primary text-sm focus:outline-none focus:border-accent"
+                      className={`w-full ${fieldShapeClass({ dense: true })}`}
                     />
                   </div>
                   <div>
@@ -567,15 +568,16 @@ export function MonitorDetail({
                       type="password"
                       value={child.api_key}
                       onChange={e => updateChild(i, 'api_key', e.target.value)}
-                      className="w-full px-2 py-1 rounded bg-elevated border border-default text-primary text-sm focus:outline-none focus:border-accent"
+                      className={`w-full ${fieldShapeClass({ dense: true })}`}
                     />
                   </div>
                   <button
                     onClick={() => removeChild(i)}
-                    className="px-2 py-1 text-danger hover:text-danger/80 text-sm transition"
+                    className="px-2 py-1 text-danger hover:text-danger/80 transition"
                     title={t('admin.monitors.removeChild')}
+                    aria-label={t('admin.monitors.removeChild')}
                   >
-                    &times;
+                    <X className="w-4 h-4" aria-hidden="true" />
                   </button>
                 </div>
               ))}
@@ -729,7 +731,7 @@ function EditableSelectField({
       <select
         value={currentValue}
         onChange={e => onChange(e.target.value)}
-        className="w-full px-2 py-1 rounded bg-elevated border border-default text-primary text-sm focus:outline-none focus:border-accent"
+        className={`w-full ${fieldShapeClass({ dense: true })}`}
       >
         {options.map(opt => (
           <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -763,9 +765,7 @@ function EditableField({
         value={value != null ? String(value) : ''}
         onChange={e => onChange(e.target.value)}
         placeholder={placeholder}
-        className={`w-full px-2 py-1 rounded bg-elevated border text-primary text-sm focus:outline-none transition-colors ${
-          error ? 'border-danger focus:border-danger' : 'border-default focus:border-accent'
-        }`}
+        className={fieldInputClass({ dense: true, error: !!error })}
       />
       {error && <p className="mt-0.5 text-xs text-danger">{error}</p>}
     </div>
@@ -881,7 +881,7 @@ function ApiKeyField({
           type={revealed ? 'text' : 'password'}
           value={apiKey}
           onChange={e => onChange(e.target.value)}
-          className="flex-1 min-w-0 px-2 py-1 rounded bg-elevated border border-default text-primary text-sm focus:outline-none focus:border-accent"
+          className={`flex-1 min-w-0 ${fieldShapeClass({ dense: true })}`}
         />
         <button
           type="button"
