@@ -142,6 +142,11 @@ export interface RpdiagModelScore {
   score?: number | null;
   trend: RpdiagScoreTrend;
   detail_url?: string;
+  /** rpdiag 判定该 model 当前处于硬失败故障态：score/trend 已被后端归一化为 0
+   *  （sparkline 最右点红、贴底）。仅作信息标记，渲染由归一化后的 trend 驱动。 */
+  failed?: boolean;
+  /** 故障原因文案（rpdiag 后端动态生成），在质量列 tooltip 内 verbatim 展示。 */
+  availability_warning?: string;
 }
 
 /** rpdiag 一个 (provider, service, channel) 三元组的聚合质量分。

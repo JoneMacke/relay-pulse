@@ -202,6 +202,8 @@ interface StatusTableProps {
 //   3 条线靠近 → "所有 model 表现接近"（共识）
 //   分散      → "各 model 差异大"（需点进详情看哪个掉了）
 //   缺点      → 不补 0；缺一个点的 model 只画 dot/短线
+//   贴底红点  → rpdiag 判该 model 当前硬失败故障态，后端已把 trend 归一化为 0
+//              （非"缺点补 0"，是真实的 0 值），tooltip 出故障原因
 function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; compact?: boolean }) {
   if (!score || !score.models || score.models.length === 0) {
     return <span className="text-muted text-xs">-</span>;
@@ -411,7 +413,9 @@ function formatModelTooltipRow(m: RpdiagModelScore): string {
   const fmt = (v: number | null | undefined) => (typeof v === 'number' ? v.toFixed(1) : '—');
   const key = m.model_key || m.model || '?';
   const t = m.trend;
-  return `${key}  30d=${fmt(t?.avg_30d)}  7d=${fmt(t?.avg_7d)}  latest=${fmt(t?.latest)}`;
+  const base = `${key}  30d=${fmt(t?.avg_30d)}  7d=${fmt(t?.avg_7d)}  latest=${fmt(t?.latest)}`;
+  // 故障态行 latest 已被归一化为 0；附 rpdiag 故障原因让 tooltip 解释这个 0。
+  return m.availability_warning ? `${base}  ⚠ ${m.availability_warning}` : base;
 }
 
 // react-window v2 虚拟列表行组件（rowComponent 接口）

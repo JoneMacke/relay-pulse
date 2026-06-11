@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 )
 
@@ -271,6 +272,165 @@ func TestBuildScoresUsesRecentScoresTailWhenAvailable(t *testing.T) {
 	}
 	if entry.Models[0].Score == nil || *entry.Models[0].Score != 76 {
 		t.Errorf("Models[0].Score = %v, want 76", entry.Models[0].Score)
+	}
+}
+
+func TestBuildScoresKeepsHardFailRowAsZero(t *testing.T) {
+	// rpdiag 标记 hard_fail_active 的行：即便没有任何 fingerprint sample，
+	// 也不再被跳过，而是以代表分 0 入列（红点贴底），并把故障文案带给 tooltip。
+	c := newTestClient()
+
+	rows := []rankingRow{{
+		ChannelName: "O-Max", RelaypulseChannelKey: "max",
+		ProviderName: "SaiAI", ServiceCLICommand: "claude",
+		Model: "claude-haiku-4-5", ModelKey: "claude-haiku-4-5",
+		HardFailActive:      true,
+		AvailabilityWarning: "最近连续评测失败，当前不可用",
+	}}
+
+	entry, ok := c.buildScores(rows)["saiai|cc|max"]
+	if !ok {
+		t.Fatalf("expected hard-fail row to be kept, got %v", keysOf(c.buildScores(rows)))
+	}
+	if entry.MaxScore == nil || *entry.MaxScore != 0 {
+		t.Fatalf("MaxScore = %v, want 0", entry.MaxScore)
+	}
+	if len(entry.Models) != 1 {
+		t.Fatalf("Models len = %d, want 1", len(entry.Models))
+	}
+	m := entry.Models[0]
+	if !m.Failed {
+		t.Errorf("Model.Failed = false, want true")
+	}
+	if m.Score == nil || *m.Score != 0 {
+		t.Errorf("Model.Score = %v, want 0", m.Score)
+	}
+	if m.Trend.Latest == nil || *m.Trend.Latest != 0 {
+		t.Errorf("Trend.Latest = %v, want 0", m.Trend.Latest)
+	}
+	if m.Trend.LatestAt != nil {
+		t.Errorf("Trend.LatestAt = %v, want nil (synthetic 0 has no sample time)", *m.Trend.LatestAt)
+	}
+	if !reflect.DeepEqual(m.Trend.RecentScores, []float64{0}) {
+		t.Errorf("RecentScores = %v, want [0]", m.Trend.RecentScores)
+	}
+	if m.AvailabilityWarning != "最近连续评测失败，当前不可用" {
+		t.Errorf("AvailabilityWarning = %q, not propagated", m.AvailabilityWarning)
+	}
+}
+
+func TestBuildScoresHardFailAppendsZeroWithoutMutatingInput(t *testing.T) {
+	// 有历史成功分时，hard-fail 行应保留窗口均值、在 recent 末尾补 0（取末 2 真值 + 0），
+	// 让 sparkline 读作"从高跌到 0"；且绝不能原地改 decode 出来的共享 backing array。
+	c := newTestClient()
+	mk := func(v float64) *float64 { return &v }
+	latestAt := "2026-06-11T00:00:00Z"
+
+	rows := []rankingRow{{
+		ChannelName: "O-Max", RelaypulseChannelKey: "max",
+		ProviderName: "SaiAI", ServiceCLICommand: "claude",
+		Model: "claude-sonnet-4-6", ModelKey: "claude-sonnet-4-6",
+		ScoreTrend: ScoreTrend{
+			Latest:       mk(93),
+			LatestAt:     &latestAt,
+			Avg7D:        mk(90),
+			Avg30D:       mk(89),
+			RecentScores: []float64{88, 91, 93},
+		},
+		HardFailActive: true,
+	}}
+
+	m := c.buildScores(rows)["saiai|cc|max"].Models[0]
+	if want := []float64{91, 93, 0}; !reflect.DeepEqual(m.Trend.RecentScores, want) {
+		t.Fatalf("RecentScores = %v, want %v", m.Trend.RecentScores, want)
+	}
+	if m.Trend.Avg30D == nil || *m.Trend.Avg30D != 89 {
+		t.Errorf("Avg30D = %v, want 89 (historical average kept)", m.Trend.Avg30D)
+	}
+	if !reflect.DeepEqual(rows[0].ScoreTrend.RecentScores, []float64{88, 91, 93}) {
+		t.Fatalf("input RecentScores mutated: %v", rows[0].ScoreTrend.RecentScores)
+	}
+	// Writing through the normalized slice must not reach the decoded input.
+	m.Trend.RecentScores[0] = 1
+	if rows[0].ScoreTrend.RecentScores[1] != 91 {
+		t.Fatalf("normalized trend reused input backing array")
+	}
+}
+
+func TestBuildScoresPartialHardFailKeepsMaxFromHealthyModel(t *testing.T) {
+	// 同通道一个 model 故障(0)、一个健康(92)：MaxScore 仍取健康 model 的分，
+	// 不让"任一 model 失败"拖垮整通道排序。
+	c := newTestClient()
+	mk := func(v float64) *float64 { return &v }
+
+	rows := []rankingRow{
+		{
+			ChannelName: "O-Max", RelaypulseChannelKey: "max",
+			ProviderName: "SaiAI", ServiceCLICommand: "claude",
+			Model: "claude-haiku-4-5", ModelKey: "claude-haiku-4-5",
+			HardFailActive: true,
+		},
+		{
+			ChannelName: "O-Max", RelaypulseChannelKey: "max",
+			ProviderName: "SaiAI", ServiceCLICommand: "claude",
+			Model: "claude-sonnet-4-6", ModelKey: "claude-sonnet-4-6",
+			ScoreTrend: ScoreTrend{Latest: mk(92), RecentScores: []float64{92}},
+		},
+	}
+
+	entry := c.buildScores(rows)["saiai|cc|max"]
+	if entry.MaxScore == nil || *entry.MaxScore != 92 {
+		t.Fatalf("MaxScore = %v, want 92 (healthy model)", entry.MaxScore)
+	}
+	var failed int
+	for _, m := range entry.Models {
+		if m.Failed {
+			failed++
+			if m.Score == nil || *m.Score != 0 {
+				t.Errorf("failed model score = %v, want 0", m.Score)
+			}
+		}
+	}
+	if failed != 1 {
+		t.Fatalf("failed models = %d, want 1", failed)
+	}
+}
+
+func TestBuildScoresSkipsHardFailUserSubmission(t *testing.T) {
+	// 公开提交(submission_source=user)通道即便 hard-fail 也不进 relaypulse 列表。
+	c := newTestClient()
+	rows := []rankingRow{{
+		ChannelName: "U-foo-abc123", RelaypulseChannelKey: "foo-abc123",
+		ProviderName: "Foo", ServiceCLICommand: "claude",
+		Model: "claude-haiku-4-5", ModelKey: "claude-haiku-4-5",
+		SubmissionSource: "user",
+		HardFailActive:   true,
+	}}
+	if got := c.buildScores(rows); len(got) != 0 {
+		t.Fatalf("expected user hard-fail row skipped, got %v", keysOf(got))
+	}
+}
+
+func TestCloneScoresDeepCopiesRecentScores(t *testing.T) {
+	// cloneScores 返回独立快照：改克隆里的 RecentScores 不应回写到源 cache。
+	mk := func(v float64) *float64 { return &v }
+	src := map[string]Score{
+		"k": {
+			MaxScore: mk(6),
+			Trend:    ScoreTrend{RecentScores: []float64{1, 2, 3}},
+			Models:   []ModelScore{{Trend: ScoreTrend{RecentScores: []float64{4, 5, 6}}}},
+		},
+	}
+
+	cloned := cloneScores(src)["k"]
+	cloned.Trend.RecentScores[0] = 99
+	cloned.Models[0].Trend.RecentScores[0] = 88
+
+	if src["k"].Trend.RecentScores[0] != 1 {
+		t.Fatalf("aggregate trend recent_scores shared with clone")
+	}
+	if src["k"].Models[0].Trend.RecentScores[0] != 4 {
+		t.Fatalf("model trend recent_scores shared with clone")
 	}
 }
 

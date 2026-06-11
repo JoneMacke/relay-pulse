@@ -56,12 +56,20 @@ type ScoreTrend struct {
 }
 
 // ModelScore captures one (channel, model) row from rpdiag.
+//
+// Failed marks a row rpdiag currently considers hard-fail active (its most
+// recent evaluations died before scoring); for such rows Score and Trend are
+// normalized to 0 so the column shows "scored, currently out" instead of a
+// stale value or nothing. AvailabilityWarning carries rpdiag's user-facing
+// reason string, surfaced in the cell tooltip.
 type ModelScore struct {
-	Model     string     `json:"model,omitempty"`
-	ModelKey  string     `json:"model_key,omitempty"`
-	Score     *float64   `json:"score,omitempty"`
-	Trend     ScoreTrend `json:"trend"`
-	DetailURL string     `json:"detail_url,omitempty"`
+	Model               string     `json:"model,omitempty"`
+	ModelKey            string     `json:"model_key,omitempty"`
+	Score               *float64   `json:"score,omitempty"`
+	Trend               ScoreTrend `json:"trend"`
+	DetailURL           string     `json:"detail_url,omitempty"`
+	Failed              bool       `json:"failed,omitempty"`
+	AvailabilityWarning string     `json:"availability_warning,omitempty"`
 }
 
 // Score is the aggregated quality view for one (provider, service, channel)
@@ -231,6 +239,13 @@ type rankingRow struct {
 	DetailURL            string     `json:"detail_url"`
 	FinalQualityScore    *float64   `json:"final_quality_score"`
 	ScoreTrend           ScoreTrend `json:"score_trend"`
+	// HardFailActive is rpdiag's current-availability gate: the newest ≥3
+	// consecutive terminal attempts were hard-fails (FAILED with no
+	// fingerprint score) and the latest fail is within rpdiag's 7-day stale
+	// window. rpdiag forces its own `final_quality_score` to 0 under the same
+	// condition; we mirror that as a representative score of 0.
+	HardFailActive      bool   `json:"hard_fail_active"`
+	AvailabilityWarning string `json:"availability_warning"`
 }
 
 func (c *Client) refresh(ctx context.Context) (map[string]Score, error) {
@@ -287,6 +302,36 @@ func latestFingerprintSample(t ScoreTrend) *float64 {
 	return t.Latest
 }
 
+// normalizeHardFailTrend returns a display-only ScoreTrend for a row rpdiag has
+// flagged as currently hard-fail active. The representative point is forced to
+// 0 — rendered as a red bottom dot by the existing colour/Y scale, no new
+// visual state — while the historical window averages are kept so the
+// sparkline reads as "dropped from high to 0". The synthetic 0 has no real
+// sample timestamp, so LatestAt is cleared.
+//
+// RecentScores is rebuilt into a fresh slice (last up-to-2 real samples, then
+// the synthetic 0; just [0] when there is no history). It never aliases the
+// decoded row's backing array, which stays cached and is handed to concurrent
+// readers.
+func normalizeHardFailTrend(t ScoreTrend) ScoreTrend {
+	out := t
+	zero := 0.0
+	out.Latest = &zero
+	out.LatestAt = nil
+
+	recent := make([]float64, 0, 3)
+	if n := len(t.RecentScores); n > 0 {
+		start := 0
+		if n > 2 {
+			start = n - 2
+		}
+		recent = append(recent, t.RecentScores[start:]...)
+	}
+	recent = append(recent, 0)
+	out.RecentScores = recent
+	return out
+}
+
 // buildScores collapses many rpdiag rows into one entry per (provider,
 // service, channel) triple. Rows that lack a representative fingerprint
 // sample, or that come from the public /submit pipeline
@@ -298,11 +343,22 @@ func latestFingerprintSample(t ScoreTrend) *float64 {
 // availability multipliers). Composite scoring belongs to rpdiag's own
 // ranking page; relaypulse's "Quality" column shows pure response-quality
 // per its tooltip, so the sort key must match that visual semantics.
+//
+// Exception: a row rpdiag flags as hard-fail active is kept even with no
+// fingerprint sample and represented as 0. Its display trend is normalized so
+// the representative score, the sparkline's rightmost dot, and that dot's
+// colour all derive from the same 0 — a currently-failing channel renders as a
+// red bottom dot rather than vanishing or showing a stale value.
 func (c *Client) buildScores(rows []rankingRow) map[string]Score {
 	out := make(map[string]Score, len(rows))
 
 	for _, row := range rows {
 		latest := latestFingerprintSample(row.ScoreTrend)
+		trend := row.ScoreTrend
+		if row.HardFailActive {
+			trend = normalizeHardFailTrend(row.ScoreTrend)
+			latest = trend.Latest // synthetic 0
+		}
 		if latest == nil {
 			continue
 		}
@@ -325,16 +381,18 @@ func (c *Client) buildScores(rows []rankingRow) map[string]Score {
 		key := ScoreKey(provider, service, channel)
 		entry := out[key]
 		entry.Models = append(entry.Models, ModelScore{
-			Model:     row.Model,
-			ModelKey:  row.ModelKey,
-			Score:     copyFloat(latest),
-			Trend:     row.ScoreTrend,
-			DetailURL: row.DetailURL,
+			Model:               row.Model,
+			ModelKey:            row.ModelKey,
+			Score:               copyFloat(latest),
+			Trend:               trend,
+			DetailURL:           row.DetailURL,
+			Failed:              row.HardFailActive,
+			AvailabilityWarning: row.AvailabilityWarning,
 		})
 
 		if entry.MaxScore == nil || *latest > *entry.MaxScore {
 			entry.MaxScore = copyFloat(latest)
-			entry.Trend = row.ScoreTrend
+			entry.Trend = trend
 			// 通道整体跳转 = max-score 那行的 detail_url 去掉 model 参数 →
 			// 落到 rpdiag 的"服务商+通道"概览页（channel name 与大小写、前缀都来自
 			// rpdiag，本地不再猜测路由规则）。
@@ -431,12 +489,26 @@ func copyFloat(v *float64) *float64 {
 	return &x
 }
 
+// cloneScoreTrend returns a copy whose RecentScores slice is independent of the
+// source. The other fields are value types or never-mutated pointers, so a
+// shallow struct copy is enough for them.
+func cloneScoreTrend(t ScoreTrend) ScoreTrend {
+	if t.RecentScores != nil {
+		t.RecentScores = append([]float64(nil), t.RecentScores...)
+	}
+	return t
+}
+
 func cloneScores(src map[string]Score) map[string]Score {
 	dst := make(map[string]Score, len(src))
 	for k, v := range src {
 		models := make([]ModelScore, len(v.Models))
 		copy(models, v.Models)
+		for i := range models {
+			models[i].Trend = cloneScoreTrend(models[i].Trend)
+		}
 		v.Models = models
+		v.Trend = cloneScoreTrend(v.Trend)
 		dst[k] = v
 	}
 	return dst

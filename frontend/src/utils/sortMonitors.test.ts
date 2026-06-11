@@ -347,6 +347,32 @@ describe('sortMonitors', () => {
       expect(result.map((d) => d.id)).toEqual(['1', '3', '2']);
     });
 
+    it('故障态 0 是有效分（非 null），降序时排在 null 之前', () => {
+      const data = [
+        createMockData({ id: '1', qualityScore: 0, lastCheckLatency: 100 }),
+        createMockData({ id: '2', qualityScore: null, lastCheckLatency: 100 }),
+        createMockData({ id: '3', qualityScore: 10, lastCheckLatency: 100 }),
+      ];
+      const config: SortConfig = { key: 'qualityScore', direction: 'desc' };
+
+      const result = sortMonitors(data, config);
+
+      expect(result.map((d) => d.id)).toEqual(['3', '1', '2']);
+    });
+
+    it('故障态 0 升序排最前，null 仍沉底', () => {
+      const data = [
+        createMockData({ id: '1', qualityScore: 0, lastCheckLatency: 100 }),
+        createMockData({ id: '2', qualityScore: null, lastCheckLatency: 100 }),
+        createMockData({ id: '3', qualityScore: 10, lastCheckLatency: 100 }),
+      ];
+      const config: SortConfig = { key: 'qualityScore', direction: 'asc' };
+
+      const result = sortMonitors(data, config);
+
+      expect(result.map((d) => d.id)).toEqual(['1', '3', '2']);
+    });
+
     it('多个 null 时按延迟二级排序', () => {
       const data = [
         createMockData({ id: '1', qualityScore: null, lastCheckLatency: 200 }),
