@@ -314,7 +314,7 @@ time=2024-01-15T10:30:00.000Z level=INFO msg=消息 app=relay-pulse component=ap
 
 ### 前端架构
 
-React SPA，采用嵌套路由布局（`LanguageLayout` + `Outlet`），42 组件、15 hooks、10+ utils：
+React SPA，采用嵌套路由布局（`LanguageLayout` + `Outlet`），45 组件/模块、15 hooks、12 utils：
 
 ```
 frontend/src/
@@ -342,16 +342,21 @@ frontend/src/
 │   │   ├── AnnotationChip / AnnotationCell
 │   │   ├── AnnotationTooltip
 │   │   └── index.ts
-│   ├── admin/                     → 管理后台（7 文件）
+│   ├── admin/                     → 管理后台（11 文件）
 │   │   ├── AdminAuth.tsx          → 管理员认证
 │   │   ├── SubmissionList/Detail  → 收录申请管理
 │   │   ├── ChangeRequestList.tsx  → 变更请求管理
 │   │   ├── MonitorList/Detail     → monitors.d/ 通道管理
-│   │   └── MonitorForm.tsx        → 通道创建/编辑表单
-│   └── onboarding/                → 自助收录（3 文件）
+│   │   ├── MonitorForm.tsx        → 通道创建/编辑表单
+│   │   ├── MonitorLogsTab.tsx     → 探测历史日志页
+│   │   ├── CurlCommandBlock.tsx   → 可复制脱敏 curl 展示
+│   │   ├── FormControls.tsx       → 表单控件（引 fieldStyles）
+│   │   └── fieldStyles.ts         → 后台密集字段设计语言单一源（fieldInputClass/fieldSelectClass/fieldShapeClass，dense 形参）
+│   └── onboarding/                → 自助收录（4 文件）
 │       ├── ProviderInfoStep.tsx   → 服务商信息
 │       ├── ConnectionTestStep.tsx → 连接测试
-│       └── ConfirmStep.tsx        → 确认提交
+│       ├── ConfirmStep.tsx        → 确认提交
+│       └── controls.ts            → 公开提交向导共享样式单一源（input/select/label/hint/主次按钮 className 常量，申请+变更共用）
 ├── hooks/                     → 自定义 Hooks（15 文件）
 │   ├── useMonitorData.ts     → API 轮询与数据管理
 │   ├── useFavorites.ts       → 收藏持久化 (localStorage)
