@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronRight } from 'lucide-react';
 import type { OnboardingFormData, OnboardingMeta, ChannelSourceOption } from '../../types/onboarding';
+import { inputClass, selectClass, labelClass, hintClass } from './controls';
 
 interface ProviderInfoStepProps {
   formData: OnboardingFormData;
@@ -105,7 +106,7 @@ export function ProviderInfoStep({ formData, updateField, meta, onNext }: Provid
 
       {/* Provider name */}
       <div>
-        <label htmlFor="ob-provider-name" className="block text-sm font-medium text-primary mb-2">
+        <label htmlFor="ob-provider-name" className={labelClass}>
           {t('onboarding.providerInfo.providerName')}
           <span className="text-danger ml-0.5">*</span>
         </label>
@@ -119,9 +120,7 @@ export function ProviderInfoStep({ formData, updateField, meta, onNext }: Provid
           aria-invalid={providerNameError || undefined}
           aria-describedby="ob-provider-name-hint"
           placeholder={t('onboarding.providerInfo.providerNamePlaceholder')}
-          className={`w-full px-4 py-2 bg-surface border rounded-lg text-primary placeholder-muted focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50 ${
-            providerNameError ? 'border-danger' : 'border-muted'
-          }`}
+          className={inputClass(providerNameError)}
         />
         <p
           id="ob-provider-name-hint"
@@ -134,7 +133,7 @@ export function ProviderInfoStep({ formData, updateField, meta, onNext }: Provid
 
       {/* Website URL */}
       <div>
-        <label htmlFor="ob-website-url" className="block text-sm font-medium text-primary mb-2">
+        <label htmlFor="ob-website-url" className={labelClass}>
           {t('onboarding.providerInfo.websiteUrl')}
           <span className="text-danger ml-0.5">*</span>
         </label>
@@ -145,13 +144,13 @@ export function ProviderInfoStep({ formData, updateField, meta, onNext }: Provid
           value={formData.websiteUrl}
           onChange={(e) => updateField('websiteUrl', e.target.value)}
           placeholder="https://example.com"
-          className="w-full px-4 py-2 bg-surface border border-muted rounded-lg text-primary placeholder-muted focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50"
+          className={inputClass()}
         />
       </div>
 
       {/* Service type - select */}
       <div>
-        <label htmlFor="ob-service-type" className="block text-sm font-medium text-primary mb-2">
+        <label htmlFor="ob-service-type" className={labelClass}>
           {t('onboarding.providerInfo.serviceType')}
           <span className="text-danger ml-0.5">*</span>
         </label>
@@ -159,7 +158,7 @@ export function ProviderInfoStep({ formData, updateField, meta, onNext }: Provid
           id="ob-service-type"
           value={formData.serviceType}
           onChange={(e) => updateField('serviceType', e.target.value)}
-          className="w-full px-4 py-2 bg-surface border border-muted rounded-lg text-primary focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50"
+          className={selectClass}
         >
           {meta.service_types.map((st) => (
             <option key={st} value={st}>
@@ -171,7 +170,7 @@ export function ProviderInfoStep({ formData, updateField, meta, onNext }: Provid
 
       {/* Channel type - card radio group */}
       <fieldset>
-        <legend className="block text-sm font-medium text-primary mb-2">
+        <legend className={labelClass}>
           {t('onboarding.providerInfo.channelType')}
           <span className="text-danger ml-0.5">*</span>
         </legend>
@@ -204,7 +203,7 @@ export function ProviderInfoStep({ formData, updateField, meta, onNext }: Provid
 
       {/* Channel source — flat per-service controlled vocabulary, grouped by category */}
       <div>
-        <label htmlFor="ob-channel-source" className="block text-sm font-medium text-primary mb-2">
+        <label htmlFor="ob-channel-source" className={labelClass}>
           {t('onboarding.providerInfo.channelSource')}
           <span className="text-danger ml-0.5">*</span>
         </label>
@@ -212,7 +211,7 @@ export function ProviderInfoStep({ formData, updateField, meta, onNext }: Provid
           id="ob-channel-source"
           value={formData.channelSource}
           onChange={(e) => updateField('channelSource', e.target.value)}
-          className="w-full px-4 py-2 bg-surface border border-muted rounded-lg text-primary focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50"
+          className={selectClass}
         >
           <option value="" disabled>
             {t('onboarding.providerInfo.channelSourcePlaceholder', { defaultValue: '请选择接入来源' })}
@@ -230,14 +229,14 @@ export function ProviderInfoStep({ formData, updateField, meta, onNext }: Provid
             </optgroup>
           ))}
         </select>
-        <p className="mt-1 text-xs text-secondary">
+        <p className={hintClass}>
           {t('onboarding.providerInfo.channelSourceHint', { defaultValue: '没有合适的来源？请联系运营补充（QQ:18058344）' })}
         </p>
       </div>
 
       {/* Channel group — relay's own grouping tag */}
       <div>
-        <label htmlFor="ob-channel-group" className="block text-sm font-medium text-primary mb-2">
+        <label htmlFor="ob-channel-group" className={labelClass}>
           {t('onboarding.providerInfo.channelGroup', { defaultValue: '通道分组' })}
         </label>
         <input
@@ -247,9 +246,9 @@ export function ProviderInfoStep({ formData, updateField, meta, onNext }: Provid
           onChange={(e) => updateField('channelGroup', e.target.value.toLowerCase().replace(/[^a-z0-9]/g, ''))}
           placeholder={meta.channel_group_rule?.default ?? 'main'}
           maxLength={groupMaxLength}
-          className="w-full px-4 py-2 bg-surface border border-muted rounded-lg text-primary placeholder-muted focus:outline-none focus:ring-2 focus:ring-accent"
+          className={inputClass()}
         />
-        <p className="mt-1 text-xs text-secondary">
+        <p className={hintClass}>
           {t('onboarding.providerInfo.channelGroupHint', {
             defaultValue: '用于区分同一来源的多条通道（如 us、eu、v2），留空默认 main',
           })}

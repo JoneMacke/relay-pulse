@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { ChevronLeft, ChevronRight, Eye, EyeOff, Play, Clock, Loader2, CheckCircle2, AlertTriangle, XCircle, CircleHelp } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { OnboardingFormData, OnboardingMeta, OnboardingTestResult } from '../../types/onboarding';
+import { inputClass, selectClass, labelClass, hintClass } from './controls';
 
 /**
  * Module-level countdown store for proof validity.
@@ -176,7 +177,7 @@ export function ConnectionTestStep({
           </div>
           {showVariantSelect && (
             <div>
-              <label htmlFor="ob-test-variant" className="block text-sm font-medium text-primary mb-2">
+              <label htmlFor="ob-test-variant" className={labelClass}>
                 {t('onboarding.connectionTest.testVariant')}
               </label>
               <select
@@ -184,13 +185,13 @@ export function ConnectionTestStep({
                 value={formData.testVariant}
                 onChange={(e) => updateField('testVariant', e.target.value)}
                 disabled={isTesting}
-                className="w-full px-4 py-2 bg-surface border border-muted rounded-lg text-primary focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50"
+                className={selectClass}
               >
                 {sortedVariants.map((v) => (
                   <option key={v.id} value={v.id}>{v.id}</option>
                 ))}
               </select>
-              <p className="mt-1 text-xs text-secondary">
+              <p className={hintClass}>
                 {t('onboarding.connectionTest.variantHint', { defaultValue: '选择用于测试的模型模板（不同模型可能鉴权策略不同）' })}
               </p>
             </div>
@@ -200,7 +201,7 @@ export function ConnectionTestStep({
 
       {/* Base URL */}
       <div>
-        <label htmlFor="ob-base-url" className="block text-sm font-medium text-primary mb-2">
+        <label htmlFor="ob-base-url" className={labelClass}>
           {t('onboarding.connectionTest.baseUrl')}
           <span className="text-danger ml-0.5">*</span>
         </label>
@@ -212,14 +213,14 @@ export function ConnectionTestStep({
           onChange={(e) => updateField('baseUrl', e.target.value)}
           placeholder="https://api.example.com"
           disabled={isTesting}
-          className="w-full px-4 py-2 bg-surface border border-muted rounded-lg text-primary placeholder-muted focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50"
+          className={inputClass()}
         />
-        <p className="mt-1 text-xs text-secondary">{t('onboarding.connectionTest.baseUrlHint')}</p>
+        <p className={hintClass}>{t('onboarding.connectionTest.baseUrlHint')}</p>
       </div>
 
       {/* API Key with show/hide toggle */}
       <div>
-        <label htmlFor="ob-api-key" className="block text-sm font-medium text-primary mb-2">
+        <label htmlFor="ob-api-key" className={labelClass}>
           {t('onboarding.connectionTest.apiKey')}
           <span className="text-danger ml-0.5">*</span>
         </label>
@@ -232,7 +233,7 @@ export function ConnectionTestStep({
             onChange={(e) => updateField('apiKey', e.target.value)}
             placeholder={t('onboarding.connectionTest.apiKeyPlaceholder')}
             disabled={isTesting}
-            className="w-full px-4 py-2 pr-12 bg-surface border border-muted rounded-lg text-primary placeholder-muted focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50"
+            className={`${inputClass()} pr-12`}
           />
           <button
             type="button"
@@ -243,7 +244,7 @@ export function ConnectionTestStep({
             {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
           </button>
         </div>
-        <p className="mt-1 text-xs text-secondary">{t('onboarding.connectionTest.apiKeyHint')}</p>
+        <p className={hintClass}>{t('onboarding.connectionTest.apiKeyHint')}</p>
       </div>
 
       {/* Run Test button */}
