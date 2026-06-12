@@ -503,23 +503,23 @@ function formatModelTooltipRow(m: RpdiagModelScore): string {
   const t = m.trend;
   // 近 3 次：与 sparkline 的 slot 2/3/4 同源，让 tooltip 把 5 个槽位读全
   // （30d / 7d / 近 3 次）。优先用 v5.4 的 recent_attempts（逐次 terminal attempt
-  // 结局，null=hard-fail→"不可用"）；旧 wire 回退到 recent_scores + 整行 failed。
+  // 结局，null=hard-fail→"不可测"）；旧 wire 回退到 recent_scores + 整行 failed。
   // 30d / 7d 仍是真实历史均值。
   let recentStr: string;
   if (Array.isArray(t?.recent_attempts)) {
     const attempts = t.recent_attempts.slice(-3);
     recentStr = attempts.length > 0
-      ? attempts.map((v) => (typeof v === 'number' ? fmt(v) : '不可用')).join(', ')
+      ? attempts.map((v) => (typeof v === 'number' ? fmt(v) : '不可测')).join(', ')
       : '—';
   } else {
     const recent = Array.isArray(t?.recent_scores) ? t.recent_scores.slice(-3) : [];
     if (recent.length > 0) {
       recentStr = recent
-        .map((v, i) => (m.failed && i === recent.length - 1 ? '不可用' : fmt(v)))
+        .map((v, i) => (m.failed && i === recent.length - 1 ? '不可测' : fmt(v)))
         .join(', ');
     } else {
       // ranking-export.v5.1 wire 没有 recent_scores 时回退到单个 latest。
-      recentStr = m.failed ? '不可用' : fmt(t?.latest);
+      recentStr = m.failed ? '不可测' : fmt(t?.latest);
     }
   }
   const base = `${key}  30d=${fmt(t?.avg_30d)}  7d=${fmt(t?.avg_7d)}  近3次=${recentStr}`;
