@@ -52,13 +52,16 @@ type ScoreTrend struct {
 	// no in-scope samples exist; len may be 1 or 2 during cold start.
 	RecentScores []float64 `json:"recent_scores,omitempty"`
 	// RecentAttempts holds up to 3 most-recent quality-relevant terminal
-	// attempts in time-ascending order (ranking-export.v5.4+). A non-nil
-	// element is a scored fingerprint sample; a nil element is a hard-fail
-	// attempt (rendered as a neutral grey marker). nil slice means pre-v5.4
-	// wire or no quality-relevant terminal attempt — the front end then falls
-	// back to RecentScores. Unlike RecentScores this is not used for the
-	// representative score; it only drives the sparkline's recent slots.
-	RecentAttempts []*float64 `json:"recent_attempts,omitempty"`
+	// attempts in time-ascending order (ranking-export.v5.4+; bounded to the
+	// last 7 days in v5.5). A non-nil element is a scored fingerprint sample; a
+	// nil element is a hard-fail attempt (rendered as a neutral grey marker).
+	// A non-nil empty slice means v5.5 found no in-window attempt — the front
+	// end then draws no recent dots (NOT a fallback). A nil slice means the
+	// upstream field was absent/null (pre-v5.5 wire); only then does the front
+	// end fall back to RecentScores. Hence NO `omitempty`: the empty-vs-absent
+	// distinction must survive re-serialization to the browser. Unlike
+	// RecentScores this is not used for the representative score.
+	RecentAttempts []*float64 `json:"recent_attempts"`
 	N7D            int        `json:"n_7d"`
 	N30D           int        `json:"n_30d"`
 }
@@ -511,7 +514,10 @@ func cloneScoreTrend(t ScoreTrend) ScoreTrend {
 	}
 	if t.RecentAttempts != nil {
 		// Deep-copy: each element is a pointer, so a shallow slice copy would
-		// still alias the underlying float64s with the cached snapshot.
+		// still alias the underlying float64s with the cached snapshot. The nil
+		// guard preserves the nil-vs-empty distinction (a non-nil empty slice
+		// clones to a non-nil empty slice via make(.., 0)), which the front end
+		// relies on to tell "no in-window attempt" from "old wire".
 		attempts := make([]*float64, len(t.RecentAttempts))
 		for i, v := range t.RecentAttempts {
 			attempts[i] = copyFloat(v)

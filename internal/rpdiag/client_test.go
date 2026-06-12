@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -484,6 +485,58 @@ func TestScoresAcceptsV53UnavailableRow(t *testing.T) {
 	}
 	if m.AvailabilityWarning != "质量探测未取得可评分响应" {
 		t.Errorf("AvailabilityWarning = %q, want the unavailable-export wording", m.AvailabilityWarning)
+	}
+}
+
+// TestRecentAttemptsEmptyVsAbsentRoundTrip locks the v5.5 contract: an upstream
+// empty `recent_attempts:[]` ("no in-7d attempt") must survive decode → clone →
+// re-encode as `[]`, while an absent/null field must survive as `null`. The
+// front end keys off exactly this distinction — `[]` draws no recent dots,
+// `null` falls back to recent_scores — so an `omitempty` regression that
+// collapsed `[]` to absent would silently resurrect stale dots.
+func TestRecentAttemptsEmptyVsAbsentRoundTrip(t *testing.T) {
+	cases := []struct {
+		name      string
+		trendJSON string
+		want      string
+	}{
+		// latest:83 keeps the row past buildScores' representative-score gate; the
+		// recent_attempts field under test is independent of it.
+		{"empty_stays_empty", `{"latest":83.0,"recent_attempts":[]}`, `"recent_attempts":[]`},
+		{"absent_stays_null", `{"latest":83.0}`, `"recent_attempts":null`},
+		{"values_preserved", `{"latest":83.0,"recent_attempts":[null,88.0]}`, `"recent_attempts":[null,88]`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := `{"schema_version":"ranking-export.v5.5","items":[` +
+				`{"channel_name":"O-Max","relaypulse_channel_key":"max","provider_name":"TopRouterCN",` +
+				`"service_cli_command":"claude","model":"claude-opus-4-7","model_key":"claude-opus-4-7",` +
+				`"detail_url":"https://diag.relaypulse.top/channel/O-Max",` +
+				`"score_trend":` + tc.trendJSON + `}]}`
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = fmt.Fprintln(w, payload)
+			}))
+			defer srv.Close()
+
+			client := NewClient(nil, srv.URL, 0, true)
+			scores, err := client.Scores(context.Background())
+			if err != nil {
+				t.Fatalf("Scores returned error: %v", err)
+			}
+			entry, ok := scores["toproutercn|cc|max"]
+			if !ok {
+				t.Fatalf("missing toproutercn|cc|max entry, got %v", keysOf(scores))
+			}
+			// Marshal the cloned model trend the way the HTTP handler serves it
+			// to the browser, then assert the recent_attempts fragment.
+			out, err := json.Marshal(entry.Models[0].Trend)
+			if err != nil {
+				t.Fatalf("marshal trend: %v", err)
+			}
+			if !strings.Contains(string(out), tc.want) {
+				t.Errorf("trend JSON = %s, want substring %q", out, tc.want)
+			}
+		})
 	}
 }
 
