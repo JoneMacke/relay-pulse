@@ -251,6 +251,9 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
   // 用 qualityScoreYNorm 计算。绝对分数由 dot 颜色 + tooltip 数字双重提供。
   type SparkNode = { x: number; y: number; color: string };
   type SparkStop = { offset: number; color: string };
+  // 一个候选槽位点：slot=横向位置，value=分数（不可用点 value 无意义、取 0 贴底），
+  // unavailable=true 表示该次 hard-fail，画中性灰而非 qualityScoreColor 的红。
+  type SlotPoint = { slot: number; value: number; unavailable: boolean };
 
   // 把 (slot, 分数) 映射成一个着色节点：x 取槽位中心，y 走 qualityScoreYNorm
   // 非线性轴，color 由调用方决定（真实分用 qualityScoreColor，不可用用灰）。
@@ -261,61 +264,65 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
 
   const series = ranked
     .map((m) => {
-      // 构造 5 槽位 values 数组：slot 0/1 永远是窗口均值；slot 2/3/4 是
-      // recent_scores 右对齐升序填入（n=1 → slot 4，n=2 → slot 3/4，n=3 → slot 2/3/4）。
-      // ranking-export.v5.1 wire 没有 recent_scores 时，用 latest 单点填 slot 4
-      // 作为前向兼容 fallback——视觉上仍把"最新分"摆在最右。
-      const slotValues: Array<number | null | undefined> = [
-        m.trend?.avg_30d,
-        m.trend?.avg_7d,
-        null,
-        null,
-        null,
-      ];
-      const recentScores = Array.isArray(m.trend?.recent_scores)
-        ? m.trend.recent_scores.slice(-3)
-        : [];
-      if (recentScores.length > 0) {
-        const startSlot = NUM_SLOTS - recentScores.length;
-        recentScores.forEach((v, i) => {
-          slotValues[startSlot + i] = v;
+      const t = m.trend;
+      const failed = m.failed === true;
+
+      // 收集"有数据"的槽位点。slot 0/1 永远是 30d / 7d 窗口均值：有打分样本才画、
+      // 无则留空——绝不涂灰（均值是分数的平均，没有分就没有均值，涂灰会把"无数据"
+      // 和"不可用"混为一谈）。slot 2/3/4 是最近 3 次的结局，逻辑见下。
+      const points: SlotPoint[] = [];
+      if (typeof t?.avg_30d === 'number') points.push({ slot: 0, value: t.avg_30d, unavailable: false });
+      if (typeof t?.avg_7d === 'number') points.push({ slot: 1, value: t.avg_7d, unavailable: false });
+
+      if (Array.isArray(t?.recent_attempts)) {
+        // v5.4 wire：slot 2/3/4 = 最近 ≤3 次质量相关 terminal attempt，右对齐升序。
+        // number→按分着色；null→该次 hard-fail，画中性灰贴底（与"槽位无数据"区分——
+        // 无数据不会进 points，灰点是实打实的一次失败探测）。
+        const attempts = t.recent_attempts.slice(-3);
+        const startSlot = NUM_SLOTS - attempts.length;
+        attempts.forEach((v, i) => {
+          const slot = startSlot + i;
+          points.push(
+            typeof v === 'number'
+              ? { slot, value: v, unavailable: false }
+              : { slot, value: 0, unavailable: true },
+          );
         });
-      } else if (typeof m.trend?.latest === 'number') {
-        slotValues[NUM_SLOTS - 1] = m.trend.latest;
+      } else {
+        // 旧 wire fallback（pre-v5.4，无 recent_attempts）：沿用 recent_scores
+        // （打分-only，右对齐升序）；无则用 latest 单点填最右槽位（v5.1 兼容）。
+        const recentScores = Array.isArray(t?.recent_scores) ? t.recent_scores.slice(-3) : [];
+        if (recentScores.length > 0) {
+          const startSlot = NUM_SLOTS - recentScores.length;
+          recentScores.forEach((v, i) => {
+            points.push({ slot: startSlot + i, value: v, unavailable: false });
+          });
+        } else if (typeof t?.latest === 'number') {
+          points.push({ slot: NUM_SLOTS - 1, value: t.latest, unavailable: false });
+        }
+        // client.go 的 normalizeHardFailTrend 在旧 wire 末尾塞了合成 0 表示
+        // "当前不可用"，把最右点改判为灰，保持 v5.4 之前的渲染不变。
+        if (failed && points.length > 0) {
+          const last = points[points.length - 1];
+          points[points.length - 1] = { ...last, value: 0, unavailable: true };
+        }
       }
 
-      const present = slotValues
-        .map((v, slot) => (typeof v === 'number' ? { value: v, slot } : null))
-        .filter((p): p is { value: number; slot: number } => p !== null);
+      if (points.length === 0) return null;
 
-      // client.go 的 normalizeHardFailTrend 给硬失败行在最右槽位塞一个合成 0 标记
-      // "当前不可用"。该终点（以及完全无质量历史的 model）一律画中性灰、绝不用
-      // qualityScoreColor(0) 的红——灰=测不了、红=测到响应但质量真差。
-      const failed = m.failed === true;
       let nodes: SparkNode[];
-      if (failed) {
-        const real = present.slice(0, -1);
-        if (real.length === 0) {
-          // 没有任何历史分可锚定：画一条贯穿 5 槽位、贴底的整条灰线，让不可用
-          // model 读成一条清晰的"什么都没测到"折线，而不是孤零零一个灰点。
-          nodes = Array.from({ length: NUM_SLOTS }, (_, slot) =>
-            nodeAt(slot, 0, UNAVAILABLE_COLOR),
-          );
-        } else {
-          // 真实样本各自按分着色；末尾的失败点贴底画灰。于是连接线最后一段从上一个
-          // 真实点的分色渐变落到灰——即"刚刚掉到不可用"的彩→灰过渡。
-          const failSlot = present[present.length - 1].slot;
-          nodes = [
-            ...real.map(({ value, slot }) =>
-              nodeAt(slot, value, qualityScoreColor(value)),
-            ),
-            nodeAt(failSlot, 0, UNAVAILABLE_COLOR),
-          ];
-        }
+      if (points.every((p) => p.unavailable)) {
+        // 纯不可用：没有任何均值/打分锚点，近况全是 hard-fail。沿用 Request A 视觉，
+        // 画一条贯穿 5 槽位、贴底的整条灰线，读成清晰的"什么都没测到"，而不是
+        // 孤零零几个灰点。
+        nodes = Array.from({ length: NUM_SLOTS }, (_, slot) =>
+          nodeAt(slot, 0, UNAVAILABLE_COLOR),
+        );
       } else {
-        if (present.length === 0) return null;
-        nodes = present.map(({ value, slot }) =>
-          nodeAt(slot, value, qualityScoreColor(value)),
+        // 逐元素着色：真实分走 qualityScoreColor，失败点贴底走中性灰。连接线在彩↔灰
+        // 之间渐变，把"刚掉到不可用"或"已恢复"的过渡如实画出来。
+        nodes = points.map(({ slot, value, unavailable }) =>
+          nodeAt(slot, value, unavailable ? UNAVAILABLE_COLOR : qualityScoreColor(value)),
         );
       }
 
@@ -494,20 +501,26 @@ function formatModelTooltipRow(m: RpdiagModelScore): string {
   const fmt = (v: number | null | undefined) => (typeof v === 'number' ? v.toFixed(1) : '—');
   const key = m.model_key || m.model || '?';
   const t = m.trend;
-  // 近 3 次：与 sparkline 的 slot 2/3/4 同源（recent_scores 升序，旧→新），让 tooltip
-  // 把 5 个槽位读全（30d / 7d / 近 3 次）。故障态行的最后一个是 normalizeHardFailTrend
-  // 合成的 0，显示"不可用"而非 0.0，避免被读成真实质量分；30d / 7d 仍是真实历史均值。
-  const recent = Array.isArray(t?.recent_scores) ? t.recent_scores.slice(-3) : [];
+  // 近 3 次：与 sparkline 的 slot 2/3/4 同源，让 tooltip 把 5 个槽位读全
+  // （30d / 7d / 近 3 次）。优先用 v5.4 的 recent_attempts（逐次 terminal attempt
+  // 结局，null=hard-fail→"不可用"）；旧 wire 回退到 recent_scores + 整行 failed。
+  // 30d / 7d 仍是真实历史均值。
   let recentStr: string;
-  if (recent.length > 0) {
-    recentStr = recent
-      .map((v, i) =>
-        m.failed && i === recent.length - 1 ? '不可用' : fmt(v),
-      )
-      .join(', ');
+  if (Array.isArray(t?.recent_attempts)) {
+    const attempts = t.recent_attempts.slice(-3);
+    recentStr = attempts.length > 0
+      ? attempts.map((v) => (typeof v === 'number' ? fmt(v) : '不可用')).join(', ')
+      : '—';
   } else {
-    // ranking-export.v5.1 wire 没有 recent_scores 时回退到单个 latest。
-    recentStr = m.failed ? '不可用' : fmt(t?.latest);
+    const recent = Array.isArray(t?.recent_scores) ? t.recent_scores.slice(-3) : [];
+    if (recent.length > 0) {
+      recentStr = recent
+        .map((v, i) => (m.failed && i === recent.length - 1 ? '不可用' : fmt(v)))
+        .join(', ');
+    } else {
+      // ranking-export.v5.1 wire 没有 recent_scores 时回退到单个 latest。
+      recentStr = m.failed ? '不可用' : fmt(t?.latest);
+    }
   }
   const base = `${key}  30d=${fmt(t?.avg_30d)}  7d=${fmt(t?.avg_7d)}  近3次=${recentStr}`;
   return m.availability_warning ? `${base}  ⚠ ${m.availability_warning}` : base;

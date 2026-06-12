@@ -131,6 +131,9 @@ export interface RpdiagScoreTrend {
   avg_30d?: number | null;
   /** v5.2+: 最近 ≤3 个 sample 升序（旧→新）。null/缺失时走 latest fallback。 */
   recent_scores?: number[] | null;
+  /** v5.4+: 最近 ≤3 次质量相关 terminal attempt 升序（旧→新）。number=打分样本，
+   *  null=hard-fail（画灰点）。存在时 sparkline slot 2/3/4 改用它；缺失走 recent_scores。 */
+  recent_attempts?: (number | null)[] | null;
   n_7d: number;
   n_30d: number;
 }

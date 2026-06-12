@@ -51,8 +51,16 @@ type ScoreTrend struct {
 	// time-ascending order (oldest → newest). nil on pre-v5.2 wire or when
 	// no in-scope samples exist; len may be 1 or 2 during cold start.
 	RecentScores []float64 `json:"recent_scores,omitempty"`
-	N7D          int       `json:"n_7d"`
-	N30D         int       `json:"n_30d"`
+	// RecentAttempts holds up to 3 most-recent quality-relevant terminal
+	// attempts in time-ascending order (ranking-export.v5.4+). A non-nil
+	// element is a scored fingerprint sample; a nil element is a hard-fail
+	// attempt (rendered as a neutral grey marker). nil slice means pre-v5.4
+	// wire or no quality-relevant terminal attempt — the front end then falls
+	// back to RecentScores. Unlike RecentScores this is not used for the
+	// representative score; it only drives the sparkline's recent slots.
+	RecentAttempts []*float64 `json:"recent_attempts,omitempty"`
+	N7D            int        `json:"n_7d"`
+	N30D           int        `json:"n_30d"`
 }
 
 // ModelScore captures one (channel, model) row from rpdiag.
@@ -331,6 +339,9 @@ func normalizeHardFailTrend(t ScoreTrend) ScoreTrend {
 	}
 	recent = append(recent, 0)
 	out.RecentScores = recent
+	// RecentAttempts (v5.4) carries real per-attempt grey markers and is left
+	// untouched — it is the preferred source for the sparkline's recent slots,
+	// so it must not be overwritten by this v5.3-era synthetic RecentScores tail.
 	return out
 }
 
@@ -491,12 +502,21 @@ func copyFloat(v *float64) *float64 {
 	return &x
 }
 
-// cloneScoreTrend returns a copy whose RecentScores slice is independent of the
+// cloneScoreTrend returns a copy whose slice fields are independent of the
 // source. The other fields are value types or never-mutated pointers, so a
 // shallow struct copy is enough for them.
 func cloneScoreTrend(t ScoreTrend) ScoreTrend {
 	if t.RecentScores != nil {
 		t.RecentScores = append([]float64(nil), t.RecentScores...)
+	}
+	if t.RecentAttempts != nil {
+		// Deep-copy: each element is a pointer, so a shallow slice copy would
+		// still alias the underlying float64s with the cached snapshot.
+		attempts := make([]*float64, len(t.RecentAttempts))
+		for i, v := range t.RecentAttempts {
+			attempts[i] = copyFloat(v)
+		}
+		t.RecentAttempts = attempts
 	}
 	return t
 }
