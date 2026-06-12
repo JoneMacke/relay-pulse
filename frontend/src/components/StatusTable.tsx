@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, useId, memo } from 'react';
 import { createPortal } from 'react-dom';
 import { List, type RowComponentProps } from 'react-window';
 import { ArrowUpDown, ArrowUp, ArrowDown, Zap, Shield, Filter, Info } from 'lucide-react';
@@ -205,6 +205,12 @@ interface StatusTableProps {
 //   贴底红点  → rpdiag 判该 model 当前硬失败故障态，后端已把 trend 归一化为 0
 //              （非"缺点补 0"，是真实的 0 值），tooltip 出故障原因
 function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; compact?: boolean }) {
+  // Unique base for the per-series SVG gradient ids. SVG <defs> ids are
+  // document-global, so every cell needs its own namespace; `useId` must run
+  // before the early return to satisfy the rules of hooks. Strip the colons
+  // React emits so the id is safe inside a `url(#…)` reference.
+  const gradientBaseId = useId().replace(/[^a-zA-Z0-9_-]/g, '');
+
   if (!score || !score.models || score.models.length === 0) {
     return <span className="text-muted text-xs">-</span>;
   }
@@ -273,11 +279,16 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
         const y = H - PAD - norm * (H - 2 * PAD);
         return { x, y, value: clamped };
       });
-      // 颜色取最右侧（最新）样本对应分；polyline 升序排，最后一个 present 总是 slot 最大者
-      const recent = present[present.length - 1].value;
-      return { points, color: qualityScoreColor(recent) };
+      // 连接线按"起点分 → 终点分"渐变着色：points 已按 slot（旧→新，左→右）升序，
+      // 所以首点是最早样本、末点是最新样本。圆点仍各自按自身分着色（见下）。
+      const startColor = qualityScoreColor(points[0].value);
+      const endColor = qualityScoreColor(points[points.length - 1].value);
+      return { points, startColor, endColor };
     })
-    .filter((s): s is { points: { x: number; y: number; value: number }[]; color: string } => s !== null);
+    .filter(
+      (s): s is { points: { x: number; y: number; value: number }[]; startColor: string; endColor: string } =>
+        s !== null,
+    );
 
   if (series.length === 0) {
     return <span className="text-muted text-xs">-</span>;
@@ -292,6 +303,28 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
         aria-hidden="true"
         className="flex-shrink-0"
       >
+        <defs>
+          {series.map((s, i) =>
+            s.points.length > 1 ? (
+              // Gradient axis runs horizontally from the first point's x (oldest
+              // sample) to the last point's x (newest), so offset 0 = 起点分色、
+              // offset 1 = 终点分色。userSpaceOnUse keeps it purely a function of
+              // x, independent of the polyline's vertical zig-zag.
+              <linearGradient
+                key={i}
+                id={`${gradientBaseId}-${i}`}
+                gradientUnits="userSpaceOnUse"
+                x1={s.points[0].x}
+                y1="0"
+                x2={s.points[s.points.length - 1].x}
+                y2="0"
+              >
+                <stop offset="0" stopColor={s.startColor} />
+                <stop offset="1" stopColor={s.endColor} />
+              </linearGradient>
+            ) : null,
+          )}
+        </defs>
         {referenceLines.map((line) => (
           <line
             key={line.score}
@@ -310,7 +343,7 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
               <polyline
                 points={s.points.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')}
                 fill="none"
-                stroke={s.color}
+                stroke={`url(#${gradientBaseId}-${i})`}
                 strokeWidth={STROKE_W}
                 strokeLinecap="round"
                 strokeLinejoin="round"
