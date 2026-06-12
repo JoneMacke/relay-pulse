@@ -494,10 +494,22 @@ function formatModelTooltipRow(m: RpdiagModelScore): string {
   const fmt = (v: number | null | undefined) => (typeof v === 'number' ? v.toFixed(1) : '—');
   const key = m.model_key || m.model || '?';
   const t = m.trend;
-  // 故障态行的 latest 是 normalizeHardFailTrend 合成的 0，显示"不可用"而非 0.0，
-  // 避免被读成真实质量分；30d / 7d 仍是真实历史均值。
-  const latest = m.failed ? '不可用' : fmt(t?.latest);
-  const base = `${key}  30d=${fmt(t?.avg_30d)}  7d=${fmt(t?.avg_7d)}  latest=${latest}`;
+  // 近 3 次：与 sparkline 的 slot 2/3/4 同源（recent_scores 升序，旧→新），让 tooltip
+  // 把 5 个槽位读全（30d / 7d / 近 3 次）。故障态行的最后一个是 normalizeHardFailTrend
+  // 合成的 0，显示"不可用"而非 0.0，避免被读成真实质量分；30d / 7d 仍是真实历史均值。
+  const recent = Array.isArray(t?.recent_scores) ? t.recent_scores.slice(-3) : [];
+  let recentStr: string;
+  if (recent.length > 0) {
+    recentStr = recent
+      .map((v, i) =>
+        m.failed && i === recent.length - 1 ? '不可用' : fmt(v),
+      )
+      .join(', ');
+  } else {
+    // ranking-export.v5.1 wire 没有 recent_scores 时回退到单个 latest。
+    recentStr = m.failed ? '不可用' : fmt(t?.latest);
+  }
+  const base = `${key}  30d=${fmt(t?.avg_30d)}  7d=${fmt(t?.avg_7d)}  近3次=${recentStr}`;
   return m.availability_warning ? `${base}  ⚠ ${m.availability_warning}` : base;
 }
 
