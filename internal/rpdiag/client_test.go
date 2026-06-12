@@ -446,6 +446,47 @@ func TestScoresRejectsUnsupportedSchema(t *testing.T) {
 	}
 }
 
+func TestScoresAcceptsV53UnavailableRow(t *testing.T) {
+	// v5.3 export feed: an export-only "unavailable" row for a model that never
+	// scored and is still hard-failing (e.g. a 403-only model). The schema gate
+	// accepts v5.x by prefix and the unknown `quality_state` field is ignored;
+	// the row rides the existing hard_fail_active path and renders as a kept
+	// gray-zero model carrying rpdiag's "couldn't measure" warning.
+	const payload = `{"schema_version":"ranking-export.v5.3","items":[` +
+		`{"channel_name":"M-Max","relaypulse_channel_key":"max","provider_name":"AIMZ",` +
+		`"service_cli_command":"claude","model":"claude-opus-4-8","model_key":"claude-opus-4-8",` +
+		`"quality_state":"unavailable","hard_fail_active":true,` +
+		`"availability_warning":"质量探测未取得可评分响应","final_quality_score":0,"score_trend":{}}` +
+		`]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintln(w, payload)
+	}))
+	defer srv.Close()
+
+	client := NewClient(nil, srv.URL, 0, true)
+	scores, err := client.Scores(context.Background())
+	if err != nil {
+		t.Fatalf("v5.3 payload rejected: %v", err)
+	}
+	entry, ok := scores["aimz|cc|max"]
+	if !ok {
+		t.Fatalf("expected aimz|cc|max, got %v", keysOf(scores))
+	}
+	if len(entry.Models) != 1 {
+		t.Fatalf("Models len = %d, want 1", len(entry.Models))
+	}
+	m := entry.Models[0]
+	if !m.Failed {
+		t.Errorf("Model.Failed = false, want true (unavailable row is hard-fail active)")
+	}
+	if m.Score == nil || *m.Score != 0 {
+		t.Errorf("Model.Score = %v, want 0", m.Score)
+	}
+	if m.AvailabilityWarning != "质量探测未取得可评分响应" {
+		t.Errorf("AvailabilityWarning = %q, want the unavailable-export wording", m.AvailabilityWarning)
+	}
+}
+
 // helpers ---------------------------------------------------------------
 
 func newTestClient() *Client {
