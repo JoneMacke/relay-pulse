@@ -192,8 +192,9 @@ interface StatusTableProps {
 
 // rpdiag 质量分单元格：所有 model 的 5 点 sparkline (30d 均 / 7d 均 / 最近 3
 // 次单 sample 升序) 叠在同一个 SVG 画布上，**不分块**。每条 polyline 颜色由
-// 该 model 自己最右侧 sample 的分数决定（100=绿/60=黄/0=红 平滑渐变），dot
-// 标记每个真实数据点；80 / 100 两条点划参考线作 Y 轴刻度。
+// 该 model 自己的真实质量 sample 决定（100=绿/60=黄/0=红 平滑渐变），dot
+// 标记每个真实数据点；硬失败合成点改用灰色不可用 marker。80 / 100 两条点划
+// 参考线作 Y 轴刻度。
 // 无可见数字，hover tooltip 出 per-model 明细。
 // recent_scores 在 ranking-export.v5.2 起暴露；v5.1 wire 则 fallback 到 3 点
 // (30d / 7d / latest) 显示，最新分始终落在最右侧槽位。
@@ -202,8 +203,8 @@ interface StatusTableProps {
 //   3 条线靠近 → "所有 model 表现接近"（共识）
 //   分散      → "各 model 差异大"（需点进详情看哪个掉了）
 //   缺点      → 不补 0；缺一个点的 model 只画 dot/短线
-//   贴底红点  → rpdiag 判该 model 当前硬失败故障态，后端已把 trend 归一化为 0
-//              （非"缺点补 0"，是真实的 0 值），tooltip 出故障原因
+//   灰色空心 marker → rpdiag 判该 model 当前硬失败故障态；置底表示测不了 /
+//                      无质量数据，不表示"质量 0 分"，tooltip 出故障原因
 function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; compact?: boolean }) {
   // Unique base for the per-series SVG gradient ids. SVG <defs> ids are
   // document-global, so every cell needs its own namespace; `useId` must run
@@ -230,6 +231,9 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
   // 圆点半径/线粗随 H 等比放大，desktop H=36 时圆点更醒目
   const DOT_R = compact ? 1.4 : 2.4;
   const STROKE_W = compact ? 1.2 : 1.6;
+  // 灰=测不了/无质量数据（硬失败故障态），与 qualityScoreColor 的红=测到响应且
+  // 质量真差区分开。中性灰跨 4 套主题都可辨，沿用本组件硬编码 HSL 的既有风格。
+  const UNAVAILABLE_COLOR = 'hsl(0 0% 55%)';
   // Y 轴参考线：80 / 100 两档，让点的高度有"刻度感"。score=80 对应 norm 0.4、
   // score=100 对应 norm 1.0；与 polyline/dot 共用 qualityScoreYNorm 保证一致。
   const referenceLines = [80, 100].map((markerScore) => ({
@@ -243,6 +247,9 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
   //   score 80-100 → 顶部 60%（实际业务关心的"好通道"区域）
   // 跨 row 仍可比（同分数 → 同高度），但读 sparkline 时要意识到刻度不是匀速的。
   // 用 qualityScoreYNorm 计算。绝对分数由 dot 颜色 + tooltip 数字双重提供。
+  type SparkPoint = { x: number; y: number; value: number };
+  type SparkStop = { offset: number; color: string };
+
   const series = ranked
     .map((m) => {
       // 构造 5 槽位 values 数组：slot 0/1 永远是窗口均值；slot 2/3/4 是
@@ -272,31 +279,41 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
         .map((v, slot) => (typeof v === 'number' ? { value: v, slot } : null))
         .filter((p): p is { value: number; slot: number } => p !== null);
       if (present.length === 0) return null;
-      const points = present.map(({ value, slot }) => {
+      const points: SparkPoint[] = present.map(({ value, slot }) => {
         const clamped = Math.max(0, Math.min(100, value));
         const norm = qualityScoreYNorm(clamped);
         const x = STEP / 2 + slot * STEP;
         const y = H - PAD - norm * (H - 2 * PAD);
         return { x, y, value: clamped };
       });
-      // 连接线按"相邻两点逐段渐变"着色：每个点贡献一个 gradient stop，stop 的
-      // offset 取该点在 x 轴上的归一化位置（points 按 slot 左→右单调递增），color
+
+      // client.go 的 normalizeHardFailTrend 把硬失败的合成 0 放在最右槽位。把它
+      // 从彩色质量线里拆出来：彩色线/圆点只表达真实分数，合成点单独画成灰色不可用
+      // marker（仍置底，但不参与渐变着色，不再被读成"质量 0 分"的红点）。
+      const failed = m.failed === true;
+      const failPoint = failed ? points[points.length - 1] : null;
+      const realPoints = failed ? points.slice(0, -1) : points;
+
+      // 连接线按"相邻两点逐段渐变"着色：每个真实点贡献一个 gradient stop，stop 的
+      // offset 取该点在 x 轴上的归一化位置（realPoints 按 slot 左→右单调递增），color
       // 取该点自身分色。于是线在每个顶点处正好等于该顶点的圆点色，相邻 stop 之间
       // 就是那一段的两点渐变——线完全贴合圆点，而非整条首→末两色过渡。
-      const x0 = points[0].x;
-      const span = points[points.length - 1].x - x0 || 1;
-      const stops = points.map((p) => ({
+      const x0 = realPoints[0]?.x ?? 0;
+      const span =
+        realPoints.length > 1 ? realPoints[realPoints.length - 1].x - x0 || 1 : 1;
+      const stops: SparkStop[] = realPoints.map((p) => ({
         offset: (p.x - x0) / span,
         color: qualityScoreColor(p.value),
       }));
-      return { points, stops };
+      return { points: realPoints, failPoint, stops };
     })
     .filter(
       (
         s,
       ): s is {
-        points: { x: number; y: number; value: number }[];
-        stops: { offset: number; color: string }[];
+        points: SparkPoint[];
+        failPoint: SparkPoint | null;
+        stops: SparkStop[];
       } => s !== null,
     );
 
@@ -350,24 +367,52 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
             strokeDasharray="2 2"
           />
         ))}
-        {series.map((s, i) => (
-          <g key={i}>
-            {s.points.length > 1 && (
-              <polyline
-                points={s.points.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')}
-                fill="none"
-                stroke={`url(#${gradientBaseId}-${i})`}
-                strokeWidth={STROKE_W}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                opacity="0.85"
-              />
-            )}
-            {s.points.map((p, j) => (
-              <circle key={j} cx={p.x} cy={p.y} r={DOT_R} fill={qualityScoreColor(p.value)} />
-            ))}
-          </g>
-        ))}
+        {series.map((s, i) => {
+          // 灰虚线从最后一个真实点引到 floor 的不可用 marker，表达"掉到不可用"；
+          // 没有真实点（从无质量分的硬失败）时只画灰空心 marker，不画任何线。
+          const lastRealPoint = s.points[s.points.length - 1];
+          return (
+            <g key={i}>
+              {s.points.length > 1 && (
+                <polyline
+                  points={s.points.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')}
+                  fill="none"
+                  stroke={`url(#${gradientBaseId}-${i})`}
+                  strokeWidth={STROKE_W}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  opacity="0.85"
+                />
+              )}
+              {s.failPoint && lastRealPoint && (
+                <line
+                  x1={lastRealPoint.x}
+                  y1={lastRealPoint.y}
+                  x2={s.failPoint.x}
+                  y2={s.failPoint.y}
+                  stroke={UNAVAILABLE_COLOR}
+                  strokeWidth={STROKE_W}
+                  strokeLinecap="round"
+                  strokeDasharray="2 2"
+                  opacity="0.85"
+                />
+              )}
+              {s.points.map((p, j) => (
+                <circle key={j} cx={p.x} cy={p.y} r={DOT_R} fill={qualityScoreColor(p.value)} />
+              ))}
+              {s.failPoint && (
+                <circle
+                  cx={s.failPoint.x}
+                  cy={s.failPoint.y}
+                  r={DOT_R}
+                  fill="none"
+                  stroke={UNAVAILABLE_COLOR}
+                  strokeWidth={STROKE_W}
+                />
+              )}
+            </g>
+          );
+        })}
       </svg>
     </span>
   );
@@ -459,8 +504,10 @@ function formatModelTooltipRow(m: RpdiagModelScore): string {
   const fmt = (v: number | null | undefined) => (typeof v === 'number' ? v.toFixed(1) : '—');
   const key = m.model_key || m.model || '?';
   const t = m.trend;
-  const base = `${key}  30d=${fmt(t?.avg_30d)}  7d=${fmt(t?.avg_7d)}  latest=${fmt(t?.latest)}`;
-  // 故障态行 latest 已被归一化为 0；附 rpdiag 故障原因让 tooltip 解释这个 0。
+  // 故障态行的 latest 是 normalizeHardFailTrend 合成的 0，显示"不可用"而非 0.0，
+  // 避免被读成真实质量分；30d / 7d 仍是真实历史均值。
+  const latest = m.failed ? '不可用' : fmt(t?.latest);
+  const base = `${key}  30d=${fmt(t?.avg_30d)}  7d=${fmt(t?.avg_7d)}  latest=${latest}`;
   return m.availability_warning ? `${base}  ⚠ ${m.availability_warning}` : base;
 }
 
