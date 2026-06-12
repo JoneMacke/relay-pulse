@@ -81,9 +81,10 @@ type ScoreTrend struct {
 // recent evaluations died before scoring); for such rows Score and Trend are
 // normalized to 0/grey so the column shows "scored, currently out" instead of a
 // stale value or nothing. A stale (but not hard-fail) row keeps its real
-// historical Score and Trend for display — only its contribution to the channel
-// MaxScore ranking key is zeroed (see buildScoresAt). AvailabilityWarning
-// carries rpdiag's user-facing reason string, surfaced in the cell tooltip.
+// historical Score and Trend for display — only its contribution to the
+// channel's active-model average ranking key is zeroed (see buildScoresAt).
+// AvailabilityWarning carries rpdiag's user-facing reason string, surfaced in
+// the cell tooltip.
 type ModelScore struct {
 	Model               string     `json:"model,omitempty"`
 	ModelKey            string     `json:"model_key,omitempty"`
@@ -95,10 +96,16 @@ type ModelScore struct {
 }
 
 // Score is the aggregated quality view for one (provider, service, channel)
-// triple. MaxScore picks the strongest *current-signal* model: fresh models use
-// their latest fingerprint sample, hard-fail/stale models contribute 0. Listing
-// users want to know "what is this channel currently capable of"; averaging
-// across models would punish channels that also host weaker fallbacks.
+// triple. MaxScore is a historical wire name (`max_score`); today it holds the
+// ranking key computed as the *average* current-signal score across this
+// channel's globally active models. Fresh models contribute their latest
+// fingerprint sample; active hard-fail/stale models contribute 0; globally
+// retired models (no fresh row anywhere in the same service's snapshot) are
+// removed from every channel's numerator and denominator alike. A channel with
+// no active-model rows at all carries no current signal — MaxScore stays nil so
+// the quality sort sinks it below every scored channel. Averaging (rather than
+// max) means a channel that hosts several models but can only still deliver one
+// ranks on its true availability, not on that lone survivor.
 type Score struct {
 	MaxScore   *float64     `json:"max_score,omitempty"`
 	Models     []ModelScore `json:"models"`
@@ -411,80 +418,198 @@ func isStaleScoreTrend(t ScoreTrend, now time.Time) bool {
 // fingerprint sample (not rpdiag's composite `final_quality_score`, which folds
 // in latency/availability — that belongs to rpdiag's own ranking page).
 //
-// The channel ranking key (MaxScore = strongest model) instead uses a current-
-// signal score: a model that can't be measured right now contributes 0 so it
-// can't keep a channel ranked high on a stale number. Two cases score 0:
+// The channel ranking key (historical wire name MaxScore/max_score) is the
+// average current-signal score over the channel's *globally active* models. A
+// model counts as globally active when at least one consumable row in the same
+// service has a fresh current sample anywhere in the snapshot. Each such model
+// the channel hosts contributes its rankLatest to the average; two cases make
+// that contribution 0:
 //   - hard-fail active: rpdiag flags the channel as currently failing (also
 //     normalized to a grey 0 trend for display, the only grey).
 //   - stale: a non-hard-fail row whose latest sample predates scoreStaleWindow.
 //     Its history is displayed untouched; only its ranking contribution is 0.
 //
-// max() across a channel's models means a 0 only sinks the channel when *every*
-// model is hard-fail/stale (a genuinely dark channel) — a fresh model still
-// wins. The hard-fail check MUST come first: normalizeHardFailTrend clears
-// LatestAt, so testing staleness afterwards would misread its 0 trend as stale.
+// Models that are retired platform-wide (no fresh row in any channel for that
+// service — e.g. a model dropped from the sampler pool) are excluded from both
+// the numerator and the denominator, so they neither help nor punish anyone.
+// Averaging (rather than the old max()) means a channel that hosts several
+// models but can only still deliver one is ranked on its true availability,
+// not floated to the top on that lone survivor. A channel left with no active
+// models keeps a nil MaxScore and sinks below every scored channel.
+//
+// The hard-fail check MUST come first: normalizeHardFailTrend clears LatestAt,
+// so testing staleness afterwards would misread its 0 trend as stale.
 func (c *Client) buildScores(rows []rankingRow) map[string]Score {
 	return c.buildScoresAt(rows, c.now())
 }
 
+// scoreRowView is a single rpdiag row reduced to exactly what both passes of
+// buildScoresAt need: the join key, the canonical (service, model) identity for
+// the active-model set, the display/rank representative scores, and whether the
+// row is a fresh current signal. Computing it once keeps the activeness pass and
+// the aggregation pass from drifting apart on the hard-fail/stale rules.
+type scoreRowView struct {
+	row           rankingRow
+	key           string
+	service       string
+	modelKey      string
+	displayLatest *float64
+	rankLatest    *float64
+	trend         ScoreTrend
+	fresh         bool
+}
+
+// buildScoreRowView normalizes one row, returning ok=false for rows relaypulse
+// never consumes (public /submit entries, rows without a representative sample,
+// rows missing any part of the join triple or a model identity). The returned
+// rankLatest is always non-nil when ok is true: displayLatest is non-nil by
+// construction, and every branch sets rankLatest to a non-nil pointer.
+func buildScoreRowView(row rankingRow, now time.Time) (scoreRowView, bool) {
+	// displayLatest drives the per-model Score/Trend (honest history);
+	// rankLatest drives the average ranking key (0 when unmeasurable now).
+	displayLatest := latestFingerprintSample(row.ScoreTrend)
+	rankLatest := displayLatest
+	trend := row.ScoreTrend
+	fresh := false
+	switch {
+	case row.HardFailActive:
+		trend = normalizeHardFailTrend(row.ScoreTrend)
+		displayLatest = trend.Latest // grey 0, shown + ranked
+		rankLatest = trend.Latest
+	case displayLatest != nil && isStaleScoreTrend(row.ScoreTrend, now):
+		// Keep the historical trend exactly as exported; just don't let a
+		// frozen old sample rank the channel as currently good.
+		zero := 0.0
+		rankLatest = &zero
+	case displayLatest != nil:
+		fresh = true
+	}
+	if displayLatest == nil {
+		return scoreRowView{}, false
+	}
+	if strings.EqualFold(row.SubmissionSource, "user") {
+		return scoreRowView{}, false
+	}
+
+	provider := canonical(row.ProviderName)
+	service := normalizeService(row.ServiceCLICommand)
+	channel := canonical(row.RelaypulseChannelKey)
+	if channel == "" {
+		// Older rpdiag deployments (<v5.1) don't ship the join key —
+		// strip the prefix locally so we still work during rollout.
+		channel = NormalizeChannelKey(row.ChannelName)
+	}
+	if provider == "" || service == "" || channel == "" {
+		return scoreRowView{}, false
+	}
+
+	modelKey := canonical(row.ModelKey)
+	if modelKey == "" {
+		modelKey = canonical(row.Model)
+	}
+	if modelKey == "" {
+		return scoreRowView{}, false
+	}
+
+	return scoreRowView{
+		row:           row,
+		key:           ScoreKey(provider, service, channel),
+		service:       service,
+		modelKey:      modelKey,
+		displayLatest: displayLatest,
+		rankLatest:    rankLatest,
+		trend:         trend,
+		fresh:         fresh,
+	}, true
+}
+
 func (c *Client) buildScoresAt(rows []rankingRow, now time.Time) map[string]Score {
-	out := make(map[string]Score, len(rows))
-
+	// Pass 1: reduce every consumable row to a view and learn which models are
+	// still alive somewhere, bucketed by service so a future same-named model in
+	// another service can't cross-activate.
+	views := make([]scoreRowView, 0, len(rows))
+	activeModels := make(map[string]map[string]bool)
 	for _, row := range rows {
-		// displayLatest drives the per-model Score/Trend (honest history);
-		// rankLatest drives MaxScore (current-signal, 0 when unmeasurable now).
-		displayLatest := latestFingerprintSample(row.ScoreTrend)
-		rankLatest := displayLatest
-		trend := row.ScoreTrend
-		if row.HardFailActive {
-			trend = normalizeHardFailTrend(row.ScoreTrend)
-			displayLatest = trend.Latest // grey 0, shown + ranked
-			rankLatest = trend.Latest
-		} else if displayLatest != nil && isStaleScoreTrend(row.ScoreTrend, now) {
-			// Keep the historical trend exactly as exported; just don't let a
-			// frozen old sample rank the channel as currently good.
-			zero := 0.0
-			rankLatest = &zero
-		}
-		if displayLatest == nil {
+		view, ok := buildScoreRowView(row, now)
+		if !ok {
 			continue
 		}
-		if strings.EqualFold(row.SubmissionSource, "user") {
-			continue
+		views = append(views, view)
+		if view.fresh {
+			byModel := activeModels[view.service]
+			if byModel == nil {
+				byModel = make(map[string]bool)
+				activeModels[view.service] = byModel
+			}
+			byModel[view.modelKey] = true
 		}
+	}
 
-		provider := canonical(row.ProviderName)
-		service := normalizeService(row.ServiceCLICommand)
-		channel := canonical(row.RelaypulseChannelKey)
-		if channel == "" {
-			// Older rpdiag deployments (<v5.1) don't ship the join key —
-			// strip the prefix locally so we still work during rollout.
-			channel = NormalizeChannelKey(row.ChannelName)
-		}
-		if provider == "" || service == "" || channel == "" {
-			continue
-		}
+	// rankAgg accumulates the active-model average for one channel. seen guards
+	// against a duplicated upstream (channel, model) row inflating the divisor.
+	type rankAgg struct {
+		sum   float64
+		count int
+		seen  map[string]bool
+	}
 
-		key := ScoreKey(provider, service, channel)
-		entry := out[key]
+	out := make(map[string]Score, len(views))
+	aggs := make(map[string]*rankAgg, len(views))
+
+	// Pass 2: build the per-model display entries (untouched from before) and,
+	// for active models only, fold rankLatest into the channel average.
+	for _, view := range views {
+		row := view.row
+		entry := out[view.key]
+		if len(entry.Models) == 0 {
+			// Channel-level Trend is not consumed by the front end (it reads
+			// per-model trends); keep a representative one from the first row for
+			// wire back-compat without letting it influence display.
+			entry.Trend = view.trend
+		}
 		entry.Models = append(entry.Models, ModelScore{
 			Model:               row.Model,
 			ModelKey:            row.ModelKey,
-			Score:               copyFloat(displayLatest),
-			Trend:               trend,
+			Score:               copyFloat(view.displayLatest),
+			Trend:               view.trend,
 			DetailURL:           row.DetailURL,
 			Failed:              row.HardFailActive,
 			AvailabilityWarning: row.AvailabilityWarning,
 		})
-
-		if entry.MaxScore == nil || *rankLatest > *entry.MaxScore {
-			entry.MaxScore = copyFloat(rankLatest)
-			entry.Trend = trend
-			// 通道整体跳转 = max-score 那行的 detail_url 去掉 model 参数 →
-			// 落到 rpdiag 的"服务商+通道"概览页（channel name 与大小写、前缀都来自
-			// rpdiag，本地不再猜测路由规则）。
+		if entry.ChannelURL == "" {
+			// 通道整体跳转 = 首条可解析 detail_url 去掉 model 参数 → 落到 rpdiag 的
+			// "服务商+通道"概览页（channel name 与大小写、前缀都来自 rpdiag，本地不再
+			// 猜测路由规则）。均分后没有单一"最高分行"，任意一行去 model 后都指向同一
+			// 通道页，取首条即可。
 			entry.ChannelURL = channelURLFromDetailURL(row.DetailURL)
 		}
+		out[view.key] = entry
+
+		if !activeModels[view.service][view.modelKey] {
+			continue
+		}
+		agg := aggs[view.key]
+		if agg == nil {
+			agg = &rankAgg{seen: make(map[string]bool)}
+			aggs[view.key] = agg
+		}
+		if agg.seen[view.modelKey] {
+			continue
+		}
+		agg.seen[view.modelKey] = true
+		agg.sum += *view.rankLatest
+		agg.count++
+	}
+
+	// Channels with no active-model rows are absent from aggs and keep the nil
+	// MaxScore zero value, sinking below every scored channel in the sort.
+	for key, agg := range aggs {
+		if agg.count == 0 {
+			continue
+		}
+		entry := out[key]
+		avg := agg.sum / float64(agg.count)
+		entry.MaxScore = &avg
 		out[key] = entry
 	}
 

@@ -132,14 +132,15 @@ func TestBuildScoresAggregatesByTriple(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected key %q, got %v", key, keysOf(out))
 	}
-	if entry.MaxScore == nil || *entry.MaxScore != 100 {
-		t.Errorf("MaxScore = %v, want 100", entry.MaxScore)
+	// Both models are fresh and active → MaxScore is their average (100+98)/2.
+	if entry.MaxScore == nil || *entry.MaxScore != 99 {
+		t.Errorf("MaxScore = %v, want 99 (avg of two fresh active models)", entry.MaxScore)
 	}
 	if len(entry.Models) != 2 {
 		t.Errorf("Models len = %d, want 2", len(entry.Models))
 	}
-	// ChannelURL 必须从 max-score 那行的 detail_url 派生（去掉 ?model=），
-	// 保留 rpdiag 给的原始 channel name 与 provider/service 限定。
+	// ChannelURL 取该通道首条可解析 detail_url（去掉 ?model=），保留 rpdiag 给的
+	// 原始 channel name 与 provider/service 限定；这里首行 haiku 带 detail_url。
 	wantChannelURL := "https://diag.relaypulse.top/channel/Anthropic?provider=Anthropic&service=claude&window=30d"
 	if entry.ChannelURL != wantChannelURL {
 		t.Errorf("ChannelURL = %q, want %q", entry.ChannelURL, wantChannelURL)
@@ -233,6 +234,62 @@ func TestBuildScoresChannelURLEmptyWhenDetailURLMissing(t *testing.T) {
 	}
 }
 
+func TestBuildScoresChannelURLFromFirstParsableRow(t *testing.T) {
+	// The first model row carries no detail_url; ChannelURL must come from the
+	// first row that does yield a parsable one (here the second). Channel-level
+	// Trend is intentionally taken from the first row (the front end never reads
+	// it), so it is not asserted here.
+	c := newTestClient()
+	mk := func(v float64) *float64 { return &v }
+	rows := []rankingRow{
+		{ // no detail_url
+			ChannelName: "O-Max", RelaypulseChannelKey: "max",
+			ProviderName: "SaiAI", ServiceCLICommand: "claude",
+			Model: "claude-haiku-4-5", ModelKey: "claude-haiku-4-5",
+			ScoreTrend: ScoreTrend{Latest: mk(90), LatestAt: freshAt()},
+		},
+		{ // has detail_url
+			ChannelName: "O-Max", RelaypulseChannelKey: "max",
+			ProviderName: "SaiAI", ServiceCLICommand: "claude",
+			Model:      "claude-sonnet-4-6",
+			ModelKey:   "claude-sonnet-4-6",
+			DetailURL:  "https://diag.relaypulse.top/channel/O-Max?provider=SaiAI&service=claude&model=claude-sonnet-4-6",
+			ScoreTrend: ScoreTrend{Latest: mk(92), LatestAt: freshAt()},
+		},
+	}
+	entry := c.buildScores(rows)["saiai|cc|max"]
+	if entry.ChannelURL == "" {
+		t.Fatal("ChannelURL empty; expected it to fall through to the second row's parsable URL")
+	}
+	if strings.Contains(entry.ChannelURL, "model=") {
+		t.Errorf("ChannelURL = %q, must drop the ?model= param", entry.ChannelURL)
+	}
+	if !strings.Contains(entry.ChannelURL, "/channel/O-Max") {
+		t.Errorf("ChannelURL = %q, want it derived from the second row's detail_url", entry.ChannelURL)
+	}
+}
+
+func TestBuildScoresModelKeyFallsBackToModel(t *testing.T) {
+	// An empty model_key falls back to `model`, normalized (trim + lower). The row
+	// must still activate its model and contribute to the average — a regression
+	// that skipped empty-model_key rows would silently drop the channel's score.
+	c := newTestClient()
+	mk := func(v float64) *float64 { return &v }
+	rows := []rankingRow{{
+		ChannelName: "O-Max", RelaypulseChannelKey: "max",
+		ProviderName: "SaiAI", ServiceCLICommand: "claude",
+		Model: "  Claude-Haiku-4-5  ", ModelKey: "",
+		ScoreTrend: ScoreTrend{Latest: mk(91), LatestAt: freshAt()},
+	}}
+	entry, ok := c.buildScores(rows)["saiai|cc|max"]
+	if !ok {
+		t.Fatalf("expected entry, got %v", keysOf(c.buildScores(rows)))
+	}
+	if entry.MaxScore == nil || *entry.MaxScore != 91 {
+		t.Fatalf("MaxScore = %v, want 91 (model_key fell back to normalized model and activated)", entry.MaxScore)
+	}
+}
+
 func TestLatestFingerprintSample(t *testing.T) {
 	mk := func(v float64) *float64 { return &v }
 
@@ -302,21 +359,34 @@ func TestBuildScoresKeepsHardFailRowAsZero(t *testing.T) {
 	// rpdiag 标记 hard_fail_active 的行：即便没有任何 fingerprint sample，
 	// 也不再被跳过，而是以代表分 0 入列（红点贴底），并把故障文案带给 tooltip。
 	c := newTestClient()
+	mk := func(v float64) *float64 { return &v }
 
-	rows := []rankingRow{{
-		ChannelName: "O-Max", RelaypulseChannelKey: "max",
-		ProviderName: "SaiAI", ServiceCLICommand: "claude",
-		Model: "claude-haiku-4-5", ModelKey: "claude-haiku-4-5",
-		HardFailActive:      true,
-		AvailabilityWarning: "最近连续评测失败，当前不可用",
-	}}
+	rows := []rankingRow{
+		{
+			ChannelName: "O-Max", RelaypulseChannelKey: "max",
+			ProviderName: "SaiAI", ServiceCLICommand: "claude",
+			Model: "claude-haiku-4-5", ModelKey: "claude-haiku-4-5",
+			HardFailActive:      true,
+			AvailabilityWarning: "最近连续评测失败，当前不可用",
+		},
+		{
+			// Sibling fresh haiku on another channel: makes haiku-4-5 a globally
+			// active model, so SaiAI's hard-fail instance scores 0 (not excluded
+			// as a retired-everywhere model). Mirrors prod, where haiku is fresh
+			// on most channels and a hard-failing one genuinely ranks 0.
+			ChannelName: "Anthropic", RelaypulseChannelKey: "anthropic",
+			ProviderName: "Anthropic", ServiceCLICommand: "claude",
+			Model: "claude-haiku-4-5", ModelKey: "claude-haiku-4-5",
+			ScoreTrend: ScoreTrend{Latest: mk(99), LatestAt: freshAt()},
+		},
+	}
 
 	entry, ok := c.buildScores(rows)["saiai|cc|max"]
 	if !ok {
 		t.Fatalf("expected hard-fail row to be kept, got %v", keysOf(c.buildScores(rows)))
 	}
 	if entry.MaxScore == nil || *entry.MaxScore != 0 {
-		t.Fatalf("MaxScore = %v, want 0", entry.MaxScore)
+		t.Fatalf("MaxScore = %v, want 0 (active model hard-failing on this channel)", entry.MaxScore)
 	}
 	if len(entry.Models) != 1 {
 		t.Fatalf("Models len = %d, want 1", len(entry.Models))
@@ -380,30 +450,38 @@ func TestBuildScoresHardFailAppendsZeroWithoutMutatingInput(t *testing.T) {
 	}
 }
 
-func TestBuildScoresPartialHardFailKeepsMaxFromHealthyModel(t *testing.T) {
-	// 同通道一个 model 故障(0)、一个健康(92)：MaxScore 仍取健康 model 的分，
-	// 不让"任一 model 失败"拖垮整通道排序。
+func TestBuildScoresPartialHardFailDragsAverageDown(t *testing.T) {
+	// 同通道一个活跃 model 故障(0)、一个健康(92)：均分把故障计 0 摊进分母，
+	// MaxScore=(0+92)/2=46，反映"半边不可用"的真实可用面——不再像旧 max() 那样
+	// 让健康 model 独自把整通道顶在 92。两个 model 都必须全站活跃才计入分母，
+	// 故各补一条 fresh sibling。
 	c := newTestClient()
 	mk := func(v float64) *float64 { return &v }
 
 	rows := []rankingRow{
-		{
+		{ // this channel: haiku hard-fail → 0
 			ChannelName: "O-Max", RelaypulseChannelKey: "max",
 			ProviderName: "SaiAI", ServiceCLICommand: "claude",
 			Model: "claude-haiku-4-5", ModelKey: "claude-haiku-4-5",
 			HardFailActive: true,
 		},
-		{
+		{ // this channel: sonnet healthy 92
 			ChannelName: "O-Max", RelaypulseChannelKey: "max",
 			ProviderName: "SaiAI", ServiceCLICommand: "claude",
 			Model: "claude-sonnet-4-6", ModelKey: "claude-sonnet-4-6",
 			ScoreTrend: ScoreTrend{Latest: mk(92), LatestAt: freshAt(), RecentScores: []float64{92}},
 		},
+		{ // sibling: haiku fresh elsewhere → haiku is globally active
+			ChannelName: "Anthropic", RelaypulseChannelKey: "anthropic",
+			ProviderName: "Anthropic", ServiceCLICommand: "claude",
+			Model: "claude-haiku-4-5", ModelKey: "claude-haiku-4-5",
+			ScoreTrend: ScoreTrend{Latest: mk(99), LatestAt: freshAt()},
+		},
 	}
 
 	entry := c.buildScores(rows)["saiai|cc|max"]
-	if entry.MaxScore == nil || *entry.MaxScore != 92 {
-		t.Fatalf("MaxScore = %v, want 92 (healthy model)", entry.MaxScore)
+	if entry.MaxScore == nil || *entry.MaxScore != 46 {
+		t.Fatalf("MaxScore = %v, want 46 ((0 hard-fail + 92 healthy)/2)", entry.MaxScore)
 	}
 	var failed int
 	for _, m := range entry.Models {
@@ -455,19 +533,30 @@ func TestBuildScoresStaleRowRanksZeroButKeepsHistory(t *testing.T) {
 	mk := func(v float64) *float64 { return &v }
 	staleStamp := staleAt()
 
-	rows := []rankingRow{{
-		ChannelName: "O-Max", RelaypulseChannelKey: "max",
-		ProviderName: "TopRouterCN", ServiceCLICommand: "claude",
-		Model: "claude-opus-4-7", ModelKey: "claude-opus-4-7",
-		ScoreTrend: ScoreTrend{
-			Latest:         mk(88),
-			LatestAt:       staleStamp,
-			Avg7D:          mk(90),
-			Avg30D:         mk(91),
-			RecentScores:   []float64{85, 88},
-			RecentAttempts: []*float64{}, // v5.5: no in-7d attempt
+	rows := []rankingRow{
+		{
+			ChannelName: "O-Max", RelaypulseChannelKey: "max",
+			ProviderName: "TopRouterCN", ServiceCLICommand: "claude",
+			Model: "claude-opus-4-7", ModelKey: "claude-opus-4-7",
+			ScoreTrend: ScoreTrend{
+				Latest:         mk(88),
+				LatestAt:       staleStamp,
+				Avg7D:          mk(90),
+				Avg30D:         mk(91),
+				RecentScores:   []float64{85, 88},
+				RecentAttempts: []*float64{}, // v5.5: no in-7d attempt
+			},
 		},
-	}}
+		{
+			// Sibling fresh opus-4-7 elsewhere → the model is globally active, so
+			// TopRouterCN's stale instance ranks 0 (rather than being excluded as
+			// retired-everywhere — that exclusion is covered separately).
+			ChannelName: "Anthropic", RelaypulseChannelKey: "anthropic",
+			ProviderName: "Anthropic", ServiceCLICommand: "claude",
+			Model: "claude-opus-4-7", ModelKey: "claude-opus-4-7",
+			ScoreTrend: ScoreTrend{Latest: mk(94), LatestAt: freshAt()},
+		},
+	}
 
 	entry, ok := c.buildScores(rows)["toproutercn|cc|max"]
 	if !ok {
@@ -496,21 +585,23 @@ func TestBuildScoresStaleRowRanksZeroButKeepsHistory(t *testing.T) {
 	}
 }
 
-func TestBuildScoresFreshModelDominatesStaleSibling(t *testing.T) {
-	// Channel with one fresh model (90) and one stale sibling (frozen 95): the
-	// fresh score must win MaxScore — max() means a stale model only drags the
-	// channel down when *every* model is stale.
+func TestBuildScoresRetiredSiblingExcludedFromAverage(t *testing.T) {
+	// Channel with one fresh model (90) and one model that is stale here and has
+	// NO fresh row anywhere (retired platform-wide, frozen 95). The retired model
+	// is dropped from both numerator and denominator, so the channel ranks on its
+	// one active model alone: MaxScore=90, not (95+90)/2 and not (0+90)/2. This is
+	// the opus-4-7 case — a globally retired model must neither help nor punish.
 	c := newTestClient()
 	mk := func(v float64) *float64 { return &v }
 
 	rows := []rankingRow{
-		{ // stale, frozen high
+		{ // retired-everywhere, frozen high → excluded
 			ChannelName: "O-Max", RelaypulseChannelKey: "max",
 			ProviderName: "TopRouterCN", ServiceCLICommand: "claude",
 			Model: "claude-opus-4-7", ModelKey: "claude-opus-4-7",
 			ScoreTrend: ScoreTrend{Latest: mk(95), LatestAt: staleAt()},
 		},
-		{ // fresh current model
+		{ // fresh current model → the only thing the channel ranks on
 			ChannelName: "O-Max", RelaypulseChannelKey: "max",
 			ProviderName: "TopRouterCN", ServiceCLICommand: "claude",
 			Model: "claude-opus-4-8", ModelKey: "claude-opus-4-8",
@@ -520,7 +611,118 @@ func TestBuildScoresFreshModelDominatesStaleSibling(t *testing.T) {
 
 	entry := c.buildScores(rows)["toproutercn|cc|max"]
 	if entry.MaxScore == nil || *entry.MaxScore != 90 {
-		t.Fatalf("MaxScore = %v, want 90 (fresh model dominates stale sibling)", entry.MaxScore)
+		t.Fatalf("MaxScore = %v, want 90 (retired sibling excluded, ranks on active model alone)", entry.MaxScore)
+	}
+}
+
+func TestBuildScoresTopRouterScenarioAveragesActiveModels(t *testing.T) {
+	// The production case that motivated this change: a channel offering 4 models
+	// where only haiku still works. haiku fresh (97); opus-4-7 stale and retired
+	// everywhere (excluded); sonnet & opus-4-8 hard-fail but globally active
+	// elsewhere (contribute 0). MaxScore = (97+0+0)/3 ≈ 32.33 — the channel sinks
+	// to its true availability instead of floating at 97 on the lone survivor.
+	c := newTestClient()
+	mk := func(v float64) *float64 { return &v }
+
+	rows := []rankingRow{
+		{ // haiku fresh, the only working model
+			ChannelName: "O-TopRouterCN", RelaypulseChannelKey: "toproutercn",
+			ProviderName: "TopRouterCN", ServiceCLICommand: "claude",
+			Model: "claude-haiku-4-5", ModelKey: "claude-haiku-4-5",
+			ScoreTrend: ScoreTrend{Latest: mk(97), LatestAt: freshAt()},
+		},
+		{ // opus-4-7 stale, retired everywhere → excluded
+			ChannelName: "O-TopRouterCN", RelaypulseChannelKey: "toproutercn",
+			ProviderName: "TopRouterCN", ServiceCLICommand: "claude",
+			Model: "claude-opus-4-7", ModelKey: "claude-opus-4-7",
+			ScoreTrend: ScoreTrend{Latest: mk(88), LatestAt: staleAt()},
+		},
+		{ // sonnet hard-fail here, active elsewhere → 0
+			ChannelName: "O-TopRouterCN", RelaypulseChannelKey: "toproutercn",
+			ProviderName: "TopRouterCN", ServiceCLICommand: "claude",
+			Model: "claude-sonnet-4-6", ModelKey: "claude-sonnet-4-6",
+			HardFailActive: true,
+		},
+		{ // opus-4-8 hard-fail here, active elsewhere → 0
+			ChannelName: "O-TopRouterCN", RelaypulseChannelKey: "toproutercn",
+			ProviderName: "TopRouterCN", ServiceCLICommand: "claude",
+			Model: "claude-opus-4-8", ModelKey: "claude-opus-4-8",
+			HardFailActive: true,
+		},
+		{ // sibling channel keeps sonnet & opus-4-8 globally active
+			ChannelName: "Anthropic", RelaypulseChannelKey: "anthropic",
+			ProviderName: "Anthropic", ServiceCLICommand: "claude",
+			Model: "claude-sonnet-4-6", ModelKey: "claude-sonnet-4-6",
+			ScoreTrend: ScoreTrend{Latest: mk(96), LatestAt: freshAt()},
+		},
+		{
+			ChannelName: "Anthropic", RelaypulseChannelKey: "anthropic",
+			ProviderName: "Anthropic", ServiceCLICommand: "claude",
+			Model: "claude-opus-4-8", ModelKey: "claude-opus-4-8",
+			ScoreTrend: ScoreTrend{Latest: mk(95), LatestAt: freshAt()},
+		},
+	}
+
+	entry := c.buildScores(rows)["toproutercn|cc|toproutercn"]
+	if entry.MaxScore == nil {
+		t.Fatalf("MaxScore = nil, want ~32.33")
+	}
+	if got := *entry.MaxScore; got < 32.3 || got > 32.4 {
+		t.Fatalf("MaxScore = %v, want (97+0+0)/3 ≈ 32.33", got)
+	}
+}
+
+func TestBuildScoresAllRetiredChannelHasNilScore(t *testing.T) {
+	// A channel whose only models are retired everywhere (no fresh row anywhere)
+	// has no current quality signal: MaxScore is nil so the quality sort sinks it
+	// below every scored channel. The display row is still kept (honest history).
+	c := newTestClient()
+	mk := func(v float64) *float64 { return &v }
+
+	rows := []rankingRow{{
+		ChannelName: "O-Ghost", RelaypulseChannelKey: "ghost",
+		ProviderName: "Ghost", ServiceCLICommand: "claude",
+		Model: "claude-opus-4-7", ModelKey: "claude-opus-4-7",
+		ScoreTrend: ScoreTrend{Latest: mk(88), LatestAt: staleAt()},
+	}}
+
+	entry, ok := c.buildScores(rows)["ghost|cc|ghost"]
+	if !ok {
+		t.Fatalf("expected entry kept for display, got %v", keysOf(c.buildScores(rows)))
+	}
+	if entry.MaxScore != nil {
+		t.Fatalf("MaxScore = %v, want nil (no active model → no current signal)", *entry.MaxScore)
+	}
+	if len(entry.Models) != 1 {
+		t.Fatalf("Models len = %d, want 1 (display row kept)", len(entry.Models))
+	}
+}
+
+func TestBuildScoresDedupesRepeatedModelInAverage(t *testing.T) {
+	// Guard against a duplicated upstream (channel, model) row inflating the
+	// divisor: two fresh rows for the same model on the same channel count once.
+	// The first seen row (80) sets the contribution; the average is 80, not 70.
+	c := newTestClient()
+	mk := func(v float64) *float64 { return &v }
+
+	rows := []rankingRow{
+		{
+			ChannelName: "O-Max", RelaypulseChannelKey: "max",
+			ProviderName: "SaiAI", ServiceCLICommand: "claude",
+			Model: "claude-haiku-4-5", ModelKey: "claude-haiku-4-5",
+			ScoreTrend: ScoreTrend{Latest: mk(80), LatestAt: freshAt()},
+		},
+		{
+			ChannelName: "O-Max", RelaypulseChannelKey: "max",
+			ProviderName: "SaiAI", ServiceCLICommand: "claude",
+			Model: "claude-haiku-4-5", ModelKey: "claude-haiku-4-5",
+			ScoreTrend: ScoreTrend{Latest: mk(60), LatestAt: freshAt()},
+		},
+	}
+
+	entry := c.buildScores(rows)["saiai|cc|max"]
+	if entry.MaxScore == nil || *entry.MaxScore != 80 {
+		t.Fatalf("MaxScore = %v, want 80 (duplicate model counted once, first seen)", entry.MaxScore)
 	}
 }
 
