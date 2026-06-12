@@ -9,7 +9,27 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
+
+// testNow is a fixed reference clock so the staleness gate (scoreStaleWindow)
+// is deterministic regardless of wall-clock time. Test clients pin nowFn to it
+// via newTestClient/fixedClock; fixtures stamp latest_at relative to it.
+var testNow = time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC)
+
+func fixedClock() time.Time { return testNow }
+
+// freshAt returns a latest_at within the current-signal window (1h old).
+func freshAt() *string {
+	s := testNow.Add(-time.Hour).Format(time.RFC3339Nano)
+	return &s
+}
+
+// staleAt returns a latest_at older than scoreStaleWindow.
+func staleAt() *string {
+	s := testNow.Add(-(scoreStaleWindow + time.Hour)).Format(time.RFC3339Nano)
+	return &s
+}
 
 func TestNormalizeChannelKey(t *testing.T) {
 	cases := map[string]string{
@@ -80,14 +100,14 @@ func TestBuildScoresAggregatesByTriple(t *testing.T) {
 			Model: "claude-haiku-4-5", ModelKey: "claude-haiku-4-5",
 			DetailURL:         "https://diag.relaypulse.top/channel/Anthropic?window=30d&provider=Anthropic&service=claude&model=claude-haiku-4-5",
 			FinalQualityScore: mk(100),
-			ScoreTrend:        ScoreTrend{Latest: mk(100), Avg7D: mk(100), Avg30D: mk(100), N7D: 3, N30D: 9},
+			ScoreTrend:        ScoreTrend{Latest: mk(100), LatestAt: freshAt(), Avg7D: mk(100), Avg30D: mk(100), N7D: 3, N30D: 9},
 		},
 		{ // baseline same channel, different model — should merge
 			ChannelName: "Anthropic", RelaypulseChannelKey: "anthropic",
 			ProviderName: "Anthropic", ServiceCLICommand: "claude",
 			Model: "claude-sonnet-4-6", ModelKey: "claude-sonnet-4-6",
 			FinalQualityScore: mk(98),
-			ScoreTrend:        ScoreTrend{Latest: mk(98), Avg7D: mk(98), Avg30D: mk(98), N7D: 3, N30D: 9},
+			ScoreTrend:        ScoreTrend{Latest: mk(98), LatestAt: freshAt(), Avg7D: mk(98), Avg30D: mk(98), N7D: 3, N30D: 9},
 		},
 		{ // user-submitted — dropped
 			ChannelName: "U-DawAPI-86a39a", RelaypulseChannelKey: "dawapi-86a39a",
@@ -158,7 +178,7 @@ func TestScoresUpstreamRoundTrip(t *testing.T) {
 			Model: "claude-haiku-4-5", ModelKey: "claude-haiku-4-5",
 			DetailURL:         "https://diag.relaypulse.top/channel/cc?window=30d&provider=InfAI&service=claude&model=claude-haiku-4-5",
 			FinalQualityScore: mk(95.2),
-			ScoreTrend:        ScoreTrend{Latest: mk(98), Avg7D: mk(98), Avg30D: mk(98)},
+			ScoreTrend:        ScoreTrend{Latest: mk(98), LatestAt: freshAt(), Avg7D: mk(98), Avg30D: mk(98)},
 		}},
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -168,6 +188,7 @@ func TestScoresUpstreamRoundTrip(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(nil, srv.URL, 0, true)
+	client.nowFn = fixedClock
 	scores, err := client.Scores(context.Background())
 	if err != nil {
 		t.Fatalf("Scores returned error: %v", err)
@@ -259,6 +280,7 @@ func TestBuildScoresUsesRecentScoresTailWhenAvailable(t *testing.T) {
 		ScoreTrend: ScoreTrend{
 			RecentScores: []float64{82, 72, 76},
 			Latest:       mk(72),
+			LatestAt:     freshAt(),
 			Avg7D:        mk(76.7),
 			Avg30D:       mk(76.7),
 		},
@@ -375,7 +397,7 @@ func TestBuildScoresPartialHardFailKeepsMaxFromHealthyModel(t *testing.T) {
 			ChannelName: "O-Max", RelaypulseChannelKey: "max",
 			ProviderName: "SaiAI", ServiceCLICommand: "claude",
 			Model: "claude-sonnet-4-6", ModelKey: "claude-sonnet-4-6",
-			ScoreTrend: ScoreTrend{Latest: mk(92), RecentScores: []float64{92}},
+			ScoreTrend: ScoreTrend{Latest: mk(92), LatestAt: freshAt(), RecentScores: []float64{92}},
 		},
 	}
 
@@ -394,6 +416,111 @@ func TestBuildScoresPartialHardFailKeepsMaxFromHealthyModel(t *testing.T) {
 	}
 	if failed != 1 {
 		t.Fatalf("failed models = %d, want 1", failed)
+	}
+}
+
+func TestIsStaleScoreTrend(t *testing.T) {
+	at := func(s string) ScoreTrend { return ScoreTrend{LatestAt: &s} }
+	fresh := testNow.Add(-time.Hour).Format(time.RFC3339Nano) // microsecond precision
+	old := testNow.Add(-(scoreStaleWindow + time.Hour)).Format(time.RFC3339Nano)
+	bareFresh := testNow.Add(-time.Hour).Format(time.RFC3339) // no fractional seconds
+	cases := []struct {
+		name string
+		in   ScoreTrend
+		want bool
+	}{
+		{"fresh_fractional", at(fresh), false},
+		{"fresh_bare_rfc3339", at(bareFresh), false}, // RFC3339Nano parses non-fractional too
+		{"stale", at(old), true},
+		{"missing_fail_closed", ScoreTrend{}, true},
+		{"empty_string_fail_closed", at("  "), true},
+		{"unparseable_fail_closed", at("not-a-timestamp"), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isStaleScoreTrend(tc.in, testNow); got != tc.want {
+				t.Errorf("isStaleScoreTrend(%+v) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildScoresStaleRowRanksZeroButKeepsHistory(t *testing.T) {
+	// A non-hard-fail row whose latest sample predates the 7d window (e.g. a
+	// retired model whose per-channel score froze) contributes 0 to the channel
+	// MaxScore ranking key — so it can't float to the top on a stale number.
+	// But its per-model Score and Trend are displayed EXACTLY as exported: an
+	// honest historical line, not flagged Failed, no synthetic point injected.
+	c := newTestClient()
+	mk := func(v float64) *float64 { return &v }
+	staleStamp := staleAt()
+
+	rows := []rankingRow{{
+		ChannelName: "O-Max", RelaypulseChannelKey: "max",
+		ProviderName: "TopRouterCN", ServiceCLICommand: "claude",
+		Model: "claude-opus-4-7", ModelKey: "claude-opus-4-7",
+		ScoreTrend: ScoreTrend{
+			Latest:         mk(88),
+			LatestAt:       staleStamp,
+			Avg7D:          mk(90),
+			Avg30D:         mk(91),
+			RecentScores:   []float64{85, 88},
+			RecentAttempts: []*float64{}, // v5.5: no in-7d attempt
+		},
+	}}
+
+	entry, ok := c.buildScores(rows)["toproutercn|cc|max"]
+	if !ok {
+		t.Fatalf("expected stale row kept, got %v", keysOf(c.buildScores(rows)))
+	}
+	// Ranking: zeroed.
+	if entry.MaxScore == nil || *entry.MaxScore != 0 {
+		t.Fatalf("MaxScore = %v, want 0 (stale → no current ranking signal)", entry.MaxScore)
+	}
+	// Display: untouched history.
+	m := entry.Models[0]
+	if m.Failed {
+		t.Errorf("Model.Failed = true, want false (stale is not hard-fail)")
+	}
+	if m.Score == nil || *m.Score != 88 {
+		t.Errorf("Model.Score = %v, want 88 (real history shown, not ranking 0)", m.Score)
+	}
+	if m.Trend.LatestAt == nil || *m.Trend.LatestAt != *staleStamp {
+		t.Errorf("Trend.LatestAt = %v, want preserved %q", m.Trend.LatestAt, *staleStamp)
+	}
+	if m.Trend.Avg30D == nil || *m.Trend.Avg30D != 91 {
+		t.Errorf("Avg30D = %v, want 91 (history kept)", m.Trend.Avg30D)
+	}
+	if len(m.Trend.RecentAttempts) != 0 {
+		t.Errorf("RecentAttempts = %v, want [] untouched (no synthetic point)", m.Trend.RecentAttempts)
+	}
+}
+
+func TestBuildScoresFreshModelDominatesStaleSibling(t *testing.T) {
+	// Channel with one fresh model (90) and one stale sibling (frozen 95): the
+	// fresh score must win MaxScore — max() means a stale model only drags the
+	// channel down when *every* model is stale.
+	c := newTestClient()
+	mk := func(v float64) *float64 { return &v }
+
+	rows := []rankingRow{
+		{ // stale, frozen high
+			ChannelName: "O-Max", RelaypulseChannelKey: "max",
+			ProviderName: "TopRouterCN", ServiceCLICommand: "claude",
+			Model: "claude-opus-4-7", ModelKey: "claude-opus-4-7",
+			ScoreTrend: ScoreTrend{Latest: mk(95), LatestAt: staleAt()},
+		},
+		{ // fresh current model
+			ChannelName: "O-Max", RelaypulseChannelKey: "max",
+			ProviderName: "TopRouterCN", ServiceCLICommand: "claude",
+			Model: "claude-opus-4-8", ModelKey: "claude-opus-4-8",
+			ScoreTrend: ScoreTrend{Latest: mk(90), LatestAt: freshAt()},
+		},
+	}
+
+	entry := c.buildScores(rows)["toproutercn|cc|max"]
+	if entry.MaxScore == nil || *entry.MaxScore != 90 {
+		t.Fatalf("MaxScore = %v, want 90 (fresh model dominates stale sibling)", entry.MaxScore)
 	}
 }
 
@@ -506,19 +633,24 @@ func TestRecentAttemptsEmptyVsAbsentRoundTrip(t *testing.T) {
 		{"absent_stays_null", `{"latest":83.0}`, `"recent_attempts":null`},
 		{"values_preserved", `{"latest":83.0,"recent_attempts":[null,88.0]}`, `"recent_attempts":[null,88]`},
 	}
+	// Inject a fresh latest_at so the staleness gate leaves recent_attempts
+	// untouched — this test isolates the empty-vs-absent round-trip, not staleness.
+	freshStr := testNow.Add(-time.Hour).Format(time.RFC3339Nano)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			trendJSON := strings.Replace(tc.trendJSON, "{", `{"latest_at":"`+freshStr+`",`, 1)
 			payload := `{"schema_version":"ranking-export.v5.5","items":[` +
 				`{"channel_name":"O-Max","relaypulse_channel_key":"max","provider_name":"TopRouterCN",` +
 				`"service_cli_command":"claude","model":"claude-opus-4-7","model_key":"claude-opus-4-7",` +
 				`"detail_url":"https://diag.relaypulse.top/channel/O-Max",` +
-				`"score_trend":` + tc.trendJSON + `}]}`
+				`"score_trend":` + trendJSON + `}]}`
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = fmt.Fprintln(w, payload)
 			}))
 			defer srv.Close()
 
 			client := NewClient(nil, srv.URL, 0, true)
+			client.nowFn = fixedClock
 			scores, err := client.Scores(context.Background())
 			if err != nil {
 				t.Fatalf("Scores returned error: %v", err)
@@ -543,7 +675,9 @@ func TestRecentAttemptsEmptyVsAbsentRoundTrip(t *testing.T) {
 // helpers ---------------------------------------------------------------
 
 func newTestClient() *Client {
-	return NewClient(nil, DefaultExportURL, DefaultTTL, true)
+	c := NewClient(nil, DefaultExportURL, DefaultTTL, true)
+	c.nowFn = fixedClock
+	return c
 }
 
 func keysOf(m map[string]Score) []string {

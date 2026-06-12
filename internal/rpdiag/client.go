@@ -35,6 +35,15 @@ const (
 	defaultTTL       = 10 * time.Minute
 	requestTimeout   = 10 * time.Second
 	maxResponseBytes = 10 << 20 // 10 MiB; export payload is < 1 MiB today
+	// scoreStaleWindow bounds how old a channel's latest fingerprint sample may
+	// be and still count as a *current* quality signal. A row whose newest
+	// sample predates this window (and is not already hard-fail active) carries
+	// no current signal — its representative score is forced to 0 so a channel
+	// that was measured well once and then went dark (e.g. a model retired from
+	// the sampler pool) cannot float to the top of the quality sort on a frozen
+	// score. Kept equal to rpdiag's own 7-day hard-fail stale window so the two
+	// "no current signal" notions stay aligned; bump both together.
+	scoreStaleWindow = 7 * 24 * time.Hour
 )
 
 // ScoreTrend mirrors rpdiag's per-row sparkline payload. Consumers can render
@@ -70,9 +79,11 @@ type ScoreTrend struct {
 //
 // Failed marks a row rpdiag currently considers hard-fail active (its most
 // recent evaluations died before scoring); for such rows Score and Trend are
-// normalized to 0 so the column shows "scored, currently out" instead of a
-// stale value or nothing. AvailabilityWarning carries rpdiag's user-facing
-// reason string, surfaced in the cell tooltip.
+// normalized to 0/grey so the column shows "scored, currently out" instead of a
+// stale value or nothing. A stale (but not hard-fail) row keeps its real
+// historical Score and Trend for display — only its contribution to the channel
+// MaxScore ranking key is zeroed (see buildScoresAt). AvailabilityWarning
+// carries rpdiag's user-facing reason string, surfaced in the cell tooltip.
 type ModelScore struct {
 	Model               string     `json:"model,omitempty"`
 	ModelKey            string     `json:"model_key,omitempty"`
@@ -84,9 +95,10 @@ type ModelScore struct {
 }
 
 // Score is the aggregated quality view for one (provider, service, channel)
-// triple. MaxScore picks the strongest model — listing users want to know
-// "what is this channel capable of", and averaging across models would
-// punish channels that also host weaker fallbacks.
+// triple. MaxScore picks the strongest *current-signal* model: fresh models use
+// their latest fingerprint sample, hard-fail/stale models contribute 0. Listing
+// users want to know "what is this channel currently capable of"; averaging
+// across models would punish channels that also host weaker fallbacks.
 type Score struct {
 	MaxScore   *float64     `json:"max_score,omitempty"`
 	Models     []ModelScore `json:"models"`
@@ -99,6 +111,9 @@ type Client struct {
 	httpClient *http.Client
 	exportURL  string
 	ttl        time.Duration
+	// nowFn is the clock; defaults to time.Now. Tests override it to drive the
+	// staleness gate (scoreStaleWindow) and cache expiry deterministically.
+	nowFn func() time.Time
 
 	mu        sync.RWMutex
 	cache     map[string]Score
@@ -126,12 +141,13 @@ func NewClient(httpClient *http.Client, exportURL string, ttl time.Duration, ena
 		httpClient: httpClient,
 		exportURL:  strings.TrimSpace(exportURL),
 		ttl:        ttl,
+		nowFn:      time.Now,
 	}
 	if !enabled {
 		// Disabled clients still need to honour the Scores() contract; tag
 		// them so external code can branch if desired.
 		c.cache = map[string]Score{}
-		c.expiresAt = time.Now().Add(time.Hour) // freeze empty snapshot
+		c.expiresAt = c.now().Add(time.Hour) // freeze empty snapshot
 	}
 	return c
 }
@@ -168,7 +184,17 @@ func NewClientFromEnv() *Client {
 		httpClient: &http.Client{Timeout: requestTimeout},
 		exportURL:  exportURL,
 		ttl:        ttl,
+		nowFn:      time.Now,
 	}
+}
+
+// now returns the client clock, tolerating a zero-value Client (nowFn unset)
+// constructed by older callers or struct literals.
+func (c *Client) now() time.Time {
+	if c.nowFn != nil {
+		return c.nowFn()
+	}
+	return time.Now()
 }
 
 // enabledFromEnv defaults to *disabled*; only explicit truthy strings flip
@@ -190,12 +216,12 @@ func (c *Client) Scores(ctx context.Context) (map[string]Score, error) {
 	if c == nil {
 		return map[string]Score{}, nil
 	}
-	if snap, ok := c.freshSnapshot(time.Now()); ok {
+	if snap, ok := c.freshSnapshot(c.now()); ok {
 		return snap, nil
 	}
 
 	v, err, _ := c.sf.Do("scores", func() (interface{}, error) {
-		if snap, ok := c.freshSnapshot(time.Now()); ok {
+		if snap, ok := c.freshSnapshot(c.now()); ok {
 			return snap, nil
 		}
 		fresh, refreshErr := c.refresh(ctx)
@@ -285,8 +311,8 @@ func (c *Client) refresh(ctx context.Context) (map[string]Score, error) {
 		return nil, fmt.Errorf("rpdiag unsupported schema_version %q", payload.SchemaVersion)
 	}
 
-	scores := c.buildScores(payload.Items)
-	now := time.Now()
+	now := c.now()
+	scores := c.buildScoresAt(payload.Items, now)
 
 	c.mu.Lock()
 	c.cache = scores
@@ -348,34 +374,79 @@ func normalizeHardFailTrend(t ScoreTrend) ScoreTrend {
 	return out
 }
 
+// isStaleScoreTrend reports whether a trend's latest fingerprint sample is
+// older than scoreStaleWindow, i.e. carries no *current* quality signal.
+//
+// Fail-closed: a missing or unparseable latest_at counts as stale. v5.5 export
+// always stamps latest_at on a scored row, so an absent value means the upstream
+// regressed or the wire is untrustworthy — surfacing that loudly (the channel
+// drops to a red 0) beats silently trusting a value we cannot date. The window
+// is the same 7 days rpdiag uses for its hard-fail gate.
+//
+// latest_at is RFC3339 with sub-second precision (e.g. "...01.813413Z").
+// RFC3339Nano is used to make that shape explicit; Go's time.Parse accepts a
+// fractional second whether or not the layout names it, so both fractional and
+// bare timestamps parse fine.
+func isStaleScoreTrend(t ScoreTrend, now time.Time) bool {
+	if t.LatestAt == nil || strings.TrimSpace(*t.LatestAt) == "" {
+		return true
+	}
+	latestAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(*t.LatestAt))
+	if err != nil {
+		return true
+	}
+	return latestAt.Before(now.Add(-scoreStaleWindow))
+}
+
 // buildScores collapses many rpdiag rows into one entry per (provider,
 // service, channel) triple. Rows that lack a representative fingerprint
 // sample, or that come from the public /submit pipeline
 // (`submission_source=user` / `U-` channel prefix), are skipped — those
 // entries don't exist in relaypulse listings and would never join.
 //
-// The representative score is the latest single fingerprint sample (not
-// rpdiag's composite `final_quality_score`, which folds in latency and
-// availability multipliers). Composite scoring belongs to rpdiag's own
-// ranking page; relaypulse's "Quality" column shows pure response-quality
-// per its tooltip, so the sort key must match that visual semantics.
+// Display vs ranking are deliberately decoupled. The per-model Trend (the
+// sparkline) and Score are shown exactly as rpdiag exported them — the line is
+// an honest history coloured by real quality, the only grey being a hard-fail
+// row that rpdiag couldn't score. The representative score is the latest single
+// fingerprint sample (not rpdiag's composite `final_quality_score`, which folds
+// in latency/availability — that belongs to rpdiag's own ranking page).
 //
-// Exception: a row rpdiag flags as hard-fail active is kept even with no
-// fingerprint sample and represented as 0. Its display trend is normalized so
-// the representative score, the sparkline's rightmost dot, and that dot's
-// colour all derive from the same 0 — a currently-failing channel renders as a
-// red bottom dot rather than vanishing or showing a stale value.
+// The channel ranking key (MaxScore = strongest model) instead uses a current-
+// signal score: a model that can't be measured right now contributes 0 so it
+// can't keep a channel ranked high on a stale number. Two cases score 0:
+//   - hard-fail active: rpdiag flags the channel as currently failing (also
+//     normalized to a grey 0 trend for display, the only grey).
+//   - stale: a non-hard-fail row whose latest sample predates scoreStaleWindow.
+//     Its history is displayed untouched; only its ranking contribution is 0.
+//
+// max() across a channel's models means a 0 only sinks the channel when *every*
+// model is hard-fail/stale (a genuinely dark channel) — a fresh model still
+// wins. The hard-fail check MUST come first: normalizeHardFailTrend clears
+// LatestAt, so testing staleness afterwards would misread its 0 trend as stale.
 func (c *Client) buildScores(rows []rankingRow) map[string]Score {
+	return c.buildScoresAt(rows, c.now())
+}
+
+func (c *Client) buildScoresAt(rows []rankingRow, now time.Time) map[string]Score {
 	out := make(map[string]Score, len(rows))
 
 	for _, row := range rows {
-		latest := latestFingerprintSample(row.ScoreTrend)
+		// displayLatest drives the per-model Score/Trend (honest history);
+		// rankLatest drives MaxScore (current-signal, 0 when unmeasurable now).
+		displayLatest := latestFingerprintSample(row.ScoreTrend)
+		rankLatest := displayLatest
 		trend := row.ScoreTrend
 		if row.HardFailActive {
 			trend = normalizeHardFailTrend(row.ScoreTrend)
-			latest = trend.Latest // synthetic 0
+			displayLatest = trend.Latest // grey 0, shown + ranked
+			rankLatest = trend.Latest
+		} else if displayLatest != nil && isStaleScoreTrend(row.ScoreTrend, now) {
+			// Keep the historical trend exactly as exported; just don't let a
+			// frozen old sample rank the channel as currently good.
+			zero := 0.0
+			rankLatest = &zero
 		}
-		if latest == nil {
+		if displayLatest == nil {
 			continue
 		}
 		if strings.EqualFold(row.SubmissionSource, "user") {
@@ -399,15 +470,15 @@ func (c *Client) buildScores(rows []rankingRow) map[string]Score {
 		entry.Models = append(entry.Models, ModelScore{
 			Model:               row.Model,
 			ModelKey:            row.ModelKey,
-			Score:               copyFloat(latest),
+			Score:               copyFloat(displayLatest),
 			Trend:               trend,
 			DetailURL:           row.DetailURL,
 			Failed:              row.HardFailActive,
 			AvailabilityWarning: row.AvailabilityWarning,
 		})
 
-		if entry.MaxScore == nil || *latest > *entry.MaxScore {
-			entry.MaxScore = copyFloat(latest)
+		if entry.MaxScore == nil || *rankLatest > *entry.MaxScore {
+			entry.MaxScore = copyFloat(rankLatest)
 			entry.Trend = trend
 			// 通道整体跳转 = max-score 那行的 detail_url 去掉 model 参数 →
 			// 落到 rpdiag 的"服务商+通道"概览页（channel name 与大小写、前缀都来自
