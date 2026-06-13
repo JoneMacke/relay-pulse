@@ -145,43 +145,6 @@ func (h *Handler) SubmitOnboarding(c *gin.Context) {
 	c.JSON(http.StatusCreated, resp)
 }
 
-// GetOnboardingStatus 查询申请状态
-// GET /api/onboarding/:id
-func (h *Handler) GetOnboardingStatus(c *gin.Context) {
-	svc := h.getOnboardingService()
-	if svc == nil {
-		apiError(c, http.StatusServiceUnavailable, ErrCodeFeatureDisabled, "自助收录功能未启用")
-		return
-	}
-
-	publicID := c.Param("id")
-	if publicID == "" {
-		apiError(c, http.StatusBadRequest, ErrCodeInvalidParam, "申请 ID 不能为空")
-		return
-	}
-
-	sub, err := svc.GetStatus(c.Request.Context(), publicID)
-	if err != nil {
-		apiError(c, http.StatusInternalServerError, ErrCodeInternalError, "查询申请状态失败")
-		return
-	}
-	if sub == nil {
-		apiError(c, http.StatusNotFound, ErrCodeNotFound, "申请不存在")
-		return
-	}
-
-	// 用户端只返回有限字段
-	c.JSON(http.StatusOK, gin.H{
-		"public_id":     sub.PublicID,
-		"status":        sub.Status,
-		"provider_name": sub.ProviderName,
-		"service_type":  sub.ServiceType,
-		"channel_code":  sub.ChannelCode,
-		"created_at":    sub.CreatedAt,
-		"updated_at":    sub.UpdatedAt,
-	})
-}
-
 // inlineTestRequest 内联探测请求体，由 /api/onboarding/test 与 /api/change/test 共用。
 type inlineTestRequest struct {
 	ServiceType  string `json:"service_type" binding:"required"`

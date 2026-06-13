@@ -1,9 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, Copy, Check, RotateCcw, Search, ExternalLink, AlertTriangle } from 'lucide-react';
+import { ChevronLeft, Copy, Check, RotateCcw, ExternalLink, AlertTriangle } from 'lucide-react';
 import type { OnboardingFormData, SubmitOnboardingResponse } from '../../types/onboarding';
-import { LANGUAGE_PATH_MAP, type SupportedLanguage } from '../../i18n';
 import { primaryButtonClass, secondaryButtonClass } from './controls';
 
 interface ConfirmStepProps {
@@ -86,10 +84,7 @@ function CopyableText({ text }: { text: string }) {
 
 /** Step 3: Review summary and submit. */
 export function ConfirmStep({ formData, updateField, submitResult, isSubmitting, testPassedAt, proofExpiresAt, checkedClauses, onToggleClause, onSubmit, onBack, onReset }: ConfirmStepProps) {
-  const { t, i18n } = useTranslation();
-  const navigate = useNavigate();
-  const langPrefix = LANGUAGE_PATH_MAP[i18n.language as SupportedLanguage];
-  const buildPath = (path: string) => (langPrefix ? `/${langPrefix}${path}` : path);
+  const { t } = useTranslation();
 
   // 全勾同步到 formData.agreementAccepted
   const allClausesChecked = AGREEMENT_CLAUSE_KEYS.every((k) => checkedClauses[k]);
@@ -174,16 +169,8 @@ export function ConfirmStep({ formData, updateField, submitResult, isSubmitting,
           </div>
         )}
 
-        {/* Progress / reset buttons */}
+        {/* Reset button */}
         <div className="flex flex-wrap justify-center gap-3 pt-2">
-          <button
-            type="button"
-            onClick={() => navigate(`${buildPath('/contact/status')}?id=${encodeURIComponent(submitResult.public_id)}`)}
-            className={primaryButtonClass}
-          >
-            <Search className="w-4 h-4" />
-            {t('statusQuery.viewProgress')}
-          </button>
           <button
             type="button"
             onClick={onReset}

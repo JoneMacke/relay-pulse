@@ -118,17 +118,6 @@ export interface SubmitOnboardingResponse {
   contact_info: string;
 }
 
-/** 申请状态查询响应 */
-export interface OnboardingStatusResponse {
-  public_id: string;
-  status: SubmissionStatus;
-  provider_name: string;
-  service_type: string;
-  channel_code: string;
-  created_at: number;
-  updated_at: number;
-}
-
 /** 管理员视角的完整申请 */
 export interface AdminSubmission {
   id: number;

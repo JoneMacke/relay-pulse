@@ -443,7 +443,7 @@
       "successTitle": "申请已提交！",
       "successDescription": "我们会尽快审核您的申请",
       "publicId": "申请编号",
-      "publicIdHint": "请保存此编号，用于查询申请状态",
+      "publicIdHint": "请保存此编号，联系管理员审核时需要提供",
       "contactLabel": "联系审核",
       "copyTemplateHint": "一键复制联系模板：",
       "contactTemplate": "您好，我提交了一个收录申请（编号：{{id}}，服务商：{{provider}}），请审核。",
@@ -490,55 +490,6 @@
     "discussions": {
       "title": "参与讨论",
       "description": "在 GitHub Discussions 提问、分享和交流"
-    },
-    "status": {
-      "title": "进度查询",
-      "description": "凭申请编号查询收录申请或变更请求的状态"
-    }
-  },
-  "statusQuery": {
-    "meta": {
-      "title": "申请进度查询 | RelayPulse",
-      "description": "输入申请编号，查询收录申请或变更请求的处理进度"
-    },
-    "title": "申请进度查询",
-    "description": "请输入提交后获得的编号，系统将自动匹配收录申请与变更请求。",
-    "idLabel": "申请编号",
-    "placeholder": "粘贴申请编号 UUID",
-    "submit": "查询进度",
-    "querying": "查询中...",
-    "viewProgress": "查询进度",
-    "resultTitle": "查询结果",
-    "notFoundTitle": "未找到对应编号",
-    "notFoundDescription": "请确认编号是否完整，或稍后重试。",
-    "type": {
-      "onboarding": "收录申请",
-      "change": "变更申请"
-    },
-    "status": {
-      "pending": "待审核",
-      "approved": "已通过",
-      "rejected": "已驳回",
-      "published": "已发布",
-      "applied": "已应用"
-    },
-    "applyMode": {
-      "auto": "自动",
-      "manual": "手动"
-    },
-    "fields": {
-      "publicId": "编号",
-      "providerName": "服务商",
-      "serviceType": "服务类型",
-      "channelCode": "通道代码",
-      "targetKey": "目标通道",
-      "applyMode": "适用模式",
-      "createdAt": "提交时间",
-      "updatedAt": "更新时间"
-    },
-    "errors": {
-      "emptyId": "请输入申请编号",
-      "queryFailed": "查询失败，请稍后重试。"
     }
   },
   "changeRequest": {
@@ -606,7 +557,7 @@
     },
     "done": {
       "title": "变更请求已提交",
-      "description": "您的变更请求已提交，请保存以下编号用于查询进度",
+      "description": "您的变更请求已提交，请保存以下编号，联系管理员时需要提供",
       "newRequest": "提交新的变更"
     }
   },

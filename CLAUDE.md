@@ -764,12 +764,10 @@ vim config.yaml
 | GET | `/api/version` | 构建版本信息 |
 | GET | `/api/onboarding/meta` | 收录表单元数据（服务类型、赞助等级等） |
 | POST | `/api/onboarding/submit` | 提交收录申请（IP 限流） |
-| GET | `/api/onboarding/:id` | 查询收录状态 |
 | POST | `/api/onboarding/test` | 收录内联探测测试（IP 限流） |
 | POST | `/api/change/auth` | 变更：API Key 认证（返回通道列表） |
 | POST | `/api/change/test` | 变更：内联探测测试（IP 限流，与 onboarding 解耦，签发同源 proof） |
 | POST | `/api/change/submit` | 变更：提交变更请求（含测试证明） |
-| GET | `/api/change/:id` | 变更：查询请求状态 |
 | GET | `/api/admin/changes` | 管理：变更请求列表（Bearer 鉴权，支持 status 过滤） |
 | GET | `/api/admin/changes/:id` | 管理：变更请求详情 |
 | POST | `/api/admin/changes/:id/approve` | 管理：批准变更 |

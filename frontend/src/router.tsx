@@ -8,7 +8,6 @@ const ProviderPage = lazy(() => import('./pages/ProviderPage'));
 const OnboardingPage = lazy(() => import('./pages/OnboardingPage'));
 const ContactPage = lazy(() => import('./pages/ContactPage'));
 const ChangeRequestPage = lazy(() => import('./pages/ChangeRequestPage'));
-const StatusQueryPage = lazy(() => import('./pages/StatusQueryPage'));
 const AdminPage = lazy(() => import('./pages/AdminPage'));
 
 /**
@@ -87,7 +86,6 @@ function renderChildRoutes(langPrefix?: string) {
       <Route path="contact" element={<ContactPage />} />
       <Route path="contact/apply" element={<OnboardingPage />} />
       <Route path="contact/change" element={<ChangeRequestPage />} />
-      <Route path="contact/status" element={<StatusQueryPage />} />
       <Route path="apply" element={<Navigate to={applyRedirect} replace />} />
       <Route path="admin" element={<AdminPage />} />
     </>

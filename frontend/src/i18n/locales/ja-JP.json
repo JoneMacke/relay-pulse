@@ -407,7 +407,7 @@
       "sectionProvider": "プロバイダー情報", "sectionConnection": "接続情報", "copy": "コピー",
       "submit": "申請を送信", "submitting": "送信中...",
       "successTitle": "申請が送信されました！", "successDescription": "速やかにレビューいたします",
-      "publicId": "申請番号", "publicIdHint": "この番号を保存して申請状況を確認してください",
+      "publicId": "申請番号", "publicIdHint": "この番号を保存し、管理者に審査を依頼する際にお伝えください",
       "contactLabel": "レビュー連絡先",
       "copyTemplateHint": "連絡テンプレートをコピー：",
       "contactTemplate": "こんにちは、掲載申請を送信しました（番号：{{id}}、プロバイダー：{{provider}}）。ご確認をお願いします。",
@@ -454,55 +454,6 @@
     "discussions": {
       "title": "ディスカッション",
       "description": "GitHub Discussionsで質問・共有・議論"
-    },
-    "status": {
-      "title": "進捗確認",
-      "description": "申請番号で掲載申請または変更リクエストの状態を確認"
-    }
-  },
-  "statusQuery": {
-    "meta": {
-      "title": "申請進捗確認 | RelayPulse",
-      "description": "申請番号を入力して、掲載申請または変更リクエストの進捗を確認します"
-    },
-    "title": "申請進捗確認",
-    "description": "送信後に発行された番号を入力してください。掲載申請と変更リクエストを自動で照合します。",
-    "idLabel": "申請番号",
-    "placeholder": "申請番号 UUID を貼り付け",
-    "submit": "進捗を確認",
-    "querying": "確認中...",
-    "viewProgress": "進捗を確認",
-    "resultTitle": "確認結果",
-    "notFoundTitle": "該当する番号が見つかりません",
-    "notFoundDescription": "番号が完全か確認するか、時間をおいて再度お試しください。",
-    "type": {
-      "onboarding": "掲載申請",
-      "change": "変更リクエスト"
-    },
-    "status": {
-      "pending": "審査待ち",
-      "approved": "承認済み",
-      "rejected": "却下",
-      "published": "公開済み",
-      "applied": "適用済み"
-    },
-    "applyMode": {
-      "auto": "自動",
-      "manual": "手動"
-    },
-    "fields": {
-      "publicId": "番号",
-      "providerName": "プロバイダー",
-      "serviceType": "サービスタイプ",
-      "channelCode": "チャネルコード",
-      "targetKey": "対象チャネル",
-      "applyMode": "適用モード",
-      "createdAt": "送信日時",
-      "updatedAt": "更新日時"
-    },
-    "errors": {
-      "emptyId": "申請番号を入力してください",
-      "queryFailed": "確認に失敗しました。時間をおいて再度お試しください。"
     }
   },
   "changeRequest": {
@@ -570,7 +521,7 @@
     },
     "done": {
       "title": "変更リクエストが送信されました",
-      "description": "リクエストが送信されました。進捗確認のため、以下の番号を保存してください。",
+      "description": "リクエストが送信されました。管理者に連絡する際に必要となるため、以下の番号を保存してください。",
       "newRequest": "新しいリクエストを送信"
     }
   },

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Helmet } from 'react-helmet-async';
-import { ArrowLeft, ArrowRight, Check, Loader2, Key, AlertCircle, Copy, Activity, Search } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, Loader2, Key, AlertCircle, Copy, Activity } from 'lucide-react';
 import { LANGUAGE_PATH_MAP, type SupportedLanguage } from '../i18n';
 import { useChangeRequest, type ChangeStep } from '../hooks/useChangeRequest';
 import type { AuthCandidate } from '../types/change';
@@ -440,7 +440,7 @@ function ReviewStep({
 }
 
 /** Done 步骤 */
-function DoneStep({ publicId, reset, onViewStatus }: { publicId: string; reset: () => void; onViewStatus: () => void }) {
+function DoneStep({ publicId, reset }: { publicId: string; reset: () => void }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
 
@@ -468,13 +468,6 @@ function DoneStep({ publicId, reset, onViewStatus }: { publicId: string; reset: 
 
       <div className="flex flex-wrap justify-center gap-3">
         <button
-          onClick={onViewStatus}
-          className={primaryButtonClass}
-        >
-          <Search className="w-4 h-4" />
-          {t('statusQuery.viewProgress')}
-        </button>
-        <button
           onClick={reset}
           className={secondaryButtonClass}
         >
@@ -491,7 +484,6 @@ export default function ChangeRequestPage() {
   const cr = useChangeRequest();
   const langPrefix = LANGUAGE_PATH_MAP[i18n.language as SupportedLanguage];
   const homePath = langPrefix ? `/${langPrefix}` : '/';
-  const buildPath = (path: string) => (langPrefix ? `/${langPrefix}${path}` : path);
 
   return (
     <>
@@ -583,7 +575,6 @@ export default function ChangeRequestPage() {
             <DoneStep
               publicId={cr.publicId}
               reset={cr.reset}
-              onViewStatus={() => navigate(`${buildPath('/contact/status')}?id=${encodeURIComponent(cr.publicId)}`)}
             />
           )}
         </main>

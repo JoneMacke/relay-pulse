@@ -99,42 +99,6 @@ func (h *Handler) SubmitChange(c *gin.Context) {
 	c.JSON(http.StatusCreated, resp)
 }
 
-// GetChangeStatus 查询变更请求状态
-// GET /api/change/:id
-func (h *Handler) GetChangeStatus(c *gin.Context) {
-	svc := h.getChangeService()
-	if svc == nil {
-		apiError(c, http.StatusServiceUnavailable, ErrCodeFeatureDisabled, "变更请求功能未启用")
-		return
-	}
-
-	publicID := c.Param("id")
-	if publicID == "" {
-		apiError(c, http.StatusBadRequest, ErrCodeInvalidParam, "请求 ID 不能为空")
-		return
-	}
-
-	cr, err := svc.GetStatus(c.Request.Context(), publicID)
-	if err != nil {
-		apiError(c, http.StatusInternalServerError, ErrCodeInternalError, "查询请求状态失败")
-		return
-	}
-	if cr == nil {
-		apiError(c, http.StatusNotFound, ErrCodeNotFound, "变更请求不存在")
-		return
-	}
-
-	// 用户端返回有限字段
-	c.JSON(http.StatusOK, gin.H{
-		"public_id":  cr.PublicID,
-		"status":     cr.Status,
-		"target_key": cr.TargetKey,
-		"apply_mode": cr.ApplyMode,
-		"created_at": cr.CreatedAt,
-		"updated_at": cr.UpdatedAt,
-	})
-}
-
 // === 管理端 ===
 
 // AdminListChanges 管理员获取变更请求列表

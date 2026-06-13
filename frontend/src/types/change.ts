@@ -53,16 +53,6 @@ export interface SubmitChangeResponse {
   public_id: string;
 }
 
-/** 变更请求状态查询响应 */
-export interface ChangeStatusResponse {
-  public_id: string;
-  status: ChangeRequestStatus;
-  target_key: string;
-  apply_mode: string;
-  created_at: number;
-  updated_at: number;
-}
-
 /** 管理端变更请求 */
 export interface AdminChangeRequest {
   id: number;

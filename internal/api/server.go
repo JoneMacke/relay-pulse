@@ -168,7 +168,6 @@ func NewServer(store storage.Storage, cfg *config.AppConfig, port string, autoMo
 	router.GET("/api/onboarding/meta", handler.GetOnboardingMeta)
 	router.POST("/api/onboarding/test", handler.OnboardingTest)
 	router.POST("/api/onboarding/submit", handler.SubmitOnboarding)
-	router.GET("/api/onboarding/:id", handler.GetOnboardingStatus)
 
 	// 管理后台 API 路由（需 Bearer token 鉴权）
 	router.GET("/api/admin/submissions", handler.AdminListSubmissions)
@@ -183,7 +182,6 @@ func NewServer(store storage.Storage, cfg *config.AppConfig, port string, autoMo
 	router.POST("/api/change/auth", handler.AuthChange)
 	router.POST("/api/change/test", handler.ChangeTest)
 	router.POST("/api/change/submit", handler.SubmitChange)
-	router.GET("/api/change/:id", handler.GetChangeStatus)
 
 	// 管理后台 — 变更请求 API（需 Bearer token 鉴权）
 	router.GET("/api/admin/changes", handler.AdminListChanges)

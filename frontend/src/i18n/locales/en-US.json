@@ -440,7 +440,7 @@
       "successTitle": "Application Submitted!",
       "successDescription": "We will review your application shortly",
       "publicId": "Application ID",
-      "publicIdHint": "Save this ID to check your application status",
+      "publicIdHint": "Save this ID and provide it when you contact the admin for review",
       "contactLabel": "Contact for Review",
       "copyTemplateHint": "Copy contact template:",
       "contactTemplate": "Hi, I submitted a listing application (ID: {{id}}, provider: {{provider}}), please review.",
@@ -487,55 +487,6 @@
     "discussions": {
       "title": "Discussions",
       "description": "Ask questions, share ideas, and discuss on GitHub Discussions"
-    },
-    "status": {
-      "title": "Check Status",
-      "description": "Look up the status of an onboarding application or change request by ID"
-    }
-  },
-  "statusQuery": {
-    "meta": {
-      "title": "Application Status | RelayPulse",
-      "description": "Enter your application ID to check the status of an onboarding application or change request"
-    },
-    "title": "Application Status",
-    "description": "Enter the ID issued after submission. We'll automatically match onboarding applications and change requests.",
-    "idLabel": "Application ID",
-    "placeholder": "Paste application UUID",
-    "submit": "Check Status",
-    "querying": "Checking...",
-    "viewProgress": "Check Status",
-    "resultTitle": "Result",
-    "notFoundTitle": "No matching ID found",
-    "notFoundDescription": "Make sure the ID is complete, or try again later.",
-    "type": {
-      "onboarding": "Onboarding Application",
-      "change": "Change Request"
-    },
-    "status": {
-      "pending": "Pending Review",
-      "approved": "Approved",
-      "rejected": "Rejected",
-      "published": "Published",
-      "applied": "Applied"
-    },
-    "applyMode": {
-      "auto": "Automatic",
-      "manual": "Manual"
-    },
-    "fields": {
-      "publicId": "ID",
-      "providerName": "Provider",
-      "serviceType": "Service Type",
-      "channelCode": "Channel Code",
-      "targetKey": "Target Channel",
-      "applyMode": "Apply Mode",
-      "createdAt": "Submitted At",
-      "updatedAt": "Updated At"
-    },
-    "errors": {
-      "emptyId": "Please enter an application ID",
-      "queryFailed": "Query failed. Please try again later."
     }
   },
   "changeRequest": {
@@ -603,7 +554,7 @@
     },
     "done": {
       "title": "Change Request Submitted",
-      "description": "Your change request has been submitted. Save the ID below to track progress.",
+      "description": "Your change request has been submitted. Save the ID below and provide it when you contact the admin.",
       "newRequest": "Submit Another Request"
     }
   },
