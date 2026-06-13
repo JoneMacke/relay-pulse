@@ -72,10 +72,11 @@ func (p *ClientPool) GetClient(provider, proxyURL string) (*http.Client, error) 
 	return client, nil
 }
 
-// createTransport 创建 HTTP Transport，支持代理配置
-// proxyURL 为空时使用系统环境变量代理
-func createTransport(proxyURL string) (http.RoundTripper, error) {
-	baseTransport := &http.Transport{
+// newBaseProbeTransport 创建 scheduler 与管理员 inline 探测共用的 Transport 基础配置。
+// 不变量：冷启动口径（禁 keep-alive）、禁 HTTP/2 等网络行为只维护这一处，避免 inline
+// 探测与 scheduler 真实探测在传输层悄悄漂移。
+func newBaseProbeTransport() *http.Transport {
+	return &http.Transport{
 		MaxIdleConns:        100,
 		MaxIdleConnsPerHost: 10,
 		IdleConnTimeout:     90 * time.Second,
@@ -85,23 +86,28 @@ func createTransport(proxyURL string) (http.RoundTripper, error) {
 		// 显式禁用 HTTP/2，确保不会通过多路复用复用到已建立连接。
 		TLSNextProto: make(map[string]func(string, *tls.Conn) http.RoundTripper),
 	}
+}
 
-	// 无自定义代理时，使用系统环境变量
+// NewExplicitProxyTransport 为给定的**非空**代理 URL 构建 Transport（http/https/socks5）。
+//
+// 不变量：空 proxyURL 必须返回错误，**绝不**回退到 ProxyFromEnvironment。这是给"显式代理、
+// 否则报错"的调用方（管理员 inline 探测）复用 scheduler 代理语义的入口；公开自测路径绝不能
+// 因为进程环境变量而意外走代理。需要环境代理的 scheduler 空代理分支仍走 createTransport("")。
+func NewExplicitProxyTransport(proxyURL string) (*http.Transport, error) {
+	proxyURL = strings.TrimSpace(proxyURL)
 	if proxyURL == "" {
-		baseTransport.Proxy = http.ProxyFromEnvironment
-		return baseTransport, nil
+		return nil, fmt.Errorf("proxyURL 不能为空")
 	}
 
-	// 解析代理 URL
+	baseTransport := newBaseProbeTransport()
+
 	parsed, err := url.Parse(proxyURL)
 	if err != nil {
 		return nil, fmt.Errorf("解析代理 URL 失败: %w", err)
 	}
 
 	// 防御性处理：scheme 小写化（配置层已做规范化，这里是兜底）
-	scheme := strings.ToLower(parsed.Scheme)
-
-	switch scheme {
+	switch strings.ToLower(parsed.Scheme) {
 	case "http", "https":
 		// HTTP/HTTPS 代理：直接设置 Proxy 函数
 		baseTransport.Proxy = http.ProxyURL(parsed)
@@ -114,6 +120,21 @@ func createTransport(proxyURL string) (http.RoundTripper, error) {
 	default:
 		return nil, fmt.Errorf("不支持的代理协议: %s（支持 http, https, socks5, socks）", parsed.Scheme)
 	}
+}
+
+// createTransport 创建 HTTP Transport，支持代理配置。
+// proxyURL 为空时使用系统环境变量代理（scheduler 历史行为，保持不变）。
+func createTransport(proxyURL string) (http.RoundTripper, error) {
+	if strings.TrimSpace(proxyURL) == "" {
+		baseTransport := newBaseProbeTransport()
+		baseTransport.Proxy = http.ProxyFromEnvironment
+		return baseTransport, nil
+	}
+	t, err := NewExplicitProxyTransport(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	return t, nil
 }
 
 // createSOCKS5Transport 创建 SOCKS5 代理的 Transport

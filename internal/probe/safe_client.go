@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"monitor/internal/monitor"
 )
 
 // newSafeHTTPClient 创建专用的安全 HTTP 客户端：
@@ -100,4 +102,29 @@ func newSafeHTTPClient(guard *SSRFGuard) *http.Client {
 			return http.ErrUseLastResponse
 		},
 	}
+}
+
+// newProxyHTTPClient 创建**仅供管理员 inline 探测**使用的显式代理客户端。
+//
+// 不变量：
+//   - 代理模式下上游目标 IP 由代理负责解析/连接，safe DialContext 的上游 SSRF 校验天然失效；
+//     这里**不**额外加严 proxy host 校验——proxy 恒来自管理员保存的通道配置（请求不可覆盖），
+//     与 scheduler 真实探测用的 cfg.Proxy 完全同源；若比 scheduler 更严会出现"调度能探、
+//     管理员测失败"的口径不一致。
+//   - 仍保留 inline safe client 的诊断口径：禁自动重定向、TLS 握手 / 响应头超时；禁 keep-alive
+//     与 HTTP/2 由 monitor.NewExplicitProxyTransport 的基础配置保证。
+func newProxyHTTPClient(proxyURL string) (*http.Client, error) {
+	transport, err := monitor.NewExplicitProxyTransport(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	transport.TLSHandshakeTimeout = 5 * time.Second
+	transport.ResponseHeaderTimeout = 10 * time.Second
+
+	return &http.Client{
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}, nil
 }

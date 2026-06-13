@@ -21,10 +21,26 @@ import (
 
 // adminProbeRequest 探测覆盖参数：非空字段会覆盖磁盘上保存的值，
 // 用于"编辑未保存就先测一下"的场景。空字段回退到 store 里的当前值。
+//
+// TargetModel 指定要探测的具体通道（父或子）：
+//   - 空：探测父通道（向后兼容；Template/BaseURL/APIKey 草稿覆盖仅在此分支生效）
+//   - 非空：按 (Provider,Service,Channel,Model) 在 runtime 已解析配置中定位目标
+//     通道并直接探测，不套用任何草稿覆盖（见 AdminProbeMonitor 中的不变量说明）
 type adminProbeRequest struct {
-	Template string `json:"template,omitempty"`
-	BaseURL  string `json:"base_url,omitempty"`
-	APIKey   string `json:"api_key,omitempty"`
+	Template    string `json:"template,omitempty"`
+	BaseURL     string `json:"base_url,omitempty"`
+	APIKey      string `json:"api_key,omitempty"`
+	TargetModel string `json:"target_model,omitempty"`
+}
+
+// adminProbeTarget 是 AdminGetMonitor 附带返回的"可探测目标"项，供前端为父/子
+// 通道分别渲染测试按钮。Model 取自 runtime 已解析配置（与 scheduler 同源、且
+// (P,S,C,Model) 经 validate 强制唯一），是探测请求 target_model 的稳定标识。
+type adminProbeTarget struct {
+	Role     string `json:"role"` // "parent" | "child"
+	Model    string `json:"model"`
+	Template string `json:"template"`
+	Disabled bool   `json:"disabled"`
 }
 
 // AdminListTemplates 列出 templates/ 中的可用模板
@@ -252,7 +268,8 @@ func (h *Handler) AdminGetMonitor(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"monitor": file,
+		"monitor":       file,
+		"probe_targets": h.buildProbeTargets(findRawRoot(file.Monitors), file.Monitors),
 	})
 }
 
@@ -493,6 +510,10 @@ func (h *Handler) AdminProbeMonitor(c *gin.Context) {
 		return
 	}
 
+	// 探测响应（成功体含 curl / response_snippet 等敏感内容）禁止任何中间层缓存。
+	// 入口处统一设置，覆盖所有 early-return 错误分支。
+	c.Header("Cache-Control", "no-store")
+
 	key := c.Param("key")
 	file, err := store.Get(key)
 	if err != nil {
@@ -505,14 +526,8 @@ func (h *Handler) AdminProbeMonitor(c *gin.Context) {
 		return
 	}
 
-	// 找到父通道
-	var root *config.ServiceConfig
-	for i := range file.Monitors {
-		if strings.TrimSpace(file.Monitors[i].Parent) == "" {
-			root = &file.Monitors[i]
-			break
-		}
-	}
+	// 找到父通道（用于定位本文件的 PSC，子通道探测也以此为锚）
+	root := findRawRoot(file.Monitors)
 	if root == nil {
 		apiError(c, http.StatusBadRequest, ErrCodeInvalidParam, "找不到父通道")
 		return
@@ -526,47 +541,70 @@ func (h *Handler) AdminProbeMonitor(c *gin.Context) {
 			return
 		}
 	}
+	targetModel := strings.TrimSpace(req.TargetModel)
 
-	// 拒绝 template 覆盖：模板字段变更涉及 URLPattern/Headers/Body/SuccessContains 等
-	// 派生字段的重新解析，沙箱测试无法做到"半解析"。前端应在用户编辑模板时禁用 Probe 按钮。
-	if overrideTpl := strings.TrimSpace(req.Template); overrideTpl != "" && overrideTpl != strings.TrimSpace(root.Template) {
-		apiError(c, http.StatusUnprocessableEntity, ErrCodeTemplateChangeRequiresSave,
-			"修改模板需保存后再测试（base_url / api_key 可即时覆盖）")
-		return
-	}
+	var cfg config.ServiceConfig
 
-	// 取已解析的 runtime config（与 scheduler 一致）；未命中则 fallback 到 raw + 即时解析。
-	cfg, isResolved := h.resolveRuntimeRoot(root)
-
-	if !isResolved {
-		// fallback 路径：raw monitor file 未在运行时配置中（多见于刚 Create 还未热重载）。
-		// 即时走 ResolveSingleMonitor 把模板和 Duration 派生上去；并在响应头标注 fallback。
-		appCfg := h.snapshotAppConfig()
-		if appCfg == nil {
-			apiError(c, http.StatusServiceUnavailable, ErrCodeServiceUnavailable, "运行时配置未就绪")
+	if targetModel != "" {
+		// 子通道（或显式指定 model 的目标）：只测 runtime 已解析配置，且不套用任何
+		// 草稿覆盖。
+		//
+		// 不变量：runtime resolved cfg 已丢失"字段来自父还是子"的来源信息，无法判断
+		// base_url/api_key 是子通道自有还是从父通道继承；若贸然套父表单的 base_url/
+		// api_key 草稿，会探测到 scheduler 永远不会使用的配置，破坏"inline 与 scheduler
+		// 字段级一致"的硬约束。故此分支忽略 req.Template/BaseURL/APIKey。
+		matched, ok := h.resolveRuntimeByModel(root, targetModel)
+		if !ok {
+			apiError(c, http.StatusConflict, ErrCodeInvalidParam,
+				"目标通道配置尚未生效（可能刚创建/修改），请保存并等待热更新后重试")
 			return
 		}
-		if err := config.ResolveSingleMonitor(appCfg, &cfg, h.configDir()); err != nil {
-			logger.Error("admin", "ResolveSingleMonitor 失败", "key", key, "error", err)
-			apiError(c, http.StatusInternalServerError, ErrCodeInternalError, "解析监测配置失败: "+err.Error())
+		cfg = matched
+	} else {
+		// 拒绝 template 覆盖：模板字段变更涉及 URLPattern/Headers/Body/SuccessContains 等
+		// 派生字段的重新解析，沙箱测试无法做到"半解析"。前端应在用户编辑模板时禁用 Probe
+		// 按钮。此校验放在解析之前，保持与旧实现一致的 422 语义（避免 raw fallback 解析
+		// 失败时把 422 降级成 500 解析错误）。
+		if overrideTpl := strings.TrimSpace(req.Template); overrideTpl != "" && overrideTpl != strings.TrimSpace(root.Template) {
+			apiError(c, http.StatusUnprocessableEntity, ErrCodeTemplateChangeRequiresSave,
+				"修改模板需保存后再测试（base_url / api_key 可即时覆盖）")
 			return
 		}
-		logger.Warn("admin", "AdminProbeMonitor 使用 raw fallback 解析",
-			"key", key, "provider", root.Provider, "service", root.Service, "channel", root.Channel)
-		c.Header("X-Probe-Config-Source", "raw-fallback")
-	}
 
-	// 应用 base_url / api_key 覆盖（用于"编辑未保存"场景）
-	if v := strings.TrimSpace(req.BaseURL); v != "" {
-		// 覆盖参数源自管理员输入，必须过 SSRF 守卫（与 OnboardingTest 一致）
-		if err := probe.NewSSRFGuard().ValidateURL(v); err != nil {
-			apiError(c, http.StatusBadRequest, ErrCodeInvalidParam, "base_url 安全校验失败: "+err.Error())
-			return
+		// 父通道：取已解析的 runtime config（与 scheduler 一致）；未命中则 fallback 到
+		// raw + 即时解析（多见于刚 Create 还未热重载）。仅父通道走 ResolveSingleMonitor，
+		// 子通道需要父继承、不能用它做"半解析"，因此子通道未生效时直接报错（见上）。
+		resolved, isResolved := h.resolveRuntimeRoot(root)
+		cfg = resolved
+
+		if !isResolved {
+			appCfg := h.snapshotAppConfig()
+			if appCfg == nil {
+				apiError(c, http.StatusServiceUnavailable, ErrCodeServiceUnavailable, "运行时配置未就绪")
+				return
+			}
+			if err := config.ResolveSingleMonitor(appCfg, &cfg, h.configDir()); err != nil {
+				logger.Error("admin", "ResolveSingleMonitor 失败", "key", key, "error", err)
+				apiError(c, http.StatusInternalServerError, ErrCodeInternalError, "解析监测配置失败: "+err.Error())
+				return
+			}
+			logger.Warn("admin", "AdminProbeMonitor 使用 raw fallback 解析",
+				"key", key, "provider", root.Provider, "service", root.Service, "channel", root.Channel)
+			c.Header("X-Probe-Config-Source", "raw-fallback")
 		}
-		cfg.BaseURL = strings.TrimRight(v, "/")
-	}
-	if v := strings.TrimSpace(req.APIKey); v != "" {
-		cfg.APIKey = v
+
+		// 应用 base_url / api_key 覆盖（仅父通道，用于"编辑未保存"场景）
+		if v := strings.TrimSpace(req.BaseURL); v != "" {
+			// 覆盖参数源自管理员输入，必须过 SSRF 守卫（与 OnboardingTest 一致）
+			if err := probe.NewSSRFGuard().ValidateURL(v); err != nil {
+				apiError(c, http.StatusBadRequest, ErrCodeInvalidParam, "base_url 安全校验失败: "+err.Error())
+				return
+			}
+			cfg.BaseURL = strings.TrimRight(v, "/")
+		}
+		if v := strings.TrimSpace(req.APIKey); v != "" {
+			cfg.APIKey = v
+		}
 	}
 
 	if strings.TrimSpace(cfg.BaseURL) == "" {
@@ -578,7 +616,10 @@ func (h *Handler) AdminProbeMonitor(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
-	result := h.inlineProber.ProbeConfig(ctx, cfg, probe.WithCurlCapture())
+	// 仅管理员通道管理探测显式传 cfg.Proxy：配了代理就走代理（与 scheduler 真实链路一致）、
+	// 没配则 no-op 直连。公开 onboarding/change 自测调用方不传 WithProxy，因而绝不会因用户
+	// 输入或进程环境变量走代理（SSRF 硬边界）。cfg.Proxy 对子通道已是继承后的值。
+	result := h.inlineProber.ProbeConfig(ctx, cfg, probe.WithCurlCapture(), probe.WithProxy(cfg.Proxy))
 
 	c.JSON(http.StatusOK, gin.H{
 		"probe_id":         result.ProbeID,
@@ -589,6 +630,7 @@ func (h *Handler) AdminProbeMonitor(c *gin.Context) {
 		"error_message":    result.ErrorMessage,
 		"response_snippet": result.ResponseSnippet,
 		"curl":             result.Curl,
+		"via_proxy":        result.ViaProxy,
 	})
 }
 
@@ -619,6 +661,85 @@ func (h *Handler) resolveRuntimeRoot(root *config.ServiceConfig) (config.Service
 		}
 	}
 	return *root, false
+}
+
+// findRawRoot 返回 monitor file 中的父通道（Parent 为空的第一条）。
+// 返回指向 slice 元素的指针，调用方仅用于同步只读（读取 PSC / template 等）。
+func findRawRoot(monitors []config.ServiceConfig) *config.ServiceConfig {
+	for i := range monitors {
+		if strings.TrimSpace(monitors[i].Parent) == "" {
+			return &monitors[i]
+		}
+	}
+	return nil
+}
+
+// resolveRuntimeByModel 按 raw root 的 PSC + 目标 model 在运行时配置中定位已解析通道。
+//
+// 与 resolveRuntimeRoot 不同，本方法**不限定 Parent**：父通道与各子通道在同一 PSC 下
+// 由 (Provider,Service,Channel,Model) 四元组唯一区分（validate 强制），因此按 model 精确
+// 命中即可，无需关心命中的是父还是子。返回值为值拷贝，避免后续探测覆盖污染全局 runtime。
+func (h *Handler) resolveRuntimeByModel(root *config.ServiceConfig, model string) (config.ServiceConfig, bool) {
+	if root == nil || strings.TrimSpace(model) == "" {
+		return config.ServiceConfig{}, false
+	}
+	h.cfgMu.RLock()
+	defer h.cfgMu.RUnlock()
+	if h.config == nil {
+		return config.ServiceConfig{}, false
+	}
+	for _, m := range h.config.Monitors {
+		if m.Provider == root.Provider &&
+			m.Service == root.Service &&
+			m.Channel == root.Channel &&
+			m.Model == model {
+			return m, true
+		}
+	}
+	return config.ServiceConfig{}, false
+}
+
+// buildProbeTargets 列出某通道文件下所有可探测目标（父 + 各子通道），供前端逐个渲染
+// 测试按钮。
+//
+// 优先取 runtime 已解析配置：其 Model 与 scheduler 同源，且作为探测请求的 target_model
+// 标识稳定可靠。runtime 尚无该 PSC（多见于刚 Create 还未热重载）时回退到 raw 文件，
+// 此时子通道 Model 可能为空——前端据此禁用该行测试按钮并提示"尚未生效"。
+func (h *Handler) buildProbeTargets(root *config.ServiceConfig, rawMonitors []config.ServiceConfig) []adminProbeTarget {
+	if root == nil {
+		return nil
+	}
+
+	h.cfgMu.RLock()
+	var runtime []config.ServiceConfig
+	if h.config != nil {
+		for _, m := range h.config.Monitors {
+			if m.Provider == root.Provider && m.Service == root.Service && m.Channel == root.Channel {
+				runtime = append(runtime, m)
+			}
+		}
+	}
+	h.cfgMu.RUnlock()
+
+	source := runtime
+	if len(source) == 0 {
+		source = rawMonitors // 未热重载：退回 raw 结构（Model 可能为空）
+	}
+
+	targets := make([]adminProbeTarget, 0, len(source))
+	for _, m := range source {
+		role := "parent"
+		if strings.TrimSpace(m.Parent) != "" {
+			role = "child"
+		}
+		targets = append(targets, adminProbeTarget{
+			Role:     role,
+			Model:    m.Model,
+			Template: m.Template,
+			Disabled: m.Disabled,
+		})
+	}
+	return targets
 }
 
 // snapshotAppConfig 原子地读取当前运行时 AppConfig 指针，避免持锁太久。

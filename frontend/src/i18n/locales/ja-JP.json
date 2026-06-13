@@ -636,6 +636,8 @@
       "probe": "プローブ",
       "probeResponseBody": "レスポンス本文",
       "probing": "プローブ中...",
+      "probeTargetPending": "対象チャンネルの設定はまだ有効ではありません。保存してホットリロード後に再試行してください。",
+      "viaProxy": "プロキシ経由",
       "templateDirtyHint": "テンプレート変更を保存してからテストしてください（base_url / api_key はその場で上書き可）",
       "tabs": {
         "detail": "詳細",

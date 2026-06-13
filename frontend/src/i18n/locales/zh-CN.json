@@ -629,6 +629,8 @@
       "probe": "探测测试",
       "probeResponseBody": "响应内容",
       "probing": "探测中...",
+      "probeTargetPending": "目标通道配置尚未生效，请保存并等待热更新后重试",
+      "viaProxy": "经代理",
       "templateDirtyHint": "修改模板需保存后再测试（base_url / api_key 可即时覆盖）",
       "tabs": {
         "detail": "详情",

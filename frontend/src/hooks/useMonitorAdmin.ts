@@ -7,7 +7,11 @@ import type {
   AdminMonitorDetailResponse,
   AdminMonitorLogsResponse,
   ProbeHistoryEntry,
+  ProbeTarget,
 } from '../types/monitor';
+
+/** 父通道在按 target 分桶的 probe 状态里使用的固定 key。 */
+export const PARENT_TARGET_KEY = '';
 
 export interface ProbeResult {
   probeId: string;
@@ -19,6 +23,8 @@ export interface ProbeResult {
   responseSnippet: string;
   /** 本次实际请求对应的可复制 curl 命令（默认脱敏，密钥用 $RP_API_KEY 占位）。 */
   curl: string;
+  /** 本次探测是否经通道配置的代理（仅管理员路径会走代理）。 */
+  viaProxy: boolean;
 }
 
 export function useMonitorAdmin(token: string) {
@@ -35,6 +41,7 @@ export function useMonitorAdmin(token: string) {
   // Detail
   const [selectedMonitor, setSelectedMonitor] = useState<MonitorFile | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [probeTargets, setProbeTargets] = useState<ProbeTarget[]>([]);
 
   const authHeaders = useCallback((): HeadersInit => ({
     Authorization: `Bearer ${token}`,
@@ -89,8 +96,11 @@ export function useMonitorAdmin(token: string) {
   const fetchDetail = useCallback(async (key: string) => {
     if (!token) return;
     setError(null);
-    setProbeResult(null);
-    setProbeError(null);
+    // 切换详情时清空上一通道的 probe 结果，避免串台。
+    setProbingTargets({});
+    setProbeResults({});
+    setProbeErrors({});
+    setProbeTargets([]);
 
     try {
       const resp = await apiGet<AdminMonitorDetailResponse>(
@@ -98,6 +108,7 @@ export function useMonitorAdmin(token: string) {
         { headers: authHeaders() },
       );
       setSelectedMonitor(resp.monitor);
+      setProbeTargets(resp.probe_targets || []);
       setSelectedKey(key);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : '加载详情失败');
@@ -129,19 +140,21 @@ export function useMonitorAdmin(token: string) {
     setError(null);
 
     try {
-      const resp = await apiPut<{ monitor: MonitorFile }>(
+      await apiPut<{ monitor: MonitorFile }>(
         `/api/admin/monitors/${key}`,
         { revision, monitor: file },
         { headers: authHeaders() },
       );
-      setSelectedMonitor(resp.monitor);
       fetchList();
+      // 重新拉详情：刷新 probe_targets（保存可能改了子通道 model/template）并清空旧探测结果，
+      // 避免查看态用陈旧 target 测到已不存在的 model。
+      await fetchDetail(key);
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : '更新失败';
       setError(msg);
       throw e;
     }
-  }, [token, authHeaders, fetchList]);
+  }, [token, authHeaders, fetchList, fetchDetail]);
 
   // Delete
   const deleteMonitor = useCallback(async (key: string) => {
@@ -176,19 +189,25 @@ export function useMonitorAdmin(token: string) {
     }
   }, [token, authHeaders, fetchList]);
 
-  // Probe
-  const [isProbing, setIsProbing] = useState(false);
-  const [probeResult, setProbeResult] = useState<ProbeResult | null>(null);
-  const [probeError, setProbeError] = useState<string | null>(null);
+  // Probe：父通道与各子通道可独立探测，状态按 target key 分桶（key=target model，
+  // 父通道用 PARENT_TARGET_KEY=''），避免多按钮互相覆盖结果。
+  const [probingTargets, setProbingTargets] = useState<Record<string, boolean>>({});
+  const [probeResults, setProbeResults] = useState<Record<string, ProbeResult>>({});
+  const [probeErrors, setProbeErrors] = useState<Record<string, string>>({});
 
   const probeMonitor = useCallback(async (
     key: string,
     overrides?: { template?: string; base_url?: string; api_key?: string },
+    targetModel = '',
   ): Promise<ProbeResult | null> => {
     if (!token) return null;
-    setIsProbing(true);
-    setProbeResult(null);
-    setProbeError(null);
+    const targetKey = targetModel || PARENT_TARGET_KEY;
+    setProbingTargets(prev => ({ ...prev, [targetKey]: true }));
+    setProbeErrors(prev => {
+      const next = { ...prev };
+      delete next[targetKey];
+      return next;
+    });
 
     try {
       const resp = await apiPost<{
@@ -200,9 +219,10 @@ export function useMonitorAdmin(token: string) {
         error_message: string;
         response_snippet: string;
         curl?: string;
+        via_proxy?: boolean;
       }>(
         `/api/admin/monitors/${key}/probe`,
-        overrides ?? {},
+        { ...(overrides ?? {}), ...(targetModel ? { target_model: targetModel } : {}) },
         { headers: authHeaders() },
       );
       const result: ProbeResult = {
@@ -214,15 +234,16 @@ export function useMonitorAdmin(token: string) {
         errorMessage: resp.error_message,
         responseSnippet: resp.response_snippet,
         curl: resp.curl ?? '',
+        viaProxy: resp.via_proxy ?? false,
       };
-      setProbeResult(result);
+      setProbeResults(prev => ({ ...prev, [targetKey]: result }));
       return result;
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : '探测失败';
-      setProbeError(msg);
+      setProbeErrors(prev => ({ ...prev, [targetKey]: msg }));
       return null;
     } finally {
-      setIsProbing(false);
+      setProbingTargets(prev => ({ ...prev, [targetKey]: false }));
     }
   }, [token, authHeaders]);
 
@@ -263,6 +284,7 @@ export function useMonitorAdmin(token: string) {
 
     selectedMonitor,
     selectedKey,
+    probeTargets,
     setSelectedMonitor,
     setSelectedKey,
     fetchDetail,
@@ -272,9 +294,9 @@ export function useMonitorAdmin(token: string) {
     deleteMonitor,
     toggleMonitor,
     probeMonitor,
-    isProbing,
-    probeResult,
-    probeError,
+    probingTargets,
+    probeResults,
+    probeErrors,
     fetchMonitorLogs,
   };
 }

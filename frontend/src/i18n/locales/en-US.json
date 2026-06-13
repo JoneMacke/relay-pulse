@@ -626,6 +626,8 @@
       "probe": "Probe",
       "probeResponseBody": "Response body",
       "probing": "Probing...",
+      "probeTargetPending": "Target channel config is not active yet. Save and retry after hot-reload.",
+      "viaProxy": "via proxy",
       "templateDirtyHint": "Save monitor before testing template changes (base_url / api_key can be overridden inline)",
       "tabs": {
         "detail": "Detail",

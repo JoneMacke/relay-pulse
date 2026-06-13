@@ -89,6 +89,16 @@ export interface MonitorFile {
   monitors: MonitorConfig[];
 }
 
+/** 某通道文件下的可探测目标（父或子通道）。
+ *  model 取自后端 runtime 已解析配置，是探测请求 target_model 的稳定标识；
+ *  未热重载时可能为空（前端据此禁用该行测试按钮）。 */
+export interface ProbeTarget {
+  role: 'parent' | 'child';
+  model: string;
+  template: string;
+  disabled: boolean;
+}
+
 /** Admin Monitor API 响应 */
 export interface AdminMonitorListResponse {
   monitors: MonitorSummary[];
@@ -97,6 +107,7 @@ export interface AdminMonitorListResponse {
 
 export interface AdminMonitorDetailResponse {
   monitor: MonitorFile;
+  probe_targets?: ProbeTarget[];
 }
 
 /** 单条探测历史记录（管理后台 logs tab 用） */

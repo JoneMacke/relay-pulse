@@ -1,8 +1,9 @@
 import { useEffect, useState, type InputHTMLAttributes } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Eye, EyeOff, Copy, Check, X } from 'lucide-react';
-import type { MonitorConfig, MonitorFile, ProbeHistoryEntry } from '../../types/monitor';
+import type { MonitorConfig, MonitorFile, ProbeHistoryEntry, ProbeTarget } from '../../types/monitor';
 import type { ProbeResult } from '../../hooks/useMonitorAdmin';
+import { PARENT_TARGET_KEY } from '../../hooks/useMonitorAdmin';
 import { MonitorLogsTab } from './MonitorLogsTab';
 import { CurlCommandBlock } from './CurlCommandBlock';
 import { fieldInputClass, fieldShapeClass } from './fieldStyles';
@@ -17,14 +18,20 @@ interface MonitorDetailProps {
   onSave: (file: MonitorFile, revision: number) => Promise<void>;
   onDelete: () => void;
   onToggle: (field: 'disabled' | 'hidden', value: boolean) => void;
-  onProbe: (overrides?: { template?: string; base_url?: string; api_key?: string }) => Promise<ProbeResult | null>;
+  onProbe: (
+    overrides?: { template?: string; base_url?: string; api_key?: string },
+    targetModel?: string,
+  ) => Promise<ProbeResult | null>;
   fetchLogs: (
     key: string,
     opts?: { since?: string; limit?: number; model?: string },
   ) => Promise<ProbeHistoryEntry[]>;
-  isProbing?: boolean;
-  probeResult?: ProbeResult | null;
-  probeError?: string | null;
+  /** 可探测目标（父 + 各子通道），来自详情接口的 probe_targets。 */
+  probeTargets?: ProbeTarget[];
+  /** 按 target key（model，父通道用 PARENT_TARGET_KEY）分桶的探测态。 */
+  probingTargets?: Record<string, boolean>;
+  probeResults?: Record<string, ProbeResult>;
+  probeErrors?: Record<string, string>;
 }
 
 type EditableFields = Pick<MonitorConfig,
@@ -49,7 +56,7 @@ interface SelectOption {
 export function MonitorDetail({
   fetchTemplates, monitorFile, monitorKey, onBack,
   onSave, onDelete, onToggle, onProbe, fetchLogs,
-  isProbing, probeResult, probeError,
+  probeTargets = [], probingTargets = {}, probeResults = {}, probeErrors = {},
 }: MonitorDetailProps) {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<DetailTab>('detail');
@@ -62,6 +69,14 @@ export function MonitorDetail({
 
   const root = monitorFile.monitors.find(m => !m.parent) || monitorFile.monitors[0];
   const children = monitorFile.monitors.filter(m => m.parent);
+  // 子通道测试行直接由后端 resolved 的 child 目标驱动（不和 raw children 按下标配对），
+  // 这样 model 标签与探测请求 target_model 完全同源，避免 raw/runtime 集合错位导致串行。
+  const childTargets = probeTargets.filter(t => t.role === 'child');
+
+  // 父通道探测态（按钮禁用 / 结果展示均读这一桶）。
+  const parentProbing = !!probingTargets[PARENT_TARGET_KEY];
+  const parentResult = probeResults[PARENT_TARGET_KEY];
+  const parentError = probeErrors[PARENT_TARGET_KEY];
 
   const [editFields, setEditFields] = useState<EditableFields>({
     provider_name: root?.provider_name || '',
@@ -243,11 +258,14 @@ export function MonitorDetail({
       await onProbe({
         base_url: editFields.base_url,
         api_key: editFields.api_key,
-      });
+      }, PARENT_TARGET_KEY);
     } else {
-      await onProbe();
+      await onProbe(undefined, PARENT_TARGET_KEY);
     }
   };
+
+  // 子通道只测已保存的 runtime resolved 配置，不传 base_url/api_key 草稿覆盖。
+  const handleChildProbe = (targetModel: string) => onProbe(undefined, targetModel);
 
   const handleDelete = async () => {
     setIsDeleting(true);
@@ -584,18 +602,52 @@ export function MonitorDetail({
             </div>
           )
         ) : (
-          /* 查看态 */
-          children.length === 0 ? (
-            <p className="text-xs text-muted">{t('admin.monitors.noChildren')}</p>
+          /* 查看态：逐个子通道，可独立测试 */
+          childTargets.length === 0 ? (
+            children.length === 0 ? (
+              <p className="text-xs text-muted">{t('admin.monitors.noChildren')}</p>
+            ) : (
+              /* 详情接口未返回 probe_targets（旧后端/尚未生效）：退回 raw 列表，仅展示不可测 */
+              <div className="space-y-2">
+                {children.map((child, i) => (
+                  <div key={i} className="flex items-center gap-4 text-sm py-1.5 border-b border-default/30 last:border-0">
+                    <span className="text-primary font-medium">{child.model || t('admin.monitors.noModel')}</span>
+                    <span className="text-muted">{child.template}</span>
+                    {child.base_url && <span className="text-muted text-xs truncate max-w-[200px]">{child.base_url}</span>}
+                  </div>
+                ))}
+              </div>
+            )
           ) : (
             <div className="space-y-2">
-              {children.map((child, i) => (
-                <div key={i} className="flex items-center gap-4 text-sm py-1.5 border-b border-default/30 last:border-0">
-                  <span className="text-primary font-medium">{child.model || t('admin.monitors.noModel')}</span>
-                  <span className="text-muted">{child.template}</span>
-                  {child.base_url && <span className="text-muted text-xs truncate max-w-[200px]">{child.base_url}</span>}
-                </div>
-              ))}
+              {childTargets.map((target, i) => {
+                // 仅在有 resolved model 时才读结果桶——空 model（runtime 未生效的 raw 回退）
+                // 不可探测，且绝不能落到父通道的 '' 桶（否则会把父结果错显到子行）。
+                const canProbe = !!target.model && !templateDirty;
+                const rowProbing = !!(target.model && probingTargets[target.model]);
+                const rowResult = target.model ? probeResults[target.model] : undefined;
+                const rowError = target.model ? probeErrors[target.model] : undefined;
+                return (
+                  <div key={`${target.model}-${target.template}-${i}`} className="py-1.5 border-b border-default/30 last:border-0 space-y-1.5">
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm">
+                      <span className="text-primary font-medium">{target.model || t('admin.monitors.noModel')}</span>
+                      <span className="text-muted">{target.template}</span>
+                      <button
+                        type="button"
+                        onClick={() => handleChildProbe(target.model)}
+                        disabled={!canProbe || rowProbing}
+                        title={!target.model ? t('admin.monitors.probeTargetPending') : undefined}
+                        className="px-2.5 py-1 rounded-lg bg-accent/10 text-accent text-xs font-medium hover:bg-accent/20 transition disabled:opacity-50"
+                      >
+                        {rowProbing ? t('admin.monitors.probing') : t('admin.monitors.probe')}
+                      </button>
+                      <ProbeResultLine result={rowResult} error={rowError} />
+                    </div>
+                    {/* 子通道 api_key 由后端继承解析、前端不持有，故 curl 仅提供脱敏版 */}
+                    <ProbeResultDetail result={rowResult} apiKey="" />
+                  </div>
+                );
+              })}
             </div>
           )
         )}
@@ -605,11 +657,11 @@ export function MonitorDetail({
       <div className="flex gap-3">
         <button
           onClick={handleProbe}
-          disabled={isProbing || templateDirty}
+          disabled={parentProbing || templateDirty}
           title={templateDirty ? t('admin.monitors.templateDirtyHint') : undefined}
           className="px-4 py-2 rounded-lg bg-accent/10 text-accent text-sm font-medium hover:bg-accent/20 transition disabled:opacity-50"
         >
-          {isProbing ? t('admin.monitors.probing') : t('admin.monitors.probe')}
+          {parentProbing ? t('admin.monitors.probing') : t('admin.monitors.probe')}
         </button>
 
         {templateDirty && (
@@ -618,25 +670,7 @@ export function MonitorDetail({
           </span>
         )}
 
-        {probeResult && !templateDirty && (
-          <div className="flex items-center gap-3 self-center text-xs">
-            <span className={`inline-block w-2 h-2 rounded-full ${
-              probeResult.probeStatus === 1 ? 'bg-success' :
-              probeResult.probeStatus === 2 ? 'bg-warning' : 'bg-danger'
-            }`} />
-            <span className="text-primary">{probeResult.latency}ms</span>
-            <span className="text-muted">HTTP {probeResult.httpCode}</span>
-            {probeResult.errorMessage && (
-              <span className="text-danger truncate max-w-[200px]" title={probeResult.errorMessage}>
-                {probeResult.errorMessage}
-              </span>
-            )}
-          </div>
-        )}
-
-        {probeError && !templateDirty && (
-          <span className="self-center text-xs text-danger">{probeError}</span>
-        )}
+        {!templateDirty && <ProbeResultLine result={parentResult} error={parentError} />}
 
         <div className="flex-1" />
 
@@ -667,21 +701,65 @@ export function MonitorDetail({
         )}
       </div>
 
-      {probeResult && !templateDirty && probeResult.responseSnippet && (
-        <div className="space-y-1">
-          <div className="text-xs text-muted">{t('admin.monitors.probeResponseBody')}</div>
-          <pre className="whitespace-pre-wrap break-all text-xs max-h-40 overflow-y-auto bg-surface p-2 rounded text-secondary">
-            {probeResult.responseSnippet}
-          </pre>
-        </div>
-      )}
-
-      {probeResult && !templateDirty && probeResult.curl && (
-        <CurlCommandBlock curl={probeResult.curl} apiKey={editFields.api_key} />
-      )}
+      {!templateDirty && <ProbeResultDetail result={parentResult} apiKey={editFields.api_key} />}
       </>
       )}
     </div>
+  );
+}
+
+/** 探测结果摘要行：状态点 + 延迟 + HTTP + 细分状态标签 + 完整错误信息。
+ *  细分状态复用主表 subStatus 命名空间（缺失键回退原始字符串）；成功（probeStatus===1
+ *  或 sub_status==='none'）时不显示细分状态。错误信息完整换行展示，不再截断。 */
+function ProbeResultLine({ result, error }: { result?: ProbeResult | null; error?: string | null }) {
+  const { t } = useTranslation();
+  if (!result && !error) return null;
+
+  const showSubStatus = !!result?.subStatus && result.subStatus !== 'none' && result.probeStatus !== 1;
+
+  return (
+    <div className="flex flex-wrap items-center gap-3 text-xs min-w-0">
+      {result && (
+        <>
+          <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${
+            result.probeStatus === 1 ? 'bg-success' :
+            result.probeStatus === 2 ? 'bg-warning' : 'bg-danger'
+          }`} />
+          <span className="text-primary">{result.latency}ms</span>
+          <span className="text-muted">HTTP {result.httpCode}</span>
+          {result.viaProxy && (
+            <span className="rounded bg-secondary/10 px-1.5 py-0.5 text-secondary">{t('admin.monitors.viaProxy')}</span>
+          )}
+          {showSubStatus && (
+            <span className="text-secondary">{t(`subStatus.${result.subStatus}`, result.subStatus)}</span>
+          )}
+          {result.errorMessage && (
+            <span className="text-danger whitespace-pre-wrap break-all">{result.errorMessage}</span>
+          )}
+        </>
+      )}
+      {error && <span className="text-danger whitespace-pre-wrap break-all">{error}</span>}
+    </div>
+  );
+}
+
+/** 探测结果的详细诊断：上游响应体片段 + 可复制脱敏 curl。父子通道共用。 */
+function ProbeResultDetail({ result, apiKey }: { result?: ProbeResult | null; apiKey?: string }) {
+  const { t } = useTranslation();
+  if (!result) return null;
+
+  return (
+    <>
+      {result.responseSnippet && (
+        <div className="space-y-1">
+          <div className="text-xs text-muted">{t('admin.monitors.probeResponseBody')}</div>
+          <pre className="whitespace-pre-wrap break-all text-xs max-h-40 overflow-y-auto bg-surface p-2 rounded text-secondary">
+            {result.responseSnippet}
+          </pre>
+        </div>
+      )}
+      {result.curl && <CurlCommandBlock curl={result.curl} apiKey={apiKey} />}
+    </>
   );
 }
 

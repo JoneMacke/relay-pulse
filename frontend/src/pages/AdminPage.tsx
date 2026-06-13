@@ -162,16 +162,17 @@ export default function AdminPage() {
                         monitor.toggleMonitor(monitor.selectedKey, field, value);
                       }
                     }}
-                    onProbe={async (overrides) => {
+                    onProbe={async (overrides, targetModel) => {
                       if (monitor.selectedKey) {
-                        return monitor.probeMonitor(monitor.selectedKey, overrides);
+                        return monitor.probeMonitor(monitor.selectedKey, overrides, targetModel);
                       }
                       return null;
                     }}
                     fetchLogs={monitor.fetchMonitorLogs}
-                    isProbing={monitor.isProbing}
-                    probeResult={monitor.probeResult}
-                    probeError={monitor.probeError}
+                    probeTargets={monitor.probeTargets}
+                    probingTargets={monitor.probingTargets}
+                    probeResults={monitor.probeResults}
+                    probeErrors={monitor.probeErrors}
                   />
                 ) : (
                   <div className="space-y-4">

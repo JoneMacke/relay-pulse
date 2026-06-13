@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -49,10 +50,26 @@ func newInternalProber(guard *SSRFGuard, maxBodyBytes int64, uidMgr *identity.Us
 	}
 }
 
-func (p *internalProber) probe(ctx context.Context, cfg *config.ServiceConfig, captureCurl bool) *probeResult {
+func (p *internalProber) probe(ctx context.Context, cfg *config.ServiceConfig, captureCurl bool, proxyURL string) *probeResult {
 	result := &probeResult{
 		Status:    0,
 		SubStatus: "none",
+	}
+
+	// 默认走预建的 safe 直连客户端；仅当调用方显式传入 proxyURL（管理员路径）时，
+	// 为本次探测临时构建带代理的客户端（admin 低频，建后即用、用完关闲连）。
+	client := p.client
+	proxyURL = strings.TrimSpace(proxyURL)
+	if proxyURL != "" {
+		proxyClient, err := newProxyHTTPClient(proxyURL)
+		if err != nil {
+			result.SubStatus = "network_error"
+			result.Err = fmt.Errorf("创建代理客户端失败（proxy=%s）: %s",
+				maskProxyURL(proxyURL), maskProxyURLInMessage(err.Error(), proxyURL))
+			return result
+		}
+		client = proxyClient
+		defer proxyClient.CloseIdleConnections()
 	}
 
 	probeURL, probeBody, probeHeaders, probeSuccessContains, _, _ := monitor.InjectVariables(cfg, p.uidMgr)
@@ -78,13 +95,18 @@ func (p *internalProber) probe(ctx context.Context, cfg *config.ServiceConfig, c
 	}
 
 	start := time.Now()
-	resp, err := p.client.Do(req)
+	resp, err := client.Do(req)
 	latency := int(time.Since(start).Milliseconds())
 	result.Latency = latency
 
 	if err != nil {
 		result.SubStatus = "network_error"
-		result.Err = err
+		if proxyURL != "" {
+			// 传输错误经代理时可能回显 proxy URL（含 userinfo），统一脱敏后再外露。
+			result.Err = fmt.Errorf("%s", maskProxyURLInMessage(err.Error(), proxyURL))
+		} else {
+			result.Err = err
+		}
 		return result
 	}
 	defer resp.Body.Close()
@@ -187,6 +209,9 @@ type Result struct {
 	// Curl 为本次实际请求快照对应的可复制 curl 命令；默认脱敏（密钥用 $RP_API_KEY
 	// 占位）。仅在调用方传入 WithCurlCapture() 时填充，公开自测路径不下发。
 	Curl string `json:"curl,omitempty"`
+	// ViaProxy 标记本次探测是否显式经 cfg.Proxy 代理。仅 AdminProbeMonitor 传 WithProxy；
+	// 公开 onboarding/change 自测永不传，故恒为 false。供前端展示"经代理"标签。
+	ViaProxy bool `json:"via_proxy"`
 }
 
 // InlineProber 提供同步内联探测能力。
@@ -198,6 +223,7 @@ type InlineProber struct {
 // probeOptions 聚合单次内联探测的可选诊断开关。
 type probeOptions struct {
 	captureCurl bool
+	proxyURL    string
 }
 
 // ProbeOption 控制单次内联探测的可选诊断输出。
@@ -207,6 +233,15 @@ type ProbeOption func(*probeOptions)
 // 仅供管理员测试入口使用；公开 onboarding/change 自测不要传入。
 func WithCurlCapture() ProbeOption {
 	return func(o *probeOptions) { o.captureCurl = true }
+}
+
+// WithProxy 让本次 ProbeConfig 经显式 proxyURL 探测（空字符串=直连，no-op）。
+//
+// 不变量：这是调用方**显式 opt-in 的安全边界**——只有管理员通道管理探测（AdminProbeMonitor）
+// 传入；onboarding/change 等公开自测路径绝不传，因而即使其 cfg 将来出现 proxy 字段，也不会
+// 把本服务当作 SSRF 跳板。proxyURL 恒取自管理员保存的通道配置，请求体不可覆盖。
+func WithProxy(proxyURL string) ProbeOption {
+	return func(o *probeOptions) { o.proxyURL = strings.TrimSpace(proxyURL) }
 }
 
 // NewInlineProber 创建内联探测器。
@@ -283,8 +318,8 @@ func (p *InlineProber) Probe(ctx context.Context, serviceType, templateName, bas
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// 执行底层探测（模板自测路径不输出 curl）
-	pr := p.prober.probe(probeCtx, cfg, false)
+	// 执行底层探测（模板自测路径不输出 curl、不走代理）
+	pr := p.prober.probe(probeCtx, cfg, false, "")
 	if pr == nil {
 		result.SubStatus = "internal_error"
 		result.ErrorMessage = "探测器返回空结果"
@@ -347,6 +382,33 @@ func truncateForLog(s string, max int) string {
 	return s[:max] + "...(truncated)"
 }
 
+// maskProxyURL 把代理 URL 脱敏为 scheme://host:port，剥掉 userinfo（含密码），
+// 供错误信息/展示使用——绝不外露代理凭据。
+func maskProxyURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "<invalid-proxy-url>"
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+// maskProxyURLInMessage 把错误文本里出现的原始代理 URL（可能含 userinfo）替换为脱敏形态。
+// 传输层错误偶尔会回显完整 proxy URL；统一在外露前清掉凭据。
+func maskProxyURLInMessage(msg, raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return msg
+	}
+	masked := maskProxyURL(raw)
+	msg = strings.ReplaceAll(msg, raw, masked)
+	// 兜底：去掉 userinfo 后的形态也替换（部分库会规整化 URL 再回显）。
+	if u, err := url.Parse(raw); err == nil && u.User != nil {
+		u.User = nil
+		msg = strings.ReplaceAll(msg, u.String(), masked)
+	}
+	return msg
+}
+
 // ProbeConfig 使用已解析完成的 ServiceConfig 执行一次内联探测。
 //
 // 适用场景：调用方持有一份**已经过模板填充 + Duration 派生**的 ServiceConfig
@@ -373,21 +435,25 @@ func (p *InlineProber) ProbeConfig(ctx context.Context, cfg config.ServiceConfig
 			opt(&probeOpts)
 		}
 	}
+	probeOpts.proxyURL = strings.TrimSpace(probeOpts.proxyURL)
 
 	result := &Result{
 		ProbeID:     "probe-" + uuid.New().String(),
 		ProbeStatus: 0,
 		SubStatus:   "none",
+		ViaProxy:    probeOpts.proxyURL != "",
 	}
 	// defer 单条日志，把 probe_id 与 PSCM 上下文一起记下来；
 	// 让运维 `grep probe_id=probe-xxx` 一行串联整次 inline 探测。
+	// proxied 只记布尔，绝不记 proxy URL（含凭据）。
 	defer logInlineProbeResult(result,
 		"provider", cfg.Provider,
 		"service", cfg.Service,
 		"channel", cfg.Channel,
 		"model", cfg.Model,
 		"base_url", cfg.BaseURL,
-		"template", cfg.Template)
+		"template", cfg.Template,
+		"proxied", probeOpts.proxyURL != "")
 
 	if err := ctx.Err(); err != nil {
 		result.SubStatus = "canceled"
@@ -414,7 +480,7 @@ func (p *InlineProber) ProbeConfig(ctx context.Context, cfg config.ServiceConfig
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	pr := p.prober.probe(probeCtx, &cfg, probeOpts.captureCurl)
+	pr := p.prober.probe(probeCtx, &cfg, probeOpts.captureCurl, probeOpts.proxyURL)
 	if pr == nil {
 		result.SubStatus = "internal_error"
 		result.ErrorMessage = "探测器返回空结果"

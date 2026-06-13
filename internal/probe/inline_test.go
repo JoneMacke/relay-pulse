@@ -77,7 +77,7 @@ func TestInternalProber_InjectsUserID(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	result := p.probe(ctx, cfg, false)
+	result := p.probe(ctx, cfg, false, "")
 	if result.Err != nil {
 		t.Fatalf("probe failed: %v", result.Err)
 	}
@@ -131,7 +131,7 @@ func TestInternalProber_NilUidMgrLeavesUserIDEmpty(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_ = p.probe(ctx, cfg, false)
+	_ = p.probe(ctx, cfg, false, "")
 
 	if !strings.Contains(string(capturedBody), `"user_id":""`) {
 		t.Fatalf("expected empty user_id when uidMgr is nil; body=%s", capturedBody)
