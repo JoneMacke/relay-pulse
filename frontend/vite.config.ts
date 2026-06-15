@@ -42,8 +42,10 @@ export default defineConfig(({ mode }) => {
       // CSS 代码分割
       cssCodeSplit: true,
 
-      // 使用 esbuild 压缩（更快，Vite 默认）
-      minify: 'esbuild',
+      // vite 8（rolldown）不再内置 esbuild，转用 oxc 做转译/压缩；旧的
+      // minify: 'esbuild' 会触发 vite:esbuild-transpile 插件去加载未安装的
+      // esbuild 而构建失败。改用 vite 8 默认的 'oxc'（同样快、零额外依赖）。
+      minify: 'oxc',
 
       // 调整 chunk 大小警告阈值
       chunkSizeWarningLimit: 500,
@@ -52,21 +54,23 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         output: {
           // 手动代码分块策略
-          manualChunks: {
-            // React 核心库
-            'react-vendor': ['react', 'react-dom'],
-
-            // 路由库
-            'router': ['react-router-dom'],
-
+          // vite 8（rolldown）移除了 manualChunks 的对象形式（构建期直接
+          // "manualChunks is not a function" TypeError），仅保留函数形式。改按
+          // node_modules 包路径分组，保持原有 5 个 vendor 分块语义不变。匹配锚定
+          // `node_modules/<pkg>/` 的末尾斜杠，避免 react 误吞同前缀的 react-router /
+          // react-helmet-async / lucide-react（react-window 未分组，交由自动分块）。
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return
+            // React 核心库（scheduler 是 react-dom 的内部依赖，一并归入）
+            if (/node_modules\/(react|react-dom|scheduler)\//.test(id)) return 'react-vendor'
+            // 路由库（react-router-dom → react-router → @remix-run/router）
+            if (/node_modules\/(react-router|react-router-dom|@remix-run\/router)\//.test(id)) return 'router'
             // 国际化库
-            'i18n': ['i18next', 'react-i18next', 'i18next-browser-languagedetector'],
-
+            if (/node_modules\/(i18next|react-i18next|i18next-browser-languagedetector)\//.test(id)) return 'i18n'
             // UI 图标库
-            'icons': ['lucide-react'],
-
+            if (/node_modules\/lucide-react\//.test(id)) return 'icons'
             // Helmet（SEO）
-            'helmet': ['react-helmet-async'],
+            if (/node_modules\/react-helmet-async\//.test(id)) return 'helmet'
           },
 
           // 自定义 chunk 文件名
