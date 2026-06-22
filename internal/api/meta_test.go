@@ -184,6 +184,7 @@ func TestGetMetaContent(t *testing.T) {
 		slug              string
 		providerName      string
 		isProviderPage    bool
+		staticPath        string
 		expectedTitlePart string
 		expectedDescPart  string
 	}{
@@ -204,6 +205,38 @@ func TestGetMetaContent(t *testing.T) {
 			isProviderPage:    false,
 			expectedTitlePart: "RelayPulse - Real-time availability matrix",
 			expectedDescPart:  "Real-time monitoring of LLM relay",
+		},
+		{
+			name:              "中文联系页",
+			langCode:          "zh-CN",
+			isProviderPage:    false,
+			staticPath:        "contact",
+			expectedTitlePart: "联系我们 | RelayPulse",
+			expectedDescPart:  "申请收录、变更通道配置或提交反馈",
+		},
+		{
+			name:              "英文联系页",
+			langCode:          "en-US",
+			isProviderPage:    false,
+			staticPath:        "contact",
+			expectedTitlePart: "Contact Us | RelayPulse",
+			expectedDescPart:  "Apply for listing, request changes, or submit feedback",
+		},
+		{
+			name:              "俄文联系页",
+			langCode:          "ru-RU",
+			isProviderPage:    false,
+			staticPath:        "contact",
+			expectedTitlePart: "Связаться с нами | RelayPulse",
+			expectedDescPart:  "Подать заявку на добавление",
+		},
+		{
+			name:              "日文联系页",
+			langCode:          "ja-JP",
+			isProviderPage:    false,
+			staticPath:        "contact",
+			expectedTitlePart: "お問い合わせ | RelayPulse",
+			expectedDescPart:  "掲載申請、変更リクエスト",
 		},
 		{
 			name:              "中文服务商页面",
@@ -236,7 +269,7 @@ func TestGetMetaContent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			meta := getMetaContent(tt.langCode, tt.slug, tt.providerName, tt.isProviderPage)
+			meta := getMetaContent(tt.langCode, tt.slug, tt.providerName, tt.isProviderPage, tt.staticPath)
 
 			if !strings.Contains(meta.Title, tt.expectedTitlePart) {
 				t.Errorf("getMetaContent() title = %q, want to contain %q", meta.Title, tt.expectedTitlePart)
@@ -252,6 +285,10 @@ func TestGetMetaContent(t *testing.T) {
 
 			if meta.ProviderName != tt.providerName {
 				t.Errorf("getMetaContent() providerName = %q, want %q", meta.ProviderName, tt.providerName)
+			}
+
+			if meta.StaticPath != tt.staticPath {
+				t.Errorf("getMetaContent() staticPath = %q, want %q", meta.StaticPath, tt.staticPath)
 			}
 		})
 	}
@@ -413,6 +450,7 @@ func TestInjectMetaTags(t *testing.T) {
 		expectedLang       string
 		expectedTitlePart  string
 		expectedIsNotFound bool
+		expectedHTMLParts  []string
 	}{
 		{
 			name:               "中文首页",
@@ -420,6 +458,21 @@ func TestInjectMetaTags(t *testing.T) {
 			expectedLang:       "zh-CN",
 			expectedTitlePart:  "RelayPulse - 实时监测",
 			expectedIsNotFound: false,
+		},
+		{
+			name:               "中文联系页",
+			path:               "/contact",
+			expectedLang:       "zh-CN",
+			expectedTitlePart:  "联系我们 | RelayPulse",
+			expectedIsNotFound: false,
+			expectedHTMLParts: []string{
+				`<link rel="canonical" href="https://relaypulse.top/contact">`,
+				`<link rel="alternate" hreflang="zh-CN" href="https://relaypulse.top/contact">`,
+				`<link rel="alternate" hreflang="en" href="https://relaypulse.top/en/contact">`,
+				`<link rel="alternate" hreflang="x-default" href="https://relaypulse.top/contact">`,
+				`<meta property="og:url" content="https://relaypulse.top/contact">`,
+				`"@type": "ContactPage"`,
+			},
 		},
 		{
 			name:               "存在的服务商页面",
@@ -460,6 +513,12 @@ func TestInjectMetaTags(t *testing.T) {
 				t.Errorf("injectMetaTags(%q) html missing title part = %q", tt.path, tt.expectedTitlePart)
 			}
 
+			for _, part := range tt.expectedHTMLParts {
+				if !strings.Contains(html, part) {
+					t.Errorf("injectMetaTags(%q) html missing expected part = %q", tt.path, part)
+				}
+			}
+
 			// 验证 XSS 防护
 			if strings.Contains(html, "<script>") || strings.Contains(html, "alert(") {
 				t.Errorf("injectMetaTags(%q) contains unescaped script tags", tt.path)
@@ -497,6 +556,10 @@ func TestInjectNoindexForInvalidPaths(t *testing.T) {
 		{name: "英文首页", path: "/en/", expectNoindex: false, expectNotFound: false},
 		{name: "俄文首页", path: "/ru/", expectNoindex: false, expectNotFound: false},
 		{name: "日文首页", path: "/ja/", expectNoindex: false, expectNotFound: false},
+
+		// 有效静态页面：不应注入 noindex
+		{name: "联系页", path: "/contact", expectNoindex: false, expectNotFound: false},
+		{name: "英文联系页", path: "/en/contact", expectNoindex: false, expectNotFound: false},
 
 		// 有效服务商页面：不应注入 noindex
 		{name: "有效服务商", path: "/p/foxcode", expectNoindex: false, expectNotFound: false},
@@ -561,6 +624,18 @@ func TestGeneratePageMetaCanonicalSafety(t *testing.T) {
 			baseURL:           "https://relaypulse.top",
 			expectedCanonical: `    <link rel="canonical" href="https://relaypulse.top/en/">`,
 		},
+		{
+			name: "静态联系页：使用 staticPath 构建 canonical",
+			meta: MetaData{
+				Title:          "Test",
+				Description:    "Test",
+				Language:       Language{Code: "en-US", PathPrefix: "en", HreflangTag: "en"},
+				IsProviderPage: false,
+				StaticPath:     "contact",
+			},
+			baseURL:           "https://relaypulse.top",
+			expectedCanonical: `    <link rel="canonical" href="https://relaypulse.top/en/contact">`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -580,6 +655,33 @@ func TestGeneratePageMetaCanonicalSafety(t *testing.T) {
 			// 安全检查：验证 OpenGraph URL 也不包含恶意脚本
 			if strings.Contains(pageMeta.OpenGraph, "<script>") || strings.Contains(pageMeta.OpenGraph, "alert(") {
 				t.Errorf("OpenGraph contains unescaped script: %s", pageMeta.OpenGraph)
+			}
+		})
+	}
+}
+
+// TestParseStaticPath 测试白名单静态页解析（剥语言前缀）
+func TestParseStaticPath(t *testing.T) {
+	tests := []struct {
+		path     string
+		expected string
+	}{
+		{path: "/", expected: ""},
+		{path: "/en/", expected: ""},
+		{path: "/contact", expected: "contact"},
+		{path: "/en/contact", expected: "contact"},
+		{path: "/ru/contact", expected: "contact"},
+		{path: "/ja/contact", expected: "contact"},
+		{path: "/contact/apply", expected: ""}, // 表单子页不在白名单
+		{path: "/en/contact/apply", expected: ""},
+		{path: "/de/contact", expected: ""}, // 不支持的语言前缀
+		{path: "/foo", expected: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			if got := parseStaticPath(tt.path); got != tt.expected {
+				t.Errorf("parseStaticPath(%q) = %q, want %q", tt.path, got, tt.expected)
 			}
 		})
 	}

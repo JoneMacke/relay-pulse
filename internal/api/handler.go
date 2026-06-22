@@ -659,6 +659,10 @@ func (h *Handler) buildSitemapXML(providerSlugs []string) string {
 		{"ja", "ja"},  // 日文
 	}
 
+	// 首页与服务商页的可用率数据每个巡检周期都在刷新，lastmod 取当日（UTC）是诚实信号；
+	// 静态内容页（contact）不随天滚动，故不发 lastmod，避免“假新鲜度”被搜索引擎贬权。
+	lastmod := time.Now().UTC().Format("2006-01-02")
+
 	var sb strings.Builder
 	sb.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
 	sb.WriteString("\n")
@@ -692,6 +696,7 @@ func (h *Handler) buildSitemapXML(providerSlugs []string) string {
 		// x-default 指向中文首页
 		sb.WriteString(fmt.Sprintf(`    <xhtml:link rel="alternate" hreflang="x-default" href="%s/"/>`+"\n", baseURL))
 
+		sb.WriteString(fmt.Sprintf("    <lastmod>%s</lastmod>\n", lastmod))
 		sb.WriteString("    <priority>1.0</priority>\n")
 		sb.WriteString("    <changefreq>daily</changefreq>\n")
 		sb.WriteString("  </url>\n")
@@ -755,6 +760,7 @@ func (h *Handler) buildSitemapXML(providerSlugs []string) string {
 			// x-default 指向中文版本
 			sb.WriteString(fmt.Sprintf(`    <xhtml:link rel="alternate" hreflang="x-default" href="%s/p/%s"/>`+"\n", baseURL, slug))
 
+			sb.WriteString(fmt.Sprintf("    <lastmod>%s</lastmod>\n", lastmod))
 			sb.WriteString("    <priority>0.8</priority>\n")
 			sb.WriteString("    <changefreq>daily</changefreq>\n")
 			sb.WriteString("  </url>\n")

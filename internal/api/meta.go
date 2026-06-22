@@ -51,26 +51,37 @@ var indexableStaticPaths = map[string]bool{
 	"contact": true,
 }
 
-// isValidHomePath 检查路径是否为有效的可索引页面路径
-func isValidHomePath(path string) bool {
+// trimLanguagePrefix 去掉路径前后斜杠与语言前缀，返回剩余的路径段。
+// 例：/en/contact → contact；/en/ → ""；/contact → contact；/p/foo → p/foo。
+func trimLanguagePrefix(path string) string {
 	trimmed := strings.Trim(path, "/")
 	if trimmed == "" {
-		return true // 根路径
+		return ""
 	}
 
-	// 检查是否只有语言前缀
-	if _, isLang := pathToLangCode[trimmed]; isLang {
-		return true
-	}
-
-	// 去掉语言前缀后检查剩余路径
 	parts := strings.SplitN(trimmed, "/", 2)
-	if _, isLang := pathToLangCode[parts[0]]; isLang && len(parts) == 2 {
-		return indexableStaticPaths[parts[1]]
+	if _, isLang := pathToLangCode[parts[0]]; isLang {
+		if len(parts) == 1 {
+			return "" // 仅语言前缀，等同首页
+		}
+		return parts[1]
 	}
 
-	// 无语言前缀，直接检查
-	return indexableStaticPaths[trimmed]
+	return trimmed
+}
+
+// isValidHomePath 检查路径是否为有效的可索引页面路径（首页或白名单静态页）
+func isValidHomePath(path string) bool {
+	return indexableStaticPaths[trimLanguagePrefix(path)]
+}
+
+// parseStaticPath 解析白名单静态内容页的 key（不含语言前缀）；首页或非白名单返回 ""
+func parseStaticPath(path string) string {
+	staticPath := trimLanguagePrefix(path)
+	if staticPath != "" && indexableStaticPaths[staticPath] {
+		return staticPath
+	}
+	return ""
 }
 
 // MetaData 页面 Meta 数据
@@ -81,6 +92,7 @@ type MetaData struct {
 	Slug           string // URL slug（仅服务商页面，用于构造链接）
 	ProviderName   string // 服务商显示名称（仅服务商页面，用于文案）
 	IsProviderPage bool   // 是否为服务商页面
+	StaticPath     string // 白名单静态内容页 key（不含语言前缀；空=首页或服务商页）
 }
 
 // PageMeta 生成的完整 meta 标签
@@ -133,7 +145,7 @@ func getLanguageByCode(code string) Language {
 }
 
 // getMetaContent 根据语言和页面类型获取 meta 内容
-func getMetaContent(langCode string, slug string, providerName string, isProviderPage bool) MetaData {
+func getMetaContent(langCode string, slug string, providerName string, isProviderPage bool, staticPath string) MetaData {
 	lang := getLanguageByCode(langCode)
 
 	var title, description string
@@ -154,6 +166,23 @@ func getMetaContent(langCode string, slug string, providerName string, isProvide
 		case "ja-JP":
 			title = fmt.Sprintf("%s サービス可用性監視 - RelayPulse", escapedName)
 			description = fmt.Sprintf("%s の API 可用性、レイテンシ、サービス品質をリアルタイムで監視します。", escapedName)
+		}
+	} else if staticPath == "contact" {
+		// 联系页：直接复用前端 ContactPage 的 contact.meta.* i18n 文案，
+		// 保证服务端注入（爬虫初见）与客户端 Helmet 渲染的标题/描述一致。
+		switch langCode {
+		case "zh-CN":
+			title = "联系我们 | RelayPulse"
+			description = "申请收录、变更通道配置或提交反馈"
+		case "en-US":
+			title = "Contact Us | RelayPulse"
+			description = "Apply for listing, request changes, or submit feedback"
+		case "ru-RU":
+			title = "Связаться с нами | RelayPulse"
+			description = "Подать заявку на добавление, запросить изменения или оставить отзыв"
+		case "ja-JP":
+			title = "お問い合わせ | RelayPulse"
+			description = "掲載申請、変更リクエスト、フィードバックの送信"
 		}
 	} else {
 		// 首页
@@ -180,6 +209,7 @@ func getMetaContent(langCode string, slug string, providerName string, isProvide
 		Slug:           slug,
 		ProviderName:   providerName,
 		IsProviderPage: isProviderPage,
+		StaticPath:     staticPath,
 	}
 }
 
@@ -199,6 +229,13 @@ func generatePageMeta(meta MetaData, baseURL string) PageMeta {
 			canonicalURL = fmt.Sprintf("%s/p/%s", baseURL, meta.Slug)
 		} else {
 			canonicalURL = fmt.Sprintf("%s/%s/p/%s", baseURL, meta.Language.PathPrefix, meta.Slug)
+		}
+	} else if meta.StaticPath != "" {
+		// 静态内容页：使用已验证的静态路径 key
+		if meta.Language.PathPrefix == "" {
+			canonicalURL = fmt.Sprintf("%s/%s", baseURL, meta.StaticPath)
+		} else {
+			canonicalURL = fmt.Sprintf("%s/%s/%s", baseURL, meta.Language.PathPrefix, meta.StaticPath)
 		}
 	} else {
 		// 首页：使用语言前缀
@@ -221,6 +258,12 @@ func generatePageMeta(meta MetaData, baseURL string) PageMeta {
 			} else {
 				href = fmt.Sprintf("%s/%s/p/%s", baseURL, lang.PathPrefix, meta.Slug)
 			}
+		} else if meta.StaticPath != "" {
+			if lang.PathPrefix == "" {
+				href = fmt.Sprintf("%s/%s", baseURL, meta.StaticPath)
+			} else {
+				href = fmt.Sprintf("%s/%s/%s", baseURL, lang.PathPrefix, meta.StaticPath)
+			}
 		} else {
 			if lang.PathPrefix == "" {
 				href = fmt.Sprintf("%s/", baseURL)
@@ -231,9 +274,11 @@ func generatePageMeta(meta MetaData, baseURL string) PageMeta {
 		hreflangBuilder.WriteString(fmt.Sprintf(`    <link rel="alternate" hreflang="%s" href="%s">`+"\n", lang.HreflangTag, href))
 	}
 
-	// x-default 指向中文版本（使用 slug）
+	// x-default 指向中文版本
 	if meta.IsProviderPage {
 		hreflangBuilder.WriteString(fmt.Sprintf(`    <link rel="alternate" hreflang="x-default" href="%s/p/%s">`, baseURL, meta.Slug))
+	} else if meta.StaticPath != "" {
+		hreflangBuilder.WriteString(fmt.Sprintf(`    <link rel="alternate" hreflang="x-default" href="%s/%s">`, baseURL, meta.StaticPath))
 	} else {
 		hreflangBuilder.WriteString(fmt.Sprintf(`    <link rel="alternate" hreflang="x-default" href="%s/">`, baseURL))
 	}
@@ -280,6 +325,25 @@ func generatePageMeta(meta MetaData, baseURL string) PageMeta {
 		jsonLDBytes, err := json.MarshalIndent(jsonLDData, "    ", "  ")
 		if err != nil {
 			logger.Warn("seo", "JSON-LD 序列化失败", "provider", meta.Slug, "error", err)
+			jsonLD = ""
+		} else {
+			jsonLD = fmt.Sprintf(`    <script type="application/ld+json">
+    %s
+    </script>`, string(jsonLDBytes))
+		}
+	} else if meta.StaticPath == "contact" {
+		// 联系页：ContactPage 类型（首页才用 WebSite）
+		jsonLDData := map[string]interface{}{
+			"@context":    "https://schema.org",
+			"@type":       "ContactPage",
+			"name":        meta.Title,
+			"url":         canonicalURL,
+			"description": meta.Description,
+			"inLanguage":  meta.Language.Code,
+		}
+		jsonLDBytes, err := json.MarshalIndent(jsonLDData, "    ", "  ")
+		if err != nil {
+			logger.Warn("seo", "JSON-LD 序列化失败", "staticPath", meta.StaticPath, "error", err)
 			jsonLD = ""
 		} else {
 			jsonLD = fmt.Sprintf(`    <script type="application/ld+json">
@@ -364,8 +428,14 @@ func injectMetaTags(indexHTML string, path string, cfg *config.AppConfig) (strin
 		return injectNoindexMeta(indexHTML, langCode), false
 	}
 
-	// 获取 meta 内容（传入 slug 和 displayName）
-	metaData := getMetaContent(langCode, providerSlug, providerName, isProviderPage)
+	// 静态内容页（如 /contact）走专属文案与 canonical；首页/服务商页 staticPath 为空
+	staticPath := ""
+	if !isProviderPage {
+		staticPath = parseStaticPath(path)
+	}
+
+	// 获取 meta 内容（传入 slug、displayName 与静态页 key）
+	metaData := getMetaContent(langCode, providerSlug, providerName, isProviderPage, staticPath)
 
 	// 生成完整 meta 标签
 	pageMeta := generatePageMeta(metaData, baseURL)
@@ -433,8 +503,8 @@ func inject404Meta(indexHTML string, langCode string) string {
 
 // injectNoindexMeta 注入 noindex meta 标签（用于非白名单路径，保持首页内容）
 func injectNoindexMeta(indexHTML string, langCode string) string {
-	// 获取首页的 meta 内容
-	metaData := getMetaContent(langCode, "", "", false)
+	// 获取首页的 meta 内容（noindex 分支固定走首页文案，不识别静态页）
+	metaData := getMetaContent(langCode, "", "", false, "")
 
 	htmlContent := indexHTML
 
