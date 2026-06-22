@@ -191,7 +191,7 @@ interface StatusTableProps {
 }
 
 // rpdiag 质量分单元格：所有 model 的 5 点 sparkline (30d 均 / 7d 均 / 最近 3
-// 次单 sample 升序) 叠在同一个 SVG 画布上，**不分块**。每条 polyline 颜色由
+// 次单 sample 升序) 叠在同一个 SVG 画布上，**不分块**。每条折线颜色由
 // 该 model 自己的真实质量 sample 决定（100=绿/60=黄/0=红 平滑渐变），dot
 // 标记每个真实数据点；硬失败合成点改用灰色不可用 marker。80 / 100 两条点划
 // 参考线作 Y 轴刻度。
@@ -224,10 +224,11 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
   const W = compact ? 36 : 44;
   const H = compact ? 14 : 36;
   // 5 槽位 sparkline：slot 0/1 是 30d / 7d 窗口均值，slot 2/3/4 是最近
-  // 3 次单 sample 升序（旧→新）；缺值的槽位不画点，polyline 跨空槽直连
-  // 反映样本稀少的自然间隔。
+  // 3 次单 sample 升序（旧→新）；缺值的槽位不画点，折线跨空槽直连
+  // 反映样本稀少的自然间隔。槽位横向位置用「占列宽百分比」表达（非固定像素），
+  // 让 sparkline 随列宽（verbose locale 的表头会把质量列撑宽）自适应铺满，
+  // 同时圆点半径/线宽保持绝对像素、不随横向拉伸变形（保「填满列 + 圆点保圆」）。
   const NUM_SLOTS = 5;
-  const STEP = W / NUM_SLOTS;
   // 1.2px 内边距上下避免点贴边
   const PAD = 1.2;
   // 圆点半径/线粗随 H 等比放大，desktop H=36 时圆点更醒目
@@ -237,7 +238,7 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
   // 质量真差区分开。中性灰跨 4 套主题都可辨，沿用本组件硬编码 HSL 的既有风格。
   const UNAVAILABLE_COLOR = 'hsl(0 0% 55%)';
   // Y 轴参考线：80 / 100 两档，让点的高度有"刻度感"。score=80 对应 norm 0.4、
-  // score=100 对应 norm 1.0；与 polyline/dot 共用 qualityScoreYNorm 保证一致。
+  // score=100 对应 norm 1.0；与折线/圆点共用 qualityScoreYNorm 保证一致。
   const referenceLines = [80, 100].map((markerScore) => ({
     score: markerScore,
     y: H - PAD - qualityScoreYNorm(markerScore) * (H - 2 * PAD),
@@ -249,17 +250,18 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
   //   score 80-100 → 顶部 60%（实际业务关心的"好通道"区域）
   // 跨 row 仍可比（同分数 → 同高度），但读 sparkline 时要意识到刻度不是匀速的。
   // 用 qualityScoreYNorm 计算。绝对分数由 dot 颜色 + tooltip 数字双重提供。
-  type SparkNode = { x: number; y: number; color: string };
+  type SparkNode = { xPct: number; y: number; color: string };
   type SparkStop = { offset: number; color: string };
   // 一个候选槽位点：slot=横向位置，value=分数（不可用点 value 无意义、取 0 贴底），
   // unavailable=true 表示该次 hard-fail，画中性灰而非 qualityScoreColor 的红。
   type SlotPoint = { slot: number; value: number; unavailable: boolean };
 
-  // 把 (slot, 分数) 映射成一个着色节点：x 取槽位中心，y 走 qualityScoreYNorm
-  // 非线性轴，color 由调用方决定（真实分用 qualityScoreColor，不可用用灰）。
+  // 把 (slot, 分数) 映射成一个着色节点：xPct 取槽位中心占列宽的百分比，y 走
+  // qualityScoreYNorm 非线性轴（绝对像素），color 由调用方决定（真实分用
+  // qualityScoreColor，不可用用灰）。
   const nodeAt = (slot: number, value: number, color: string): SparkNode => {
     const norm = qualityScoreYNorm(Math.max(0, Math.min(100, value)));
-    return { x: STEP / 2 + slot * STEP, y: H - PAD - norm * (H - 2 * PAD), color };
+    return { xPct: ((slot + 0.5) / NUM_SLOTS) * 100, y: H - PAD - norm * (H - 2 * PAD), color };
   };
 
   const series = ranked
@@ -329,10 +331,10 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
       // 每个节点一个 gradient stop（offset = 其归一化 x）。相邻 stop 之间正好覆盖
       // 该段，于是线在每个顶点处=该顶点自身色、每段是其两端点的渐变——包含刚掉到
       // 不可用那条 model 的彩→灰末段。节点沿 x 单调递增保证 offset 单调。
-      const x0 = nodes[0].x;
-      const span = nodes.length > 1 ? nodes[nodes.length - 1].x - x0 || 1 : 1;
+      const x0 = nodes[0].xPct;
+      const span = nodes.length > 1 ? nodes[nodes.length - 1].xPct - x0 || 1 : 1;
       const stops: SparkStop[] = nodes.map((n) => ({
-        offset: (n.x - x0) / span,
+        offset: (n.xPct - x0) / span,
         color: n.color,
       }));
       return { nodes, stops };
@@ -350,7 +352,6 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
       <svg
         width={compact ? W : '100%'}
         height={H}
-        viewBox={`0 0 ${W} ${H}`}
         aria-hidden="true"
         className="flex-shrink-0"
       >
@@ -358,19 +359,20 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
           {series.map((s, i) =>
             s.nodes.length > 1 ? (
               // Gradient axis runs horizontally from the first node's x to the
-              // last node's x; userSpaceOnUse keeps the colour a pure function of
-              // x, independent of the polyline's vertical zig-zag. One stop per
-              // node (offset = that node's normalized x) makes each adjacent
-              // pair of stops interpolate over exactly its segment — so the line
-              // hits every node's own colour (score colour, or grey for an
-              // unavailable endpoint), matching the dots.
+              // last node's x (both as % of column width); userSpaceOnUse keeps
+              // the colour a pure function of x, independent of the line
+              // segments' vertical zig-zag. One stop per node (offset = that
+              // node's normalized x) makes each adjacent pair of stops
+              // interpolate over exactly its segment — so every per-segment
+              // <line> hits its endpoints' own colours (score colour, or grey
+              // for an unavailable endpoint), matching the dots.
               <linearGradient
                 key={i}
                 id={`${gradientBaseId}-${i}`}
                 gradientUnits="userSpaceOnUse"
-                x1={s.nodes[0].x}
+                x1={`${s.nodes[0].xPct}%`}
                 y1="0"
-                x2={s.nodes[s.nodes.length - 1].x}
+                x2={`${s.nodes[s.nodes.length - 1].xPct}%`}
                 y2="0"
               >
                 {s.stops.map((st, k) => (
@@ -385,7 +387,7 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
             key={line.score}
             x1="0"
             y1={line.y}
-            x2={W}
+            x2="100%"
             y2={line.y}
             stroke="hsl(0 0% 75% / 0.55)"
             strokeWidth="1"
@@ -394,19 +396,25 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
         ))}
         {series.map((s, i) => (
           <g key={i}>
-            {s.nodes.length > 1 && (
-              <polyline
-                points={s.nodes.map((n) => `${n.x.toFixed(1)},${n.y.toFixed(1)}`).join(' ')}
-                fill="none"
-                stroke={`url(#${gradientBaseId}-${i})`}
-                strokeWidth={STROKE_W}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                opacity="0.85"
-              />
-            )}
+            {/* 折线拆成逐段 <line>（x 用百分比；polyline 的 points 不支持百分比单位）。
+                每段共用本 series 的 userSpaceOnUse 渐变、按绝对 x 采样 → 颜色与单条
+                polyline 时完全一致；round linecap + 顶点处的圆点盖住接缝。 */}
+            {s.nodes.length > 1 &&
+              s.nodes.slice(0, -1).map((n, j) => (
+                <line
+                  key={`seg-${j}`}
+                  x1={`${n.xPct}%`}
+                  y1={n.y.toFixed(1)}
+                  x2={`${s.nodes[j + 1].xPct}%`}
+                  y2={s.nodes[j + 1].y.toFixed(1)}
+                  stroke={`url(#${gradientBaseId}-${i})`}
+                  strokeWidth={STROKE_W}
+                  strokeLinecap="round"
+                  opacity="0.85"
+                />
+              ))}
             {s.nodes.map((n, j) => (
-              <circle key={j} cx={n.x} cy={n.y} r={DOT_R} fill={n.color} />
+              <circle key={j} cx={`${n.xPct}%`} cy={n.y} r={DOT_R} fill={n.color} />
             ))}
           </g>
         ))}
@@ -843,7 +851,7 @@ function StatusTableComponent({
   const { t, i18n } = useTranslation();
   const [isMobile, setIsMobile] = useState(false);
 
-  // 检测是否为平板/移动端（< 960px，兼容 Safari ≤13）
+  // 检测是否为平板/移动端（tablet 断点 = max-width:1023px，见 utils/mediaQuery.ts BREAKPOINTS；兼容 Safari ≤13）
   useEffect(() => {
     const cleanup = createMediaQueryEffect('tablet', setIsMobile);
     return cleanup;
