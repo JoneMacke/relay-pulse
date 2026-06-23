@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -182,10 +183,10 @@ func TestScoresUpstreamRoundTrip(t *testing.T) {
 			ScoreTrend:        ScoreTrend{Latest: mk(98), LatestAt: freshAt(), Avg7D: mk(98), Avg30D: mk(98)},
 		}},
 	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := singleBoardServer(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(payload)
-	}))
+	})
 	defer srv.Close()
 
 	client := NewClient(nil, srv.URL, 0, true)
@@ -788,9 +789,9 @@ func TestScoresAcceptsV53UnavailableRow(t *testing.T) {
 		`"quality_state":"unavailable","hard_fail_active":true,` +
 		`"availability_warning":"质量探测未取得可评分响应","final_quality_score":0,"score_trend":{}}` +
 		`]}`
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := singleBoardServer(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprintln(w, payload)
-	}))
+	})
 	defer srv.Close()
 
 	client := NewClient(nil, srv.URL, 0, true)
@@ -846,9 +847,9 @@ func TestRecentAttemptsEmptyVsAbsentRoundTrip(t *testing.T) {
 				`"service_cli_command":"claude","model":"claude-opus-4-7","model_key":"claude-opus-4-7",` +
 				`"detail_url":"https://diag.relaypulse.top/channel/O-Max",` +
 				`"score_trend":` + trendJSON + `}]}`
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			srv := singleBoardServer(func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = fmt.Fprintln(w, payload)
-			}))
+			})
 			defer srv.Close()
 
 			client := NewClient(nil, srv.URL, 0, true)
@@ -872,6 +873,187 @@ func TestRecentAttemptsEmptyVsAbsentRoundTrip(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBoardURLsFromExportURL(t *testing.T) {
+	// The base URL is fetched unchanged (claude board); the codex board is the
+	// same URL with test_case added, preserving the existing query (scoring_version).
+	got := boardURLsFromExportURL(DefaultExportURL)
+	if len(got) != 2 {
+		t.Fatalf("boardURLs len = %d, want 2: %v", len(got), got)
+	}
+	if got[0] != DefaultExportURL {
+		t.Errorf("board[0] = %q, want the base URL unchanged %q", got[0], DefaultExportURL)
+	}
+	u, err := url.Parse(got[1])
+	if err != nil {
+		t.Fatalf("codex board URL unparseable: %v", err)
+	}
+	if tc := u.Query().Get("test_case"); tc != codexBoardTestCase {
+		t.Errorf("codex board test_case = %q, want %q", tc, codexBoardTestCase)
+	}
+	if sv := u.Query().Get("scoring_version"); sv != "all" {
+		t.Errorf("codex board dropped scoring_version: got %q, want all", sv)
+	}
+}
+
+// TestScoresMergesClaudeAndCodexBoards locks the multi-board contract: the
+// client fetches the base (claude) board AND the codex board (test_case=
+// quick-probe-codex-v1) and merges their rows. A claude row and a codex row
+// from the same provider must yield two distinct entries keyed by service
+// (cc vs cx) — neither board is dropped, and the cx/cc service buckets don't
+// cross-activate.
+func TestScoresMergesClaudeAndCodexBoards(t *testing.T) {
+	fresh := *freshAt()
+	claude := `{"schema_version":"ranking-export.v5.6","items":[` +
+		`{"channel_name":"O-Max","relaypulse_channel_key":"max","provider_name":"SAIAi",` +
+		`"service_cli_command":"claude","model":"claude-opus-4-8","model_key":"claude-opus-4-8",` +
+		`"score_trend":{"latest":97.0,"latest_at":"` + fresh + `"}}]}`
+	codex := `{"schema_version":"ranking-export.v5.6","items":[` +
+		`{"channel_name":"O-Pro","relaypulse_channel_key":"pro","provider_name":"SAIAi",` +
+		`"service_cli_command":"codex","model":"gpt-5.4","model_key":"gpt-5.4",` +
+		`"score_trend":{"latest":92.0,"latest_at":"` + fresh + `"}}]}`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("test_case") == codexBoardTestCase {
+			_, _ = fmt.Fprintln(w, codex)
+			return
+		}
+		_, _ = fmt.Fprintln(w, claude)
+	}))
+	defer srv.Close()
+
+	client := NewClient(nil, srv.URL, 0, true)
+	client.nowFn = fixedClock
+	scores, err := client.Scores(context.Background())
+	if err != nil {
+		t.Fatalf("Scores returned error: %v", err)
+	}
+	cc, ok := scores["saiai|cc|max"]
+	if !ok {
+		t.Fatalf("missing claude entry saiai|cc|max, got %v", keysOf(scores))
+	}
+	if cc.MaxScore == nil || *cc.MaxScore != 97 {
+		t.Errorf("claude MaxScore = %v, want 97", cc.MaxScore)
+	}
+	cx, ok := scores["saiai|cx|pro"]
+	if !ok {
+		t.Fatalf("missing codex entry saiai|cx|pro, got %v", keysOf(scores))
+	}
+	if cx.MaxScore == nil || *cx.MaxScore != 92 {
+		t.Errorf("codex MaxScore = %v, want 92", cx.MaxScore)
+	}
+}
+
+// TestScoresCodexClaudeSameChannelKeyedByService proves the cc/cx boards can
+// host the same (provider, channel) without colliding: the service segment of
+// the join key separates them into two independent entries, so codex data can
+// never overwrite or cross-activate a claude channel of the same name.
+func TestScoresCodexClaudeSameChannelKeyedByService(t *testing.T) {
+	fresh := *freshAt()
+	claude := `{"schema_version":"ranking-export.v5.6","items":[` +
+		`{"channel_name":"O-Max","relaypulse_channel_key":"max","provider_name":"SAIAi",` +
+		`"service_cli_command":"claude","model":"claude-opus-4-8","model_key":"claude-opus-4-8",` +
+		`"score_trend":{"latest":97.0,"latest_at":"` + fresh + `"}}]}`
+	// Same provider + same channel key as the claude row; only the service differs.
+	codex := `{"schema_version":"ranking-export.v5.6","items":[` +
+		`{"channel_name":"O-Max","relaypulse_channel_key":"max","provider_name":"SAIAi",` +
+		`"service_cli_command":"codex","model":"gpt-5.4","model_key":"gpt-5.4",` +
+		`"score_trend":{"latest":40.0,"latest_at":"` + fresh + `"}}]}`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("test_case") == codexBoardTestCase {
+			_, _ = fmt.Fprintln(w, codex)
+			return
+		}
+		_, _ = fmt.Fprintln(w, claude)
+	}))
+	defer srv.Close()
+
+	client := NewClient(nil, srv.URL, 0, true)
+	client.nowFn = fixedClock
+	scores, err := client.Scores(context.Background())
+	if err != nil {
+		t.Fatalf("Scores returned error: %v", err)
+	}
+	cc, ok := scores["saiai|cc|max"]
+	if !ok || cc.MaxScore == nil || *cc.MaxScore != 97 {
+		t.Errorf("claude entry saiai|cc|max = %+v (want MaxScore 97), keys=%v", cc, keysOf(scores))
+	}
+	cx, ok := scores["saiai|cx|max"]
+	if !ok || cx.MaxScore == nil || *cx.MaxScore != 40 {
+		t.Errorf("codex entry saiai|cx|max = %+v (want MaxScore 40), keys=%v", cx, keysOf(scores))
+	}
+}
+
+// TestScoresBoardFailureFallsBackToStale locks the all-or-nothing refresh: if
+// any board fetch fails, refresh returns an error so Scores() serves the last
+// full good snapshot rather than caching a snapshot missing that board (which
+// would blank its column for a TTL). Here the codex board 500s on the second
+// refresh; the cached claude+codex snapshot from the first refresh must survive.
+func TestScoresBoardFailureFallsBackToStale(t *testing.T) {
+	fresh := *freshAt()
+	claude := `{"schema_version":"ranking-export.v5.6","items":[` +
+		`{"channel_name":"O-Max","relaypulse_channel_key":"max","provider_name":"SAIAi",` +
+		`"service_cli_command":"claude","model":"claude-opus-4-8","model_key":"claude-opus-4-8",` +
+		`"score_trend":{"latest":97.0,"latest_at":"` + fresh + `"}}]}`
+	codex := `{"schema_version":"ranking-export.v5.6","items":[` +
+		`{"channel_name":"O-Pro","relaypulse_channel_key":"pro","provider_name":"SAIAi",` +
+		`"service_cli_command":"codex","model":"gpt-5.4","model_key":"gpt-5.4",` +
+		`"score_trend":{"latest":92.0,"latest_at":"` + fresh + `"}}]}`
+
+	codexFails := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("test_case") == codexBoardTestCase {
+			if codexFails {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintln(w, codex)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintln(w, claude)
+	}))
+	defer srv.Close()
+
+	client := NewClient(nil, srv.URL, time.Nanosecond, true) // tiny TTL → always refresh
+	client.nowFn = fixedClock
+
+	if _, err := client.Scores(context.Background()); err != nil {
+		t.Fatalf("first Scores returned error: %v", err)
+	}
+	// Codex board now fails; the next refresh must NOT wipe the cached snapshot.
+	codexFails = true
+	scores, err := client.Scores(context.Background())
+	if err != nil {
+		t.Fatalf("Scores after codex failure returned error (expected stale fallback): %v", err)
+	}
+	if _, ok := scores["saiai|cc|max"]; !ok {
+		t.Errorf("claude entry vanished on codex-board failure; stale fallback should keep it, got %v", keysOf(scores))
+	}
+	if _, ok := scores["saiai|cx|pro"]; !ok {
+		t.Errorf("codex entry vanished on codex-board failure; stale fallback should keep it, got %v", keysOf(scores))
+	}
+}
+
+// singleBoardServer wraps a board handler so it answers only the base (claude)
+// board request; the codex board the client now also fetches gets an empty
+// items payload. Production boards return disjoint rows per service, so tests
+// that populate just one board use this to keep the codex fetch from
+// duplicating the claude rows.
+func singleBoardServer(serve http.HandlerFunc) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("test_case") != "" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"items":[]}`)
+			return
+		}
+		serve(w, r)
+	}))
 }
 
 // helpers ---------------------------------------------------------------

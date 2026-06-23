@@ -2,6 +2,13 @@
 // rpdiag (diag.relaypulse.top), indexing it by the (provider, service,
 // channel) triple that relaypulse listings expose.
 //
+// The rpdiag export is test_case-scoped (one board per request); the default
+// board is claude (quick-probe-v1). Each refresh fetches the configured base
+// URL (claude) plus a derived URL per additional board (currently the codex
+// board, quick-probe-codex-v1) and merges the rows, so cc and cx channels both
+// get a quality column. Boards share one wire schema and disjoint join keys
+// (the service segment differs), so the merge needs no special handling.
+//
 // Cache TTL is intentionally generous (10 min) — the upstream score moves
 // on a sampler-cadence (~hourly) so refreshing per request would only
 // burn rate quota on rpdiag. singleflight collapses concurrent refreshes;
@@ -32,6 +39,16 @@ import (
 
 const (
 	defaultExportURL = "https://diag.relaypulse.top/api/v1/ranking/export?scoring_version=all"
+
+	// codexBoardTestCase is the rpdiag root test-case slug for the codex (cx)
+	// quality board. The default export URL (no test_case) returns the claude
+	// (quick-probe-v1) board; refresh additionally fetches this board so cx
+	// channels get a quality column too. Both boards share one wire schema, so
+	// the merged rows flow through buildScoresAt unchanged — it already buckets
+	// active models by service (cc/cx) and the join key embeds the service, so
+	// the two boards cannot cross-activate or collide.
+	codexBoardTestCase = "quick-probe-codex-v1"
+
 	defaultTTL       = 10 * time.Minute
 	requestTimeout   = 10 * time.Second
 	maxResponseBytes = 10 << 20 // 10 MiB; export payload is < 1 MiB today
@@ -117,7 +134,11 @@ type Score struct {
 type Client struct {
 	httpClient *http.Client
 	exportURL  string
-	ttl        time.Duration
+	// boardURLs is the set of export URLs fetched and merged on every refresh:
+	// the base exportURL (claude board) plus one derived URL per additional
+	// rpdiag board (currently codex). Populated by the constructors.
+	boardURLs []string
+	ttl       time.Duration
 	// nowFn is the clock; defaults to time.Now. Tests override it to drive the
 	// staleness gate (scoreStaleWindow) and cache expiry deterministically.
 	nowFn func() time.Time
@@ -141,12 +162,14 @@ func NewClient(httpClient *http.Client, exportURL string, ttl time.Duration, ena
 	if ttl <= 0 {
 		ttl = defaultTTL
 	}
-	if strings.TrimSpace(exportURL) == "" {
+	exportURL = strings.TrimSpace(exportURL)
+	if exportURL == "" {
 		exportURL = defaultExportURL
 	}
 	c := &Client{
 		httpClient: httpClient,
-		exportURL:  strings.TrimSpace(exportURL),
+		exportURL:  exportURL,
+		boardURLs:  boardURLsFromExportURL(exportURL),
 		ttl:        ttl,
 		nowFn:      time.Now,
 	}
@@ -157,6 +180,24 @@ func NewClient(httpClient *http.Client, exportURL string, ttl time.Duration, ena
 		c.expiresAt = c.now().Add(time.Hour) // freeze empty snapshot
 	}
 	return c
+}
+
+// boardURLsFromExportURL derives the list of export URLs fetched and merged on
+// each refresh. The base URL is the claude board (rpdiag's default when no
+// test_case is set); each additional board is the same URL with test_case set
+// to that board's root slug, so an operator override of MONITOR_RPDIAG_EXPORT_URL
+// (e.g. a staging host) transparently carries to every board. If the base URL
+// can't be parsed, only it is fetched.
+func boardURLsFromExportURL(exportURL string) []string {
+	boards := []string{exportURL}
+	u, err := url.Parse(exportURL)
+	if err != nil {
+		return boards
+	}
+	q := u.Query()
+	q.Set("test_case", codexBoardTestCase)
+	u.RawQuery = q.Encode()
+	return append(boards, u.String())
 }
 
 // Exported constants for tests.
@@ -190,6 +231,7 @@ func NewClientFromEnv() *Client {
 	return &Client{
 		httpClient: &http.Client{Timeout: requestTimeout},
 		exportURL:  exportURL,
+		boardURLs:  boardURLsFromExportURL(exportURL),
 		ttl:        ttl,
 		nowFn:      time.Now,
 	}
@@ -293,7 +335,53 @@ type rankingRow struct {
 }
 
 func (c *Client) refresh(ctx context.Context) (map[string]Score, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.exportURL, nil)
+	boards := c.boardURLs
+	if len(boards) == 0 {
+		// Defensive: a struct-literal Client (httpClient/exportURL set by hand,
+		// cf. now()'s nil-nowFn guard) never ran a constructor, so boardURLs is
+		// unset. Derive from exportURL so refresh still fetches rather than
+		// caching an empty snapshot. (A true zero-value Client would already
+		// panic at httpClient.Do below.)
+		base := strings.TrimSpace(c.exportURL)
+		if base == "" {
+			base = defaultExportURL
+		}
+		boards = boardURLsFromExportURL(base)
+	}
+
+	// All boards must refresh together. A single board's failure returns an
+	// error so Scores() serves the last full good snapshot rather than caching
+	// a snapshot missing a board — which would blank that board's whole column.
+	// The served snapshot is the last *successful* refresh; if refresh keeps
+	// failing it outlives the TTL (the TTL only paces retries), exactly as the
+	// pre-multi-board single fetch already behaved. Any fetch error → the
+	// existing stale-snapshot fallback in Scores().
+	var rows []rankingRow
+	for _, boardURL := range boards {
+		items, err := c.fetchBoard(ctx, boardURL)
+		if err != nil {
+			return nil, fmt.Errorf("rpdiag board %q: %w", boardURL, err)
+		}
+		rows = append(rows, items...)
+	}
+
+	now := c.now()
+	scores := c.buildScoresAt(rows, now)
+
+	c.mu.Lock()
+	c.cache = scores
+	c.expiresAt = now.Add(c.ttl)
+	c.mu.Unlock()
+
+	return cloneScores(scores), nil
+}
+
+// fetchBoard GETs and decodes one rpdiag export board, returning its rows. The
+// schema-version guard is applied per board so an unexpected wire on any board
+// fails the whole refresh (and triggers the stale-snapshot fallback) rather
+// than silently dropping that board's rows.
+func (c *Client) fetchBoard(ctx context.Context, boardURL string) ([]rankingRow, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, boardURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -318,15 +406,7 @@ func (c *Client) refresh(ctx context.Context) (map[string]Score, error) {
 		return nil, fmt.Errorf("rpdiag unsupported schema_version %q", payload.SchemaVersion)
 	}
 
-	now := c.now()
-	scores := c.buildScoresAt(payload.Items, now)
-
-	c.mu.Lock()
-	c.cache = scores
-	c.expiresAt = now.Add(c.ttl)
-	c.mu.Unlock()
-
-	return cloneScores(scores), nil
+	return payload.Items, nil
 }
 
 // latestFingerprintSample returns the most recent single fingerprint sample
