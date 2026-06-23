@@ -588,11 +588,14 @@ func TestUpdateConfig_PurgesParentOverrides(t *testing.T) {
 	}
 }
 
-func TestEvaluate_ExpiredChannel_DemotedAndDowngraded(t *testing.T) {
+// TestEvaluate_ExpiredChannel_HealthyStaysOnBoardLevelDowngraded 验证解耦后的新语义：
+// 到期不再强制移入备板——板块位置完全由可用率决定。
+// 到期 + 可用率健康（100%，configBoard=hot）→ 板块保持 hot，仅 SponsorLevel 降为 pulse。
+func TestEvaluate_ExpiredChannel_HealthyStaysOnBoardLevelDowngraded(t *testing.T) {
 	store := newMockStorage()
 	key := storage.MonitorKey{Provider: "expired", Service: "cc", Channel: "vip"}
 
-	// 即使可用率 100%，到期后也应降级
+	// 100% 可用率：应保持热板，不因到期强制移入备板
 	store.history[key] = makeRecords(1, 20)
 
 	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
@@ -626,14 +629,17 @@ func TestEvaluate_ExpiredChannel_DemotedAndDowngraded(t *testing.T) {
 	svc.Evaluate(context.Background())
 
 	ov, ok := svc.GetBoardOverride(key)
-	if !ok {
-		t.Fatal("expected override for expired channel")
-	}
-	if ov.Board != "secondary" {
-		t.Errorf("expected board=secondary, got %s", ov.Board)
-	}
-	if ov.SponsorLevel != config.SponsorLevelPulse {
-		t.Errorf("expected sponsor_level=pulse, got %s", ov.SponsorLevel)
+	// 可能有 override（仅含 SponsorLevel=pulse），但板块不得是 secondary 或 cold
+	if ok {
+		if ov.Board == "secondary" || ov.Board == "cold" {
+			t.Errorf("到期健康通道不应被降至 %s（板块应由可用率决定，不由到期决定）", ov.Board)
+		}
+		if ov.SponsorLevel != config.SponsorLevelPulse {
+			t.Errorf("expected sponsor_level=pulse, got %s", ov.SponsorLevel)
+		}
+	} else {
+		// 无 override 也可接受（level 已是 pulse 无需降级时），但本 case SponsorLevel=backbone，必须有降级
+		t.Error("expected override with SponsorLevel=pulse for expired backbone channel")
 	}
 }
 
@@ -722,13 +728,16 @@ func TestEvaluate_ExpiresToday_StillValid(t *testing.T) {
 	}
 }
 
+// TestEvaluate_ExpiredAndAvailability_Coexist 验证到期与可用率独立工作：
+// 到期通道（可用率健康）→ 板块保持，仅 SponsorLevel 降级；
+// 可用率差通道（未到期）→ 板块由可用率降级，SponsorLevel 不变。
 func TestEvaluate_ExpiredAndAvailability_Coexist(t *testing.T) {
 	store := newMockStorage()
 	expiredKey := storage.MonitorKey{Provider: "expired", Service: "cc", Channel: "vip"}
 	badKey := storage.MonitorKey{Provider: "bad", Service: "cc", Channel: "vip"}
 
-	store.history[expiredKey] = makeRecords(1, 20) // good availability but expired
-	store.history[badKey] = makeRecords(0, 20)     // bad availability
+	store.history[expiredKey] = makeRecords(1, 20) // 可用率 100%，但已到期
+	store.history[badKey] = makeRecords(0, 20)     // 可用率 0%，未到期
 
 	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
 	cfg := &config.AppConfig{
@@ -754,22 +763,25 @@ func TestEvaluate_ExpiredAndAvailability_Coexist(t *testing.T) {
 	svc := NewService(store, cfg)
 	svc.Evaluate(context.Background())
 
-	// Expired channel: board=secondary, sponsor_level=pulse
+	// 到期通道：可用率健康，板块不降 secondary；但 SponsorLevel 降为 pulse
 	ov, ok := svc.GetBoardOverride(expiredKey)
 	if !ok {
-		t.Fatal("expected override for expired channel")
+		t.Fatal("expected override for expired channel (SponsorLevel=pulse)")
 	}
-	if ov.Board != "secondary" || ov.SponsorLevel != config.SponsorLevelPulse {
-		t.Errorf("expired: expected board=secondary+level=pulse, got board=%s level=%s", ov.Board, ov.SponsorLevel)
+	if ov.Board == "secondary" {
+		t.Errorf("expired healthy channel should NOT be demoted to secondary by expiry alone, got board=%s", ov.Board)
+	}
+	if ov.SponsorLevel != config.SponsorLevelPulse {
+		t.Errorf("expected sponsor_level=pulse for expired channel, got %s", ov.SponsorLevel)
 	}
 
-	// Bad availability channel: board=secondary, sponsor_level unchanged (empty)
+	// 可用率差通道（未到期）：板块由可用率降至 secondary，SponsorLevel 不变
 	ov2, ok := svc.GetBoardOverride(badKey)
 	if !ok {
 		t.Fatal("expected override for bad availability channel")
 	}
 	if ov2.Board != "secondary" {
-		t.Errorf("bad availability: expected board=secondary, got %s", ov2.Board)
+		t.Errorf("bad availability: expected board=secondary (availability-driven), got %s", ov2.Board)
 	}
 	if ov2.SponsorLevel != "" {
 		t.Errorf("bad availability: expected empty sponsor_level (no downgrade), got %s", ov2.SponsorLevel)
@@ -1008,10 +1020,13 @@ func TestEvaluate_AutoMoveExempt_NoOverrideProduced(t *testing.T) {
 	}
 }
 
-func TestEvaluate_AutoMoveExempt_ExpiryStillApplies(t *testing.T) {
+// TestEvaluate_AutoMoveExempt_ExpiryLevelDowngradeApplies 验证解耦后新语义：
+// auto_move_exempt 跳过板块移动，但到期的 SponsorLevel 降级仍生效。
+// 期望：override 含 SponsorLevel=pulse，Board 为空（不产生 secondary）。
+func TestEvaluate_AutoMoveExempt_ExpiryLevelDowngradeApplies(t *testing.T) {
 	store := newMockStorage()
 	key := storage.MonitorKey{Provider: "expired", Service: "cc", Channel: "vip"}
-	// 可用率 100%（因此可用率逻辑不会触发），但通道已到期
+	// 可用率 100%（可用率逻辑不触发），但通道已到期且等级高于 pulse
 	store.history[key] = makeRecords(1, 20)
 
 	cfg := &config.AppConfig{
@@ -1035,6 +1050,7 @@ func TestEvaluate_AutoMoveExempt_ExpiryStillApplies(t *testing.T) {
 				Service:        "cc",
 				Channel:        "vip",
 				Board:          "hot",
+				SponsorLevel:   config.SponsorLevelBackbone,
 				AutoMoveExempt: true,
 				ExpiresAt:      "2020-01-01", // 明确过期
 			},
@@ -1046,10 +1062,15 @@ func TestEvaluate_AutoMoveExempt_ExpiryStillApplies(t *testing.T) {
 
 	ov, ok := svc.GetBoardOverride(key)
 	if !ok {
-		t.Fatal("已过期通道应产生 secondary override，即使 auto_move_exempt=true")
+		t.Fatal("auto_move_exempt 到期通道应产生 SponsorLevel=pulse override")
 	}
-	if ov.Board != "secondary" {
-		t.Fatalf("已过期通道期望 board=secondary，实际得到 %s", ov.Board)
+	// 板块不因到期移动（auto_move_exempt 阻止板块评估）
+	if ov.Board == "secondary" {
+		t.Errorf("auto_move_exempt 应阻止板块降级，不应产生 secondary，实际 board=%s", ov.Board)
+	}
+	// 但 SponsorLevel 仍应降级
+	if ov.SponsorLevel != config.SponsorLevelPulse {
+		t.Errorf("expected sponsor_level=pulse, got %s", ov.SponsorLevel)
 	}
 }
 
@@ -1110,12 +1131,13 @@ func expiredAutoMoveCfg(monitors ...config.ServiceConfig) *config.AppConfig {
 	}
 }
 
-// TestEvaluate_ExpiredAndDead_MovesToCold 验证方案2核心语义：
-// 已到期 且 7 天可用率低于 threshold_cold 且探测数充足 → 直接移入冷板（停探），而非停留在 secondary。
+// TestEvaluate_ExpiredAndDead_MovesToCold 验证：
+// 已到期 且 7 天可用率低于 threshold_cold 且探测数充足 → 移入冷板（availability-driven），
+// 同时 SponsorLevel 降为 pulse（解耦后两者独立叠加）。
 func TestEvaluate_ExpiredAndDead_MovesToCold(t *testing.T) {
 	store := newMockStorage()
 	key := storage.MonitorKey{Provider: "deadexpired", Service: "cc", Channel: "vip"}
-	store.history[key] = makeRecords(0, 20) // 可用率 0%
+	store.history[key] = makeRecords(0, 20) // 可用率 0% < threshold_cold=10%
 
 	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
 	cfg := expiredAutoMoveCfg(config.ServiceConfig{
@@ -1131,19 +1153,23 @@ func TestEvaluate_ExpiredAndDead_MovesToCold(t *testing.T) {
 		t.Fatal("expected override for expired+dead channel")
 	}
 	if ov.Board != "cold" {
-		t.Fatalf("expected board=cold (可用率冷板优先于到期降级)，got %s", ov.Board)
+		t.Fatalf("expected board=cold (availability < threshold_cold)，got %s", ov.Board)
 	}
 	if ov.ColdReason == "" {
 		t.Fatal("expected ColdReason to be populated")
 	}
+	// 到期降级 SponsorLevel 合并到同一 override
+	if ov.SponsorLevel != config.SponsorLevelPulse {
+		t.Errorf("expected sponsor_level=pulse for expired backbone channel, got %s", ov.SponsorLevel)
+	}
 }
 
-// TestEvaluate_ExpiredAndDead_MinProbesFallsBackToSecondary 验证：
-// 已到期但探测数不足 min_probes 时，无法判定冷板，回退为到期降级 secondary。
-func TestEvaluate_ExpiredAndDead_MinProbesFallsBackToSecondary(t *testing.T) {
+// TestEvaluate_ExpiredAndDead_MinProbesSkipsBoard 验证解耦后新语义：
+// 已到期但探测数不足 min_probes → 无法判断可用率，跳过板块移板；SponsorLevel 仍降为 pulse。
+func TestEvaluate_ExpiredAndDead_MinProbesSkipsBoard(t *testing.T) {
 	store := newMockStorage()
 	key := storage.MonitorKey{Provider: "newexpired", Service: "cc", Channel: "vip"}
-	store.history[key] = makeRecords(0, 5) // 可用率 0% 但探测不足
+	store.history[key] = makeRecords(0, 5) // 探测不足 min_probes=10
 
 	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
 	cfg := expiredAutoMoveCfg(config.ServiceConfig{
@@ -1155,20 +1181,22 @@ func TestEvaluate_ExpiredAndDead_MinProbesFallsBackToSecondary(t *testing.T) {
 	svc.Evaluate(context.Background())
 
 	ov, ok := svc.GetBoardOverride(key)
+	// 探测不足时跳过板块移板，但仍应有 SponsorLevel=pulse override（到期降级等级）
 	if !ok {
-		t.Fatal("expected secondary override for expired channel with insufficient probes")
+		t.Fatal("expected override with SponsorLevel=pulse for expired channel")
 	}
-	if ov.Board != "secondary" {
-		t.Fatalf("expected board=secondary (探测不足回退到期降级)，got %s", ov.Board)
+	// 探测不足不应产生 board override（不应因无法判断可用率而强制 secondary）
+	if ov.Board == "secondary" || ov.Board == "cold" {
+		t.Errorf("min_probes 不足时不应产生板块 override，实际 board=%s", ov.Board)
 	}
 	if ov.SponsorLevel != config.SponsorLevelPulse {
 		t.Errorf("expected sponsor_level=pulse, got %s", ov.SponsorLevel)
 	}
 }
 
-// TestEvaluate_ExpiredButHealthy_StaysSecondary 验证：
-// 已到期但 7 天可用率仍达标（>= threshold_cold）→ 不冷板，仍按到期降级 secondary+pulse。
-func TestEvaluate_ExpiredButHealthy_StaysSecondary(t *testing.T) {
+// TestEvaluate_ExpiredButHealthy_BoardPreservedLevelDowngraded 验证解耦后新语义：
+// 已到期但 7 天可用率健康（100%，高于所有阈值）→ 板块不降 secondary，仅 SponsorLevel 降为 pulse。
+func TestEvaluate_ExpiredButHealthy_BoardPreservedLevelDowngraded(t *testing.T) {
 	store := newMockStorage()
 	key := storage.MonitorKey{Provider: "healthyexpired", Service: "cc", Channel: "vip"}
 	store.history[key] = makeRecords(1, 20) // 可用率 100%
@@ -1183,57 +1211,84 @@ func TestEvaluate_ExpiredButHealthy_StaysSecondary(t *testing.T) {
 	svc.Evaluate(context.Background())
 
 	ov, ok := svc.GetBoardOverride(key)
+	// 必须有 override（含 SponsorLevel=pulse），但板块不得是 secondary 或 cold
 	if !ok {
-		t.Fatal("expected secondary override for healthy expired channel")
+		t.Fatal("expected override with SponsorLevel=pulse for expired backbone channel")
 	}
-	if ov.Board != "secondary" {
-		t.Fatalf("expected board=secondary, got %s", ov.Board)
+	if ov.Board == "secondary" || ov.Board == "cold" {
+		t.Errorf("到期健康通道板块不应因到期降级，期望不是 secondary/cold，实际 board=%s", ov.Board)
 	}
 	if ov.SponsorLevel != config.SponsorLevelPulse {
 		t.Errorf("expected sponsor_level=pulse, got %s", ov.SponsorLevel)
 	}
 }
 
-// TestEvaluate_ExpiredAndDead_ExemptStaysSecondary 验证：
-// 即使到期且可用率为 0%，auto_cold_exempt / auto_move_exempt 都应阻止冷板，仍走到期降级 secondary。
-func TestEvaluate_ExpiredAndDead_ExemptStaysSecondary(t *testing.T) {
-	cases := []struct {
-		name   string
-		mutate func(*config.ServiceConfig)
-	}{
-		{"auto_cold_exempt", func(m *config.ServiceConfig) { m.AutoColdExempt = true }},
-		{"auto_move_exempt", func(m *config.ServiceConfig) { m.AutoMoveExempt = true }},
+// TestEvaluate_ExpiredAndDead_AutoColdExemptDemotesSecondary 验证解耦后语义：
+// auto_cold_exempt + 到期 + 可用率 0% → 走可用率降级路径（hot→secondary），同时降级 SponsorLevel。
+// auto_cold_exempt 阻止冷板，但不阻止 secondary。
+func TestEvaluate_ExpiredAndDead_AutoColdExemptDemotesSecondary(t *testing.T) {
+	store := newMockStorage()
+	key := storage.MonitorKey{Provider: "exemptexpired", Service: "cc", Channel: "vip"}
+	store.history[key] = makeRecords(0, 20) // 可用率 0%
+
+	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	cfg := expiredAutoMoveCfg(config.ServiceConfig{
+		Provider: "exemptexpired", Service: "cc", Channel: "vip", Board: "hot",
+		SponsorLevel: config.SponsorLevelBackbone, ExpiresAt: yesterday, AutoColdExempt: true,
+	})
+
+	svc := NewService(store, cfg)
+	svc.Evaluate(context.Background())
+
+	ov, ok := svc.GetBoardOverride(key)
+	if !ok {
+		t.Fatal("expected override for auto_cold_exempt expired dead channel")
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			store := newMockStorage()
-			key := storage.MonitorKey{Provider: "exemptexpired", Service: "cc", Channel: "vip"}
-			store.history[key] = makeRecords(0, 20) // 可用率 0%
+	if ov.Board == "cold" {
+		t.Fatal("auto_cold_exempt 应阻止冷板")
+	}
+	// 可用率 0% < threshold_down=50%，应触发 hot→secondary
+	if ov.Board != "secondary" {
+		t.Errorf("可用率降级应产生 secondary，实际 board=%s", ov.Board)
+	}
+	// 到期降级 SponsorLevel 合并进同一 override
+	if ov.SponsorLevel != config.SponsorLevelPulse {
+		t.Errorf("expected sponsor_level=pulse, got %s", ov.SponsorLevel)
+	}
+}
 
-			yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
-			m := config.ServiceConfig{
-				Provider: "exemptexpired", Service: "cc", Channel: "vip", Board: "hot",
-				SponsorLevel: config.SponsorLevelBackbone, ExpiresAt: yesterday,
-			}
-			tc.mutate(&m)
-			cfg := expiredAutoMoveCfg(m)
+// TestEvaluate_ExpiredAndDead_AutoMoveExemptBoardUntouched 验证解耦后语义：
+// auto_move_exempt + 到期 → 跳过板块评估，仅降级 SponsorLevel（Board 为空）。
+func TestEvaluate_ExpiredAndDead_AutoMoveExemptBoardUntouched(t *testing.T) {
+	store := newMockStorage()
+	key := storage.MonitorKey{Provider: "moveexemptexpired", Service: "cc", Channel: "vip"}
+	store.history[key] = makeRecords(0, 20) // 可用率 0%（不影响，因为 exempt 跳过板块评估）
 
-			svc := NewService(store, cfg)
-			svc.Evaluate(context.Background())
+	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	cfg := expiredAutoMoveCfg(config.ServiceConfig{
+		Provider: "moveexemptexpired", Service: "cc", Channel: "vip", Board: "hot",
+		SponsorLevel: config.SponsorLevelBackbone, ExpiresAt: yesterday, AutoMoveExempt: true,
+	})
 
-			ov, ok := svc.GetBoardOverride(key)
-			if !ok {
-				t.Fatal("expected secondary override for exempt expired channel")
-			}
-			if ov.Board != "secondary" {
-				t.Fatalf("%s 应阻止冷板，期望 board=secondary，实际 %s", tc.name, ov.Board)
-			}
-		})
+	svc := NewService(store, cfg)
+	svc.Evaluate(context.Background())
+
+	ov, ok := svc.GetBoardOverride(key)
+	if !ok {
+		t.Fatal("auto_move_exempt 到期通道应产生 SponsorLevel=pulse override")
+	}
+	// auto_move_exempt 跳过板块评估，不产生 board
+	if ov.Board != "" {
+		t.Errorf("auto_move_exempt 不应产生板块 override，实际 board=%s", ov.Board)
+	}
+	if ov.SponsorLevel != config.SponsorLevelPulse {
+		t.Errorf("expected sponsor_level=pulse, got %s", ov.SponsorLevel)
 	}
 }
 
 // TestEvaluate_ExpiredAndDead_BoundaryNotCold 锁定严格 `<`：
-// 可用率正好等于 threshold_cold 时不冷板，回退到期降级 secondary。
+// 可用率正好等于 threshold_cold 时不冷板；到期通道走普通 availability 路径，
+// 10%==threshold_cold 且低于 threshold_down(50%) → hot→secondary（availability-driven）。
 func TestEvaluate_ExpiredAndDead_BoundaryNotCold(t *testing.T) {
 	store := newMockStorage()
 	key := storage.MonitorKey{Provider: "boundaryexpired", Service: "cc", Channel: "vip"}
@@ -1243,7 +1298,7 @@ func TestEvaluate_ExpiredAndDead_BoundaryNotCold(t *testing.T) {
 	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
 	cfg := expiredAutoMoveCfg(config.ServiceConfig{
 		Provider: "boundaryexpired", Service: "cc", Channel: "vip", Board: "hot",
-		ExpiresAt: yesterday,
+		SponsorLevel: config.SponsorLevelBackbone, ExpiresAt: yesterday,
 	})
 	cfg.DegradedWeight = 0.10
 
@@ -1254,14 +1309,22 @@ func TestEvaluate_ExpiredAndDead_BoundaryNotCold(t *testing.T) {
 	if !ok {
 		t.Fatal("expected override for boundary expired channel")
 	}
+	// 可用率==threshold_cold 不触发冷板（严格 <）；10% < threshold_down(50%) → hot→secondary
+	if ov.Board == "cold" {
+		t.Fatalf("可用率==threshold_cold 不应冷板，实际 board=%s", ov.Board)
+	}
 	if ov.Board != "secondary" {
-		t.Fatalf("可用率==threshold_cold 应不冷板，期望 board=secondary，实际 %s", ov.Board)
+		t.Fatalf("可用率 10%% < threshold_down 50%%，期望 board=secondary（availability-driven），实际 %s", ov.Board)
+	}
+	// 到期降级 SponsorLevel 合并到同一 override
+	if ov.SponsorLevel != config.SponsorLevelPulse {
+		t.Errorf("expected sponsor_level=pulse for expired backbone channel, got %s", ov.SponsorLevel)
 	}
 }
 
-// TestEvaluate_ExpiredAndDead_HistoryErrorFallsBackToSecondary 验证：
-// 历史查询失败时无法判定可用率，到期项回退为 secondary，而非丢失 override。
-func TestEvaluate_ExpiredAndDead_HistoryErrorFallsBackToSecondary(t *testing.T) {
+// TestEvaluate_ExpiredAndDead_HistoryErrorAppliesLevelDowngrade 验证解耦后新语义：
+// 历史查询失败时无法判定可用率 → 无板块 override；但到期的 SponsorLevel 降级仍应生效。
+func TestEvaluate_ExpiredAndDead_HistoryErrorAppliesLevelDowngrade(t *testing.T) {
 	store := newMockStorage()
 	store.batchErr = errors.New("db unavailable")
 	key := storage.MonitorKey{Provider: "errexpired", Service: "cc", Channel: "vip"}
@@ -1277,10 +1340,11 @@ func TestEvaluate_ExpiredAndDead_HistoryErrorFallsBackToSecondary(t *testing.T) 
 
 	ov, ok := svc.GetBoardOverride(key)
 	if !ok {
-		t.Fatal("查询失败时到期项应回退为 secondary override，而非丢失")
+		t.Fatal("查询失败时到期项的 SponsorLevel 降级仍应产生 override")
 	}
-	if ov.Board != "secondary" {
-		t.Fatalf("expected board=secondary on history error, got %s", ov.Board)
+	// 查询失败无法判断可用率，不应产生板块 override
+	if ov.Board == "secondary" || ov.Board == "cold" {
+		t.Errorf("历史查询失败不应产生板块 override，实际 board=%s", ov.Board)
 	}
 	if ov.SponsorLevel != config.SponsorLevelPulse {
 		t.Errorf("expected sponsor_level=pulse, got %s", ov.SponsorLevel)
@@ -1288,7 +1352,8 @@ func TestEvaluate_ExpiredAndDead_HistoryErrorFallsBackToSecondary(t *testing.T) 
 }
 
 // TestEvaluate_ExpiredAndDead_ColdExemptBreaksStickyToSecondary 验证：
-// 已是 sticky cold 的到期项，设置 auto_cold_exempt 后应打破 sticky，转为到期降级 secondary。
+// 已是 sticky cold 的到期项，设置 auto_cold_exempt 后打破 sticky；
+// 可用率 0% < threshold_down → availability-driven hot→secondary；同时 SponsorLevel 降为 pulse。
 func TestEvaluate_ExpiredAndDead_ColdExemptBreaksStickyToSecondary(t *testing.T) {
 	store := newMockStorage()
 	key := storage.MonitorKey{Provider: "stickyexpired", Service: "cc", Channel: "vip"}
@@ -1310,8 +1375,16 @@ func TestEvaluate_ExpiredAndDead_ColdExemptBreaksStickyToSecondary(t *testing.T)
 	if !ok {
 		t.Fatal("expected override after exempt breaks sticky cold")
 	}
+	if ov.Board == "cold" {
+		t.Fatal("auto_cold_exempt 应打破 sticky cold")
+	}
+	// auto_cold_exempt 打破 sticky 后，按 configBoard=hot 评估：0% < threshold_down → secondary
 	if ov.Board != "secondary" {
-		t.Fatalf("auto_cold_exempt 应打破 sticky 并按到期降级，期望 board=secondary，实际 %s", ov.Board)
+		t.Fatalf("0%% 可用率应 hot→secondary，期望 board=secondary，实际 %s", ov.Board)
+	}
+	// 到期降级 SponsorLevel 合并到同一 override
+	if ov.SponsorLevel != config.SponsorLevelPulse {
+		t.Errorf("expected sponsor_level=pulse for expired backbone channel, got %s", ov.SponsorLevel)
 	}
 }
 
@@ -1455,5 +1528,103 @@ func TestApplyOverrides_ClearsColdReasonOnNonCold(t *testing.T) {
 	}
 	if result[0].ColdReason != "" {
 		t.Fatalf("cold_reason=%q, want empty", result[0].ColdReason)
+	}
+}
+
+// === 到期解耦新增测试 ===
+
+// TestEvaluate_ExpiredAndCold_ColdWithLevelDowngrade 验证解耦后的叠加语义：
+// 到期 + 可用率低于 threshold_cold（探测充足）→ availability-driven 冷板 + SponsorLevel=pulse 叠加。
+func TestEvaluate_ExpiredAndCold_ColdWithLevelDowngrade(t *testing.T) {
+	store := newMockStorage()
+	key := storage.MonitorKey{Provider: "coldexpired", Service: "cc", Channel: "vip"}
+	// 全红 20 条 → 可用率 0% < threshold_cold=10%，探测充足
+	store.history[key] = makeRecords(0, 20)
+
+	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	cfg := expiredAutoMoveCfg(config.ServiceConfig{
+		Provider: "coldexpired", Service: "cc", Channel: "vip", Board: "hot",
+		SponsorLevel: config.SponsorLevelBeacon, ExpiresAt: yesterday,
+	})
+
+	svc := NewService(store, cfg)
+	svc.Evaluate(context.Background())
+
+	ov, ok := svc.GetBoardOverride(key)
+	if !ok {
+		t.Fatal("expected override for expired+low-availability channel")
+	}
+	// availability < threshold_cold → 冷板（availability-driven）
+	if ov.Board != "cold" {
+		t.Errorf("expected board=cold (availability-driven), got %s", ov.Board)
+	}
+	if ov.ColdReason == "" {
+		t.Error("expected ColdReason to be populated")
+	}
+	// 到期降级 SponsorLevel 合并到同一 override（board 和 level 独立，互不覆盖）
+	if ov.SponsorLevel != config.SponsorLevelPulse {
+		t.Errorf("expected sponsor_level=pulse for expired beacon channel, got %s", ov.SponsorLevel)
+	}
+}
+
+// TestEvaluate_ExpiredAlreadyPulse_NoSponsorDowngrade 验证：
+// 到期但 SponsorLevel 已是 pulse → 不产生 sponsor 降级（不"升级"），且可用率健康不产生板块 override。
+func TestEvaluate_ExpiredAlreadyPulse_NoSponsorDowngrade(t *testing.T) {
+	store := newMockStorage()
+	key := storage.MonitorKey{Provider: "pulsexpired", Service: "cc", Channel: "vip"}
+	store.history[key] = makeRecords(1, 20) // 可用率 100%，不触发板块降级
+
+	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	cfg := expiredAutoMoveCfg(config.ServiceConfig{
+		Provider: "pulsexpired", Service: "cc", Channel: "vip", Board: "hot",
+		SponsorLevel: config.SponsorLevelPulse, ExpiresAt: yesterday,
+	})
+
+	svc := NewService(store, cfg)
+	svc.Evaluate(context.Background())
+
+	// 可用率 100% 且已是 pulse 等级 → 无任何 override
+	_, ok := svc.GetBoardOverride(key)
+	if ok {
+		t.Error("已是 pulse 等级的到期通道（可用率健康）不应产生任何 override")
+	}
+}
+
+// TestEvaluate_ExpiredStickyNotExempt_ColdWithLevelDowngrade 验证排序依赖：
+// expiry check 必须在 sticky-cold 块之前。
+// 非 exempt 的 sticky cold 到期通道：sticky cold 保留，且 SponsorLevel 降为 pulse。
+func TestEvaluate_ExpiredStickyNotExempt_ColdWithLevelDowngrade(t *testing.T) {
+	store := newMockStorage()
+	key := storage.MonitorKey{Provider: "stickycoldexpired", Service: "cc", Channel: "vip"}
+	// 即使可用率健康，sticky cold 也不被清除
+	store.history[key] = makeRecords(1, 20)
+
+	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	cfg := expiredAutoMoveCfg(config.ServiceConfig{
+		Provider: "stickycoldexpired", Service: "cc", Channel: "vip", Board: "hot",
+		SponsorLevel: config.SponsorLevelCore, ExpiresAt: yesterday,
+		// AutoColdExempt=false（默认）：sticky cold 会保留
+	})
+
+	svc := NewService(store, cfg)
+	svc.SetOverrides(map[storage.MonitorKey]MonitorOverride{
+		key: {Board: "cold", ColdReason: "之前自动冷板"},
+	})
+	svc.Evaluate(context.Background())
+
+	ov, ok := svc.GetBoardOverride(key)
+	if !ok {
+		t.Fatal("expected override (sticky cold should be preserved)")
+	}
+	// sticky cold 保留
+	if ov.Board != "cold" {
+		t.Errorf("expected board=cold (sticky), got %s", ov.Board)
+	}
+	if ov.ColdReason == "" {
+		t.Error("expected ColdReason to be preserved")
+	}
+	// 到期降级 SponsorLevel 必须叠加（expiry check 在 sticky-cold 前记录，applySponsorDowngrades 在 return 前合并）
+	if ov.SponsorLevel != config.SponsorLevelPulse {
+		t.Errorf("expired sticky-cold channel must get SponsorLevel=pulse, got %s", ov.SponsorLevel)
 	}
 }
