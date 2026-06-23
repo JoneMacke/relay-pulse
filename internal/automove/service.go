@@ -22,7 +22,7 @@ type MonitorOverride struct {
 }
 
 // Service 自动移板服务。
-// 定期基于 7 天可用率和赞助到期状态评估 hot/secondary/cold 归属，维护运行时 override map。
+// 定期基于 7 天可用率评估 hot/secondary/cold 板块归属；赞助到期仅将等级降为 pulse（不影响板块）。维护运行时 override map。
 // cold override 是 sticky 的：一旦生成，后续评估不再重新评估该项，仅可通过 auto_cold_exempt 手动解除。
 type Service struct {
 	storage storage.Storage
