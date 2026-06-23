@@ -57,7 +57,7 @@ type ServiceConfig struct {
 
 	// 自定义巡检间隔（可选，留空则使用全局 interval）
 	// 支持 Go duration 格式，例如 "30s"、"1m"、"5m"
-	// 付费高频监测可使用更短间隔
+	// 商务/赞助等级可按需配置更短间隔
 	Interval string `yaml:"interval,omitempty" json:"interval"`
 
 	// 彻底停用配置：不探测、不存储、不展示

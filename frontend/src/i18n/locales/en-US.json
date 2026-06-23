@@ -449,8 +449,8 @@
       "proofExpiringSoon": "Test proof is about to expire, please submit soon",
       "agreement": {
         "title": "Listing Terms & Acknowledgement",
-        "intro": "This is a paid listing. Please read and check each item; all must be confirmed before submitting:",
-        "clausePaid": "I understand listing is paid (sponsorship-based; pulse reference price ¥100/channel/month, prepaid monthly). Lapsed renewals are auto-downgraded and moved to the secondary board, with no refund of fees already paid.",
+        "intro": "pulse-tier listing on this platform is free; business tiers are paid sponsorship. Please read and check each item below; you may submit only after confirming all of them:",
+        "clausePaid": "I understand that pulse-tier listing is free; beacon tier and above are paid sponsorship (prepaid monthly; lapsed renewals are auto-downgraded to pulse, with no refund of fees already paid).",
         "clauseApiKey": "I authorize the platform to use the provided API Key for config validation, availability monitoring and in-depth quality detection (including response metadata, SSE timing, cache tokens, model fields and self-reported identity parsing, covering diag.relaypulse.top) and related display; listing is not possible without this consent.",
         "clauseQuality": "I warrant that the channel's actual model quality matches the declared source (an official declaration must be a genuine official API); if inconsistent, the platform may add a negative annotation, delist, or move it to the cold board.",
         "clauseLegit": "I hold lawful rights to use the provided endpoint, API Key, brand and links, and the submitted information is truthful, accurate and compliant.",

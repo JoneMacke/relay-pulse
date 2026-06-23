@@ -19,7 +19,7 @@ interface ConfirmStepProps {
   onReset: () => void;
 }
 
-/** 《入驻须知与确认》核心要点 i18n key（顺序即展示顺序，付费在最前） */
+/** 《入驻须知与确认》核心要点 i18n key（顺序即展示顺序） */
 const AGREEMENT_CLAUSE_KEYS = [
   'clausePaid',
   'clauseApiKey',
