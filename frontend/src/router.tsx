@@ -7,6 +7,7 @@ const App = lazy(() => import('./App'));
 const ProviderPage = lazy(() => import('./pages/ProviderPage'));
 const OnboardingPage = lazy(() => import('./pages/OnboardingPage'));
 const ContactPage = lazy(() => import('./pages/ContactPage'));
+const DetectPage = lazy(() => import('./pages/DetectPage'));
 const ChangeRequestPage = lazy(() => import('./pages/ChangeRequestPage'));
 const AdminPage = lazy(() => import('./pages/AdminPage'));
 
@@ -83,6 +84,7 @@ function renderChildRoutes(langPrefix?: string) {
     <>
       <Route index element={<App />} />
       <Route path="p/:provider" element={<ProviderPage />} />
+      <Route path="detect" element={<DetectPage />} />
       <Route path="contact" element={<ContactPage />} />
       <Route path="contact/apply" element={<OnboardingPage />} />
       <Route path="contact/change" element={<ChangeRequestPage />} />

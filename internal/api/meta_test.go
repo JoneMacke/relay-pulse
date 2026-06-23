@@ -239,6 +239,22 @@ func TestGetMetaContent(t *testing.T) {
 			expectedDescPart:  "掲載申請、変更リクエスト",
 		},
 		{
+			name:              "中文检测页",
+			langCode:          "zh-CN",
+			isProviderPage:    false,
+			staticPath:        "detect",
+			expectedTitlePart: "中转站检测",
+			expectedDescPart:  "盲测指纹取证",
+		},
+		{
+			name:              "英文检测页",
+			langCode:          "en-US",
+			isProviderPage:    false,
+			staticPath:        "detect",
+			expectedTitlePart: "Relay Station Detection",
+			expectedDescPart:  "blind fingerprint forensics",
+		},
+		{
 			name:              "中文服务商页面",
 			langCode:          "zh-CN",
 			slug:              "foxcode",
@@ -475,6 +491,22 @@ func TestInjectMetaTags(t *testing.T) {
 			},
 		},
 		{
+			name:               "中文检测页",
+			path:               "/detect",
+			expectedLang:       "zh-CN",
+			expectedTitlePart:  "中转站检测",
+			expectedIsNotFound: false,
+			expectedHTMLParts: []string{
+				`<link rel="canonical" href="https://relaypulse.top/detect">`,
+				`<link rel="alternate" hreflang="en" href="https://relaypulse.top/en/detect">`,
+				`<link rel="alternate" hreflang="x-default" href="https://relaypulse.top/detect">`,
+				`<meta property="og:url" content="https://relaypulse.top/detect">`,
+				`"@graph"`,
+				`"@type": "WebPage"`,
+				`"@type": "BreadcrumbList"`,
+			},
+		},
+		{
 			name:               "存在的服务商页面",
 			path:               "/p/foxcode",
 			expectedLang:       "zh-CN",
@@ -499,7 +531,7 @@ func TestInjectMetaTags(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			html, isNotFound := injectMetaTags(indexHTML, tt.path, cfg)
+			html, isNotFound := injectMetaTags(indexHTML, tt.path, cfg, true)
 
 			if isNotFound != tt.expectedIsNotFound {
 				t.Errorf("injectMetaTags(%q) isNotFound = %v, want %v", tt.path, isNotFound, tt.expectedIsNotFound)
@@ -577,7 +609,7 @@ func TestInjectNoindexForInvalidPaths(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			html, isNotFound := injectMetaTags(indexHTML, tt.path, cfg)
+			html, isNotFound := injectMetaTags(indexHTML, tt.path, cfg, true)
 
 			hasNoindex := strings.Contains(html, `noindex`)
 
@@ -590,6 +622,55 @@ func TestInjectNoindexForInvalidPaths(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestInjectMetaTagsDetectGatedByRpdiag 验证 /detect 专题页的可索引性受 rpdiag 开关门控：
+// 启用时注入 detect 专属 canonical/meta；未启用时退化为 noindex（不为本地不存在的功能做 SEO）。
+func TestInjectMetaTagsDetectGatedByRpdiag(t *testing.T) {
+	cfg := &config.AppConfig{PublicBaseURL: "https://relaypulse.top"}
+	indexHTML := `<!doctype html>
+<html lang="en">
+<head>
+<meta name="description" content="Default description">
+<title>Default Title</title>
+</head>
+<body></body>
+</html>`
+
+	const detectCanonical = `<link rel="canonical" href="https://relaypulse.top/detect">`
+
+	t.Run("rpdiag 启用：注入 detect 专属 canonical，不 noindex", func(t *testing.T) {
+		html, isNotFound := injectMetaTags(indexHTML, "/detect", cfg, true)
+		if isNotFound {
+			t.Fatalf("/detect 启用 rpdiag 不应判 404")
+		}
+		if strings.Contains(html, "noindex") {
+			t.Errorf("/detect 启用 rpdiag 不应注入 noindex")
+		}
+		if !strings.Contains(html, detectCanonical) {
+			t.Errorf("/detect 启用 rpdiag 应注入 detect canonical，实际:\n%s", html)
+		}
+	})
+
+	t.Run("rpdiag 未启用：noindex 且不注入 detect canonical", func(t *testing.T) {
+		html, isNotFound := injectMetaTags(indexHTML, "/detect", cfg, false)
+		if isNotFound {
+			t.Fatalf("/detect 未启用 rpdiag 应为 noindex 而非 404")
+		}
+		if !strings.Contains(html, "noindex") {
+			t.Errorf("/detect 未启用 rpdiag 应注入 noindex")
+		}
+		if strings.Contains(html, detectCanonical) {
+			t.Errorf("/detect 未启用 rpdiag 不应注入 detect canonical")
+		}
+	})
+
+	t.Run("语言前缀 /en/detect 同样受门控", func(t *testing.T) {
+		html, _ := injectMetaTags(indexHTML, "/en/detect", cfg, false)
+		if !strings.Contains(html, "noindex") {
+			t.Errorf("/en/detect 未启用 rpdiag 应注入 noindex")
+		}
+	})
 }
 
 // TestGeneratePageMetaCanonicalSafety 测试 canonical URL 基于 meta 数据生成，不依赖原始 path
@@ -672,6 +753,9 @@ func TestParseStaticPath(t *testing.T) {
 		{path: "/en/contact", expected: "contact"},
 		{path: "/ru/contact", expected: "contact"},
 		{path: "/ja/contact", expected: "contact"},
+		{path: "/detect", expected: "detect"},
+		{path: "/en/detect", expected: "detect"},
+		{path: "/ja/detect", expected: "detect"},
 		{path: "/contact/apply", expected: ""}, // 表单子页不在白名单
 		{path: "/en/contact/apply", expected: ""},
 		{path: "/de/contact", expected: ""}, // 不支持的语言前缀
@@ -704,6 +788,9 @@ func TestIsValidHomePath(t *testing.T) {
 		// 有效静态页面路径
 		{path: "/contact", valid: true},
 		{path: "/en/contact", valid: true},
+		{path: "/detect", valid: true},
+		{path: "/en/detect", valid: true},
+		{path: "/ja/detect", valid: true},
 
 		// 表单页不索引
 		{path: "/contact/apply", valid: false},

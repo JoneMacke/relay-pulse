@@ -2114,6 +2114,32 @@ MONITOR_POSTGRES_SSLMODE=require
 MONITOR_CORS_ORIGINS=http://localhost:5173,http://localhost:3000
 ```
 
+### rpdiag 质量列集成（可选，默认关闭）
+
+首页状态表的「质量」列与 `/detect`（中转站检测）专题页消费的是 **rpdiag** 导出的排名数据。rpdiag 是一套**独立的、未开源的**质量盲评平台，仅 relaypulse.top 官方部署接入。对于私有化 / 自部署，本功能**默认关闭**——不配置即可，监测主功能完全不受影响。
+
+```bash
+# 启用质量列 + /detect 专题页（需自行运行 rpdiag 后端并提供导出地址）
+# 接受 1 / true / yes / on（大小写不敏感）；其余值或未设均视为关闭
+MONITOR_RPDIAG_ENABLED=true
+
+# 排名导出地址（可选；默认指向官方 diag.relaypulse.top）
+MONITOR_RPDIAG_EXPORT_URL=https://diag.relaypulse.top/api/v1/ranking/export?scoring_version=all
+
+# 导出缓存 TTL（可选；Go duration 语法，默认 10m）
+MONITOR_RPDIAG_CACHE_TTL=10m
+```
+
+**开关行为**（单一信号收口所有出口，要么全有、要么全无）：
+
+| `MONITOR_RPDIAG_ENABLED` | 表现 |
+|--------------------------|------|
+| 未设 / 关闭（默认） | 状态表**不渲染**「质量」列、移动端无质量排序项、页脚无「中转站检测」入口、`/detect` 返回 `noindex` 且不进 `sitemap.xml`。自部署看到的就是一张纯净的可用性监测表。 |
+| 开启但导出不可达 | 列**保留**、内容暂空（fail-open，不阻断主功能；缓存命中旧快照时继续用旧数据）。 |
+| 开启且导出正常 | 完整质量列 + `/detect` 专题页 + 站内链接 + sitemap 收录。 |
+
+> 注：环境变量在容器**启动期一次性读取**，改值需重启容器（不参与配置热更新）。
+
 ### Events API 配置
 
 Events API 用于向外部服务（如 Notifier）提供状态变更事件流。

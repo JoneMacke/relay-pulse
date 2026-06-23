@@ -130,6 +130,7 @@ func (h *Handler) queryAndSerialize(ctx context.Context, period, align string, t
 		"slow_latency_ms":    slowLatencyMs,
 		"enable_annotations": enableAnnotations,
 		"hide_price_column":  hidePriceColumn,
+		"rpdiag_enabled":     h.rpdiagEnabled(), // 质量列/专题页总开关；私有部署未接 rpdiag 时为 false
 		"sponsor_pin": gin.H{
 			"enabled":    sponsorPin.IsEnabled(),
 			"max_pinned": sponsorPin.MaxPinned,

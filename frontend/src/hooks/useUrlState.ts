@@ -46,6 +46,8 @@ interface UrlStateActions {
    *  与 setSortConfig 不同：不会设置 hasManualSort，因此置顶恢复后仍允许首屏置顶生效。
    *  用于 runtime 隐藏价格列后，清理用户之前留下的"按价格排序"链接。 */
   clearPriceRatioSort: () => void;
+  /** 同 clearPriceRatioSort，但针对 qualityScore_* —— rpdiag 关闭（私有部署）后清理质量列旧排序链接。 */
+  clearQualityScoreSort: () => void;
   enterFavoritesMode: () => void;  // 进入收藏模式（保存快照并清空筛选）
   exitFavoritesMode: () => void;   // 退出收藏模式（恢复快照）
 }
@@ -333,19 +335,25 @@ export function useUrlState(): [UrlState, UrlStateActions] {
     }, { replace: true });
   }, [setSearchParams]);
 
-  // 见 UrlStateActions.clearPriceRatioSort jsdoc：runtime 隐藏价格列后清理旧 URL。
-  const clearPriceRatioSort = useCallback(() => {
+  // 通用：runtime 隐藏/禁用某列后，清掉 URL 里指向该列的旧排序，
+  // 避免分享链接刷新时仍触发已隐藏列的排序（不写 hasManualSort，刷新仍可恢复置顶语义）。
+  const clearSortForKey = useCallback((targetKey: string) => {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       const raw = next.get(PARAM_KEYS.sort);
       if (!raw) return next;
       const lastUnderscore = raw.lastIndexOf('_');
       const key = lastUnderscore === -1 ? raw : raw.substring(0, lastUnderscore);
-      if (key !== 'priceRatio') return next;
+      if (key !== targetKey) return next;
       next.delete(PARAM_KEYS.sort);
       return next;
     }, { replace: true });
   }, [setSearchParams]);
+
+  // runtime 隐藏价格列后清理旧 URL（见 UrlStateActions jsdoc）。
+  const clearPriceRatioSort = useCallback(() => clearSortForKey('priceRatio'), [clearSortForKey]);
+  // rpdiag 关闭（私有部署）后清理质量列旧 URL 排序。
+  const clearQualityScoreSort = useCallback(() => clearSortForKey('qualityScore'), [clearSortForKey]);
 
   // 进入收藏模式：保存当前筛选状态快照，清空筛选器，启用收藏模式
   const enterFavoritesMode = useCallback(() => {
@@ -449,6 +457,7 @@ export function useUrlState(): [UrlState, UrlStateActions] {
     setViewMode,
     setSortConfig,
     clearPriceRatioSort,
+    clearQualityScoreSort,
     enterFavoritesMode,
     exitFavoritesMode,
   };

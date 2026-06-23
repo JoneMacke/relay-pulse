@@ -126,7 +126,7 @@ export default function ProviderPage() {
 
   // 数据获取 - 先获取全部数据用于构建映射
   // Provider 页面不启用置顶功能（isInitialSort=false）
-  const { data: allData, loading, error, stats, slowLatencyMs, enableAnnotations, boardsEnabled, boardsEnabledLoaded, allMonitorIds, allMonitorIdsSupported, hidePriceColumn, refetch } = useMonitorData({
+  const { data: allData, loading, error, stats, slowLatencyMs, enableAnnotations, boardsEnabled, boardsEnabledLoaded, allMonitorIds, allMonitorIdsSupported, hidePriceColumn, rpdiagEnabled, refetch } = useMonitorData({
     timeRange,
     timeAlign,
     timeFilter,
@@ -148,6 +148,11 @@ export default function ProviderPage() {
   // 渲染期条件 setState（非 effect）：纠偏后 sortConfig.key 变 uptime，下一轮条件即假、自然收敛，
   // 不会级联循环（React 官方"渲染期调整 state"配方，比 effect 少一次提交后重渲染）。
   if (hidePriceColumn && sortConfig.key === 'priceRatio') {
+    setSortConfig({ key: 'uptime', direction: 'desc' });
+  }
+
+  // 同理：rpdiag 关闭（私有部署）后质量列消失，本地 sortConfig 若停在 qualityScore 则退回默认。
+  if (!rpdiagEnabled && sortConfig.key === 'qualityScore') {
     setSortConfig({ key: 'uptime', direction: 'desc' });
   }
 
@@ -491,6 +496,7 @@ export default function ProviderPage() {
                   onBlockLeave={handleBlockLeave}
                   rpdiagScores={rpdiagScores}
                   rpdiagScoresLoaded={rpdiagScoresLoaded}
+                  rpdiagEnabled={rpdiagEnabled}
                   hidePriceColumn={hidePriceColumn}
                 />
               )}
@@ -520,7 +526,7 @@ export default function ProviderPage() {
         </main>
 
         {/* 完整模式：显示 Footer */}
-        {!isEmbedMode && <Footer />}
+        {!isEmbedMode && <Footer rpdiagEnabled={rpdiagEnabled} />}
         </div>
       </div>
     </>

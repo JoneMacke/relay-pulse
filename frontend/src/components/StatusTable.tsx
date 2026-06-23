@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom';
 import { List, type RowComponentProps } from 'react-window';
 import { ArrowUpDown, ArrowUp, ArrowDown, Zap, Shield, Filter, Info } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
+import { LANGUAGE_PATH_MAP, type SupportedLanguage } from '../i18n';
 import { StatusDot } from './StatusDot';
 import { HeatmapBlock } from './HeatmapBlock';
 import { LayeredHeatmapBlock } from './LayeredHeatmapBlock';
@@ -186,6 +188,8 @@ interface StatusTableProps {
   rpdiagScores?: RpdiagScoresResponse;
   /** rpdiag 质量分是否已加载完成。false 时质量列排序按钮置灰（避免空数据触发的伪排序）。 */
   rpdiagScoresLoaded?: boolean;
+  /** rpdiag 质量功能总开关（meta.rpdiag_enabled 派生）。false 时整列消失（私有部署未接 rpdiag）。默认 true（fail-open）。 */
+  rpdiagEnabled?: boolean;
   /** runtime 价格列隐藏开关（meta.hide_price_column 派生）。默认 false（显示）。 */
   hidePriceColumn?: boolean;
 }
@@ -547,9 +551,10 @@ interface MobileRowProps {
   onBlockHover: (e: React.MouseEvent<HTMLDivElement>, point: HistoryPoint) => void;
   onBlockLeave: () => void;
   rpdiagScores?: RpdiagScoresResponse;
+  rpdiagEnabled: boolean;
 }
 
-function MobileRow({ index, style, data, slowLatencyMs, enableAnnotations, showProvider, showSponsor, useLatencyGradient, isFavorite, onToggleFavorite, onBlockHover, onBlockLeave, rpdiagScores }: RowComponentProps<MobileRowProps>) {
+function MobileRow({ index, style, data, slowLatencyMs, enableAnnotations, showProvider, showSponsor, useLatencyGradient, isFavorite, onToggleFavorite, onBlockHover, onBlockLeave, rpdiagScores, rpdiagEnabled }: RowComponentProps<MobileRowProps>) {
   const item = data[index];
   return (
     <div style={style}>
@@ -565,7 +570,7 @@ function MobileRow({ index, style, data, slowLatencyMs, enableAnnotations, showP
           onToggleFavorite={() => onToggleFavorite(item.id)}
           onBlockHover={onBlockHover}
           onBlockLeave={onBlockLeave}
-          rpdiagScore={lookupRpdiagScore(rpdiagScores, item.providerId, item.serviceType, item.channelName || item.channel)}
+          rpdiagScore={rpdiagEnabled ? lookupRpdiagScore(rpdiagScores, item.providerId, item.serviceType, item.channelName || item.channel) : undefined}
         />
       </div>
     </div>
@@ -774,12 +779,14 @@ function MobileSortMenu({
   onSort,
   hidePriceColumn,
   rpdiagScoresLoaded,
+  rpdiagEnabled,
 }: {
   sortConfig: SortConfig;
   isInitialSort?: boolean;
   onSort: (key: string) => void;
   hidePriceColumn: boolean;
   rpdiagScoresLoaded: boolean;
+  rpdiagEnabled: boolean;
 }) {
   const { t } = useTranslation();
 
@@ -790,7 +797,8 @@ function MobileSortMenu({
     { key: 'serviceType', label: t('table.sorting.service') },
     ...(hidePriceColumn ? [] : [{ key: 'priceRatio', label: t('table.sorting.priceRatio') }]),
     { key: 'listedDays', label: t('table.sorting.listedDays') },
-    { key: 'qualityScore', label: t('table.sorting.quality'), disabled: !rpdiagScoresLoaded },
+    // rpdiag 关闭时移动端不提供"按质量排序"（与桌面端隐藏质量列一致）
+    ...(rpdiagEnabled ? [{ key: 'qualityScore', label: t('table.sorting.quality'), disabled: !rpdiagScoresLoaded }] : []),
   ];
 
   return (
@@ -846,6 +854,7 @@ function StatusTableComponent({
   onFilterProvider,
   rpdiagScores,
   rpdiagScoresLoaded = false,
+  rpdiagEnabled = true,
   hidePriceColumn = false,
 }: StatusTableProps) {
   const { t, i18n } = useTranslation();
@@ -872,6 +881,8 @@ function StatusTableComponent({
 
   const currentTimeRange = getTimeRanges(t).find((r) => r.id === timeRange);
   const useLatencyGradient = timeRange === '90m';
+  // 质量列总开关：rpdiag 未启用（私有部署）时整列（表头 + 格子 + colgroup + 移动端排序项）消失
+  const showQualityColumn = rpdiagEnabled;
 
   // 移动端：虚拟滚动卡片列表视图
   if (isMobile) {
@@ -889,6 +900,7 @@ function StatusTableComponent({
           onSort={onSort}
           hidePriceColumn={hidePriceColumn}
           rpdiagScoresLoaded={rpdiagScoresLoaded}
+          rpdiagEnabled={showQualityColumn}
         />
         <List
           style={{ height: mobileListHeight, width: '100%' }}
@@ -896,7 +908,7 @@ function StatusTableComponent({
           rowHeight={MOBILE_ROW_HEIGHT}
           overscanCount={3}
           rowComponent={MobileRow}
-          rowProps={{ data, slowLatencyMs, enableAnnotations, showProvider, showSponsor, useLatencyGradient, isFavorite, onToggleFavorite, onBlockHover, onBlockLeave, rpdiagScores }}
+          rowProps={{ data, slowLatencyMs, enableAnnotations, showProvider, showSponsor, useLatencyGradient, isFavorite, onToggleFavorite, onBlockHover, onBlockLeave, rpdiagScores, rpdiagEnabled: showQualityColumn }}
         />
       </div>
     );
@@ -919,7 +931,7 @@ function StatusTableComponent({
           <col className="w-px" /> {/* listedDays */}
           <col className="w-px" /> {/* uptime */}
           <col className="w-px" /> {/* lastCheck */}
-          <col className="w-px" /> {/* quality */}
+          {showQualityColumn && <col className="w-px" />} {/* quality */}
           <col className="w-full" /> {/* trend */}
         </colgroup>
         <thead>
@@ -1037,7 +1049,8 @@ function StatusTableComponent({
                 <SortIcon columnKey="lastCheck" />
               </div>
             </th>
-            {/* 质量列表头：rpdiag 加载完成前置灰不响应排序，避免空数据触发的伪排序 */}
+            {/* 质量列表头：rpdiag 关闭时整列隐藏；启用时未加载完成前置灰不响应排序，避免空数据触发的伪排序 */}
+            {showQualityColumn && (
             <th
               className={`px-1.5 py-3 font-medium whitespace-nowrap focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none ${
                 rpdiagScoresLoaded
@@ -1069,11 +1082,20 @@ function StatusTableComponent({
                       'table.headers.qualityTooltip',
                       '由 rpdiag.relaypulse.top 独立采样的质量分（0-100）。通道里每个模型一条 5 点 sparkline 叠绘：30d 均 / 7d 均 / 最近 3 次单 sample；80 / 100 两条参考线作 Y 轴刻度。',
                     )}
+                    {/* 了解评分方法的上下文内链 → /detect（hover 可点；首页爬虫锚点由页脚承担） */}
+                    <Link
+                      to={LANGUAGE_PATH_MAP[i18n.language as SupportedLanguage] ? `/${LANGUAGE_PATH_MAP[i18n.language as SupportedLanguage]}/detect` : '/detect'}
+                      onClick={(e) => e.stopPropagation()}
+                      className="mt-1.5 block text-accent hover:underline font-medium"
+                    >
+                      {t('table.qualityHintLink')} →
+                    </Link>
                   </span>
                 </span>
                 {rpdiagScoresLoaded && <SortIcon columnKey="qualityScore" />}
               </div>
             </th>
+            )}
             <th className="pl-1.5 pr-2 py-3 font-medium min-w-[224px]">
               <div className="flex items-center gap-2">
                 {t('table.headers.trend')}
@@ -1241,9 +1263,11 @@ function StatusTableComponent({
                   )}
                 </div>
               </td>
+              {showQualityColumn && (
               <td className="px-1.5 py-1 whitespace-nowrap">
                 <QualityScoreCell score={lookupRpdiagScore(rpdiagScores, item.providerId, item.serviceType, item.channelName || item.channel)} />
               </td>
+              )}
               <td className="pl-1.5 pr-2 py-1.5 align-middle">
                 <div className="flex items-center gap-[2px] h-5 w-full overflow-hidden rounded-sm">
                   {/* 热力图：多层 vs 单层 */}

@@ -397,7 +397,8 @@ func setupStaticFiles(router *gin.Engine, handler *Handler) {
 		cfg := handler.config
 		handler.cfgMu.RUnlock()
 
-		html, isNotFound := injectMetaTags(string(data), path, cfg)
+		// rpdiagEnabled 透传给 SSR：rpdiag 未启用时 /detect 专题页注入 noindex（不收录无意义页）
+		html, isNotFound := injectMetaTags(string(data), path, cfg, handler.rpdiagEnabled())
 
 		// 如果是 404（provider 不存在），返回 404 状态码
 		if isNotFound {

@@ -96,6 +96,7 @@ function App() {
     setViewMode,
     setSortConfig,
     clearPriceRatioSort,
+    clearQualityScoreSort,
     enterFavoritesMode,  // 进入收藏模式（保存快照）
     exitFavoritesMode,   // 退出收藏模式（恢复快照）
   } = urlActions;
@@ -180,7 +181,7 @@ function App() {
 
   const { scores: rpdiagScores, loaded: rpdiagScoresLoaded } = useRpdiagScores();
 
-  const { loading, error, data, rawData, stats, providers, slowLatencyMs, enableAnnotations, boardsEnabled, boardsEnabledLoaded, boardCounts, allMonitorIds, allMonitorIdsSupported, hidePriceColumn, refetch } = useMonitorData({
+  const { loading, error, data, rawData, stats, providers, slowLatencyMs, enableAnnotations, boardsEnabled, boardsEnabledLoaded, boardCounts, allMonitorIds, allMonitorIdsSupported, hidePriceColumn, rpdiagEnabled, refetch } = useMonitorData({
     timeRange,
     timeAlign,
     timeFilter,
@@ -205,6 +206,14 @@ function App() {
       clearPriceRatioSort();
     }
   }, [hidePriceColumn, clearPriceRatioSort]);
+
+  // 同理：rpdiag 关闭（私有部署）后质量列消失，抹掉残留的 qualityScore_* URL 排序，
+  // 避免带"按质量排序"链接刷新仍指向已隐藏的列。
+  useEffect(() => {
+    if (!rpdiagEnabled) {
+      clearQualityScoreSort();
+    }
+  }, [rpdiagEnabled, clearQualityScoreSort]);
 
   // 板块功能禁用时，自动归一 board 到 hot
   // 解决：用户手动输入 ?board=cold 但功能未启用时的 URL 混乱问题
@@ -724,6 +733,7 @@ function App() {
                   onFilterProvider={(providerId) => setFilterProvider([providerId])}
                   rpdiagScores={rpdiagScores}
                   rpdiagScoresLoaded={rpdiagScoresLoaded}
+                  rpdiagEnabled={rpdiagEnabled}
                   hidePriceColumn={hidePriceColumn}
                 />
               )}
@@ -750,7 +760,7 @@ function App() {
           )}
 
           {/* 免责声明 - 截图模式下隐藏 */}
-          {!isScreenshotMode && <Footer />}
+          {!isScreenshotMode && <Footer rpdiagEnabled={rpdiagEnabled} />}
         </div>
       </div>
     </>
