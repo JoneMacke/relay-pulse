@@ -279,14 +279,14 @@ func (h *Handler) SetRpdiagClient(client *rpdiag.Client) {
 
 // rpdiagEnabled 报告 rpdiag 质量分功能是否启用（= 是否注入了客户端）。
 // 这是「质量列 / /detect 专题页 / sitemap / SSR 可索引性」共用的单一信号源：
-// 私有化部署未设 MONITOR_RPDIAG_ENABLED 时全部一致地消失。
+// 默认启用，仅当私有化部署显式设 MONITOR_RPDIAG_ENABLED=0/false/no/off 时全部一致地消失。
 // rpdiagClient 仅启动期一次性注入、不支持热替换，故读取无需加锁。
 func (h *Handler) rpdiagEnabled() bool {
 	return h.rpdiagClient != nil
 }
 
 // GetRpdiagScores 返回 rpdiag 质量分索引（按 "provider|service|channel" 键）。
-// 当客户端未启用（MONITOR_RPDIAG_ENABLED=false / 未设置）时返回空对象，
+// 当客户端未启用（MONITOR_RPDIAG_ENABLED 显式设为 false/0/no/off）时返回空对象，
 // 由前端兜底显示 "-"；上游异常时返回 503，前端走同样的空兜底。
 func (h *Handler) GetRpdiagScores(c *gin.Context) {
 	if !h.rpdiagEnabled() {

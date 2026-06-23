@@ -76,8 +76,8 @@ func TestScoreKey(t *testing.T) {
 }
 
 func TestEnabledFromEnv(t *testing.T) {
-	on := []string{"1", "true", "TRUE", "yes", "on", " On "}
-	off := []string{"", "0", "false", "no", "off", "anything-else"}
+	on := []string{"", "1", "true", "TRUE", "yes", "on", " On ", "anything-else"}
+	off := []string{"0", "false", "FALSE", "no", "off", " Off "}
 	for _, raw := range on {
 		if !enabledFromEnv(raw) {
 			t.Errorf("enabledFromEnv(%q) = false, want true", raw)
