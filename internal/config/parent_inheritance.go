@@ -51,7 +51,7 @@ func (c *AppConfig) applyParentInheritance() error {
 		inheritDisplayAndPricing(child, parent)
 
 		// 修复继承后的 Duration 字段
-		if err := fixInheritedDurations(i, child, inheritedTimings, inheritedRetry); err != nil {
+		if err := fixInheritedDurations(i, child, parent, inheritedTimings, inheritedRetry); err != nil {
 			return err
 		}
 
@@ -279,17 +279,26 @@ func inheritDisplayAndPricing(child, parent *ServiceConfig) {
 	}
 }
 
-// fixInheritedDurations 修复继承后的 Duration 字段
+// fixInheritedDurations 修复继承后的 Duration 字段。
+//
 // Validate() 中 Duration 解析发生在 applyParentInheritance() 之前，
-// 当子通道通过 parent 继承了字符串字段时，需要重新计算对应的 Duration 字段
+// 当子通道通过 parent 继承了字符串字段时，需要重新计算对应的 Duration 字段。
+//
+// 特殊情形：父通道没有显式 interval 字符串（依赖层级回退得到 IntervalDuration），
+// 子通道 SponsorLevel 不继承，若子通道自身也无显式 interval，则会在
+// normalizeDurationsForMonitorAt 中独立计算出 FREE 层的 5m——即便父通道是付费层 1m。
+// 为避免这种"降级误差"，当子通道无自身显式 interval 时，强制同步父通道已解析的
+// IntervalDuration，确保父子探测频率一致。
 func fixInheritedDurations(
 	monitorIdx int,
 	child *ServiceConfig,
+	parent *ServiceConfig,
 	timings inheritedTimingsFlags,
 	retry inheritedRetryFlags,
 ) error {
 	// 修复时间配置 Duration
 	if timings.Interval {
+		// 子通道从父通道继承了显式 interval 字符串，重新解析为 Duration
 		trimmed := strings.TrimSpace(child.Interval)
 		d, err := time.ParseDuration(trimmed)
 		if err != nil {
@@ -299,6 +308,12 @@ func fixInheritedDurations(
 			return fmt.Errorf("monitor[%d]: 继承的 interval 必须大于 0", monitorIdx)
 		}
 		child.IntervalDuration = d
+	} else if strings.TrimSpace(child.Interval) == "" {
+		// 子通道无显式 interval，父通道也无（否则 timings.Interval 会为 true）。
+		// SponsorLevel 刻意不继承，若任由子通道独立计算会得到 FREE 层 5m，
+		// 而父通道可能因为付费层级已解析为 1m。直接复制父通道的解析结果，
+		// 保持父子探测频率一致。
+		child.IntervalDuration = parent.IntervalDuration
 	}
 
 	if timings.SlowLatency {

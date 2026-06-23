@@ -947,3 +947,103 @@ func TestChildExplicitSuccessContainsNotOverwritten(t *testing.T) {
 		t.Fatalf("child.SuccessContains = %q, want %q（显式值不应被覆盖）", child.SuccessContains, "child-keyword")
 	}
 }
+
+// TestChildInheritsParentEffectiveIntervalDuration 验证 Part B 回归保护：
+// 父通道为付费（beacon），无显式 interval，通过层级逻辑得到全局 1m；
+// 子通道 SponsorLevel 空（不继承），无显式 interval，不应因此降到 5m——
+// 应继承父通道已解析出的有效 IntervalDuration（1m）。
+func TestChildInheritsParentEffectiveIntervalDuration(t *testing.T) {
+	cfg := &AppConfig{
+		// 全局 interval 1m
+		Interval: "1m",
+		Monitors: []ServiceConfig{
+			{
+				Provider:     "demo",
+				Service:      "cc",
+				Channel:      "vip",
+				Model:        "base",
+				BaseURL:      "https://example.com",
+				URLPattern:   "{{BASE_URL}}",
+				Method:       "POST",
+				Category:     "public",
+				SponsorLevel: SponsorLevelBeacon, // 付费通道，无显式 interval → 层级回退 1m
+			},
+			{
+				Model:    "child",
+				Parent:   "demo/cc/vip",
+				Category: "public",
+				// SponsorLevel 空（不继承）；Interval 也空——没有显式 interval 字符串
+				// 但应继承父通道已解析的 IntervalDuration，而非自行降速到 5m
+			},
+		},
+	}
+
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate() err = %v", err)
+	}
+	if err := cfg.normalize(); err != nil {
+		t.Fatalf("normalize() err = %v", err)
+	}
+
+	parent := &cfg.Monitors[0]
+	child := &cfg.Monitors[1]
+
+	if parent.IntervalDuration != time.Minute {
+		t.Fatalf("parent.IntervalDuration = %v, want 1m (beacon paid tier)", parent.IntervalDuration)
+	}
+	// 关键断言：子通道不应因 SponsorLevel 空降到 5m
+	if child.IntervalDuration != time.Minute {
+		t.Errorf("child.IntervalDuration = %v, want 1m (inherited from paid parent)", child.IntervalDuration)
+	}
+	if child.IntervalDuration != parent.IntervalDuration {
+		t.Errorf("child.IntervalDuration = %v, want same as parent %v", child.IntervalDuration, parent.IntervalDuration)
+	}
+}
+
+// TestChildInheritsParentEffectiveIntervalDuration_FreeMirror 验证对称情形：
+// 父通道 FREE（pulse），无显式 interval，层级回退 5m；
+// 子通道无显式 interval → 也应继承父的 5m（而非重新计算）。
+func TestChildInheritsParentEffectiveIntervalDuration_FreeMirror(t *testing.T) {
+	cfg := &AppConfig{
+		Interval: "1m",
+		Monitors: []ServiceConfig{
+			{
+				Provider:     "demo",
+				Service:      "cc",
+				Channel:      "vip",
+				Model:        "base",
+				BaseURL:      "https://example.com",
+				URLPattern:   "{{BASE_URL}}",
+				Method:       "POST",
+				Category:     "public",
+				SponsorLevel: SponsorLevelPulse, // FREE，无显式 interval → 5m
+			},
+			{
+				Model:    "child",
+				Parent:   "demo/cc/vip",
+				Category: "public",
+				// 无显式 interval，无 SponsorLevel → 同样会算出 5m，但应由父继承
+			},
+		},
+	}
+
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate() err = %v", err)
+	}
+	if err := cfg.normalize(); err != nil {
+		t.Fatalf("normalize() err = %v", err)
+	}
+
+	parent := &cfg.Monitors[0]
+	child := &cfg.Monitors[1]
+
+	if parent.IntervalDuration != 5*time.Minute {
+		t.Fatalf("parent.IntervalDuration = %v, want 5m (pulse free tier)", parent.IntervalDuration)
+	}
+	if child.IntervalDuration != 5*time.Minute {
+		t.Errorf("child.IntervalDuration = %v, want 5m (inherited from free parent)", child.IntervalDuration)
+	}
+	if child.IntervalDuration != parent.IntervalDuration {
+		t.Errorf("child.IntervalDuration = %v, want same as parent %v", child.IntervalDuration, parent.IntervalDuration)
+	}
+}

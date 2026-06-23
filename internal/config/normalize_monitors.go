@@ -9,6 +9,41 @@ import (
 	"monitor/internal/logger"
 )
 
+// freeTierIntervalFloor 是免费层通道的探测间隔下限（floor）。
+// 全局 interval 若比此值更慢，取全局值（不让免费通道比全局更频繁）。
+const freeTierIntervalFloor = 5 * time.Minute
+
+// isPaidSponsorLevel 判断赞助等级是否属于付费档（beacon/backbone/core）。
+// 注意：normalizeDurationsForMonitorAt 早于 normalizeMonitorsPreInheritance 中的
+// SponsorLevel 旧值迁移（即 deprecated 别名统一化步骤），因此本函数必须在内部先调用
+// deprecatedToNew()，否则 "advanced"/"enterprise" 会被误判为免费档。
+func isPaidSponsorLevel(level SponsorLevel) bool {
+	if migrated, ok := level.deprecatedToNew(); ok {
+		level = migrated
+	}
+	switch level {
+	case SponsorLevelBeacon, SponsorLevelBackbone, SponsorLevelCore:
+		return true
+	default:
+		return false
+	}
+}
+
+// tierAwareDefaultInterval 返回未显式配置 interval 时的层级感知默认值：
+//   - 付费层（beacon/backbone/core）：使用全局 interval（维持高频）
+//   - 免费层（none/public/signal/pulse）：使用 freeTierIntervalFloor 与全局值中的较大者
+//     （保证免费通道不会比全局更频繁，同时不低于 5m 的探测节奏）
+func tierAwareDefaultInterval(app *AppConfig, level SponsorLevel) time.Duration {
+	if isPaidSponsorLevel(level) {
+		return app.IntervalDuration
+	}
+	// 免费层：取 floor 和全局值中的较大者
+	if app.IntervalDuration > freeTierIntervalFloor {
+		return app.IntervalDuration
+	}
+	return freeTierIntervalFloor
+}
+
 // monitorPSCPrefix 构造形如 "monitor[i] (provider=..., service=..., channel=...)" 的错误前缀。
 // 当 index < 0 时省略 "[i]"（用于 ResolveSingleMonitor 等单条调用场景）。
 func monitorPSCPrefix(index int, cfg *ServiceConfig) string {
@@ -96,7 +131,9 @@ func normalizeDurationsForMonitorAt(app *AppConfig, cfg *ServiceConfig, index in
 		logger.Warn("config", "slow_latency >= timeout，慢响应黄灯可能不会触发", warnArgs...)
 	}
 
-	// 解析单监测项的 interval，空值回退到全局
+	// 解析单监测项的 interval，空值按赞助层级回退：
+	//   - 显式配置了 interval 字符串 → 无条件使用（最高优先级）
+	//   - 未配置 → 付费层用全局 interval，免费层用 freeTierIntervalFloor（最小 5m）
 	// 注意：interval 错误信息历史上只带 monitor[i] 前缀，不带 PSC（保持向后兼容）
 	if trimmed := strings.TrimSpace(cfg.Interval); trimmed != "" {
 		d, err := time.ParseDuration(trimmed)
@@ -114,7 +151,7 @@ func normalizeDurationsForMonitorAt(app *AppConfig, cfg *ServiceConfig, index in
 		}
 		cfg.IntervalDuration = d
 	} else {
-		cfg.IntervalDuration = app.IntervalDuration
+		cfg.IntervalDuration = tierAwareDefaultInterval(app, cfg.SponsorLevel)
 	}
 
 	// ===== 重试配置下发：monitor > global（模板值已在 resolveTemplates 填入 monitor） =====
