@@ -15,9 +15,9 @@
 // a refresh failure falls back to the last good snapshot so a transient
 // upstream blip doesn't strip the column from the listing.
 //
-// The package is opt-out: NewClientFromEnv returns a client by default and
-// only returns nil when MONITOR_RPDIAG_ENABLED is explicitly falsy, so the
-// quality column survives a recreate while operators keep a kill switch.
+// The package is opt-in: NewClientFromEnv returns nil when
+// MONITOR_RPDIAG_ENABLED is unset or false, so callers can skip wiring
+// without conditionals.
 package rpdiag
 
 import (
@@ -206,10 +206,10 @@ const (
 	DefaultTTL       = defaultTTL
 )
 
-// NewClientFromEnv returns a Client unless MONITOR_RPDIAG_ENABLED is explicitly
-// falsy, in which case it returns nil. Recognized env vars:
+// NewClientFromEnv returns a Client when MONITOR_RPDIAG_ENABLED is truthy,
+// otherwise nil. Recognized env vars:
 //
-//	MONITOR_RPDIAG_ENABLED      "0"/"false"/"no"/"off" → disable; default enabled
+//	MONITOR_RPDIAG_ENABLED      "1"/"true"/"yes" → enable, default disabled
 //	MONITOR_RPDIAG_EXPORT_URL   override the rpdiag export endpoint
 //	MONITOR_RPDIAG_CACHE_TTL    Go duration string (e.g. "5m"), defaults 10m
 func NewClientFromEnv() *Client {
@@ -246,19 +246,15 @@ func (c *Client) now() time.Time {
 	return time.Now()
 }
 
-// enabledFromEnv defaults to *enabled*; only explicit falsy strings turn it
-// off. The quality column is the product's own cross-signal, and the front end
-// already fails open (a missing meta.rpdiag_enabled reads as enabled), so the
-// back end matches that posture: a fresh deploy or a recreated container keeps
-// the column live instead of silently dropping it whenever MONITOR_RPDIAG_ENABLED
-// isn't threaded through. Self-hosters who don't want the signal set
-// MONITOR_RPDIAG_ENABLED=0 (or false/no/off) as a kill switch.
+// enabledFromEnv defaults to *disabled*; only explicit truthy strings flip
+// it on. This is deliberate — operators must opt-in to surface a third-
+// party signal on the listing.
 func enabledFromEnv(raw string) bool {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "0", "false", "no", "off":
-		return false
-	default:
+	case "1", "true", "yes", "on":
 		return true
+	default:
+		return false
 	}
 }
 
