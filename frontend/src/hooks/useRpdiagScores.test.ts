@@ -36,4 +36,42 @@ describe('lookupRpdiagScore', () => {
     expect(lookupRpdiagScore(scores, undefined, 'cx', 'o-cx')).toBeUndefined();
     expect(lookupRpdiagScore(undefined, 'right.codes', 'cx', 'o-cx')).toBeUndefined();
   });
+
+  describe('provider candidate fallback (display name first, slug fallback)', () => {
+    // Index is keyed by rpdiag's display name (provider_name); relaypulse may
+    // carry a slug that differs. Lookup tries [providerName, providerSlug].
+    const driftScores: RpdiagScoresResponse = {
+      // Display name ≠ slug: dot dropped / extra letter in the slug.
+      'worldbase.ai|cc|m-': score(72),
+      'yunwu|cc|o-api': score(19),
+      // A normal provider whose display name == slug.
+      'aimz|cc|m-max': score(80),
+    };
+
+    it('joins slug≠display-name providers via the display-name candidate', () => {
+      // WorldBase.ai: slug "worldbase", display "WorldBase.ai".
+      expect(
+        lookupRpdiagScore(driftScores, ['WorldBase.ai', 'worldbase'], 'cc', 'M-')?.max_score,
+      ).toBe(72);
+      // YunWu: slug "yunwui", display "YunWu".
+      expect(
+        lookupRpdiagScore(driftScores, ['YunWu', 'yunwui'], 'cc', 'O-Api')?.max_score,
+      ).toBe(19);
+    });
+
+    it('falls back to the slug candidate when the display name misses', () => {
+      // Display name absent (whitespace) / desynced → slug still joins, no regression.
+      expect(lookupRpdiagScore(driftScores, ['   ', 'aimz'], 'cc', 'M-Max')?.max_score).toBe(80);
+      expect(lookupRpdiagScore(driftScores, ['Totally Different', 'aimz'], 'cc', 'M-Max')?.max_score).toBe(80);
+    });
+
+    it('still accepts a single string provider (back-compat)', () => {
+      expect(lookupRpdiagScore(driftScores, 'aimz', 'cc', 'M-Max')?.max_score).toBe(80);
+    });
+
+    it('returns undefined when no candidate matches', () => {
+      expect(lookupRpdiagScore(driftScores, ['nope', 'nada'], 'cc', 'M-Max')).toBeUndefined();
+      expect(lookupRpdiagScore(driftScores, ['   ', undefined], 'cc', 'M-Max')).toBeUndefined();
+    });
+  });
 });

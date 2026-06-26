@@ -570,7 +570,7 @@ function MobileRow({ index, style, data, slowLatencyMs, enableAnnotations, showP
           onToggleFavorite={() => onToggleFavorite(item.id)}
           onBlockHover={onBlockHover}
           onBlockLeave={onBlockLeave}
-          rpdiagScore={rpdiagEnabled ? lookupRpdiagScore(rpdiagScores, item.providerId, item.serviceType, item.channelName || item.channel) : undefined}
+          rpdiagScore={rpdiagEnabled ? lookupRpdiagScore(rpdiagScores, [item.providerName, item.providerId], item.serviceType, item.channelName || item.channel) : undefined}
         />
       </div>
     </div>
@@ -1265,7 +1265,7 @@ function StatusTableComponent({
               </td>
               {showQualityColumn && (
               <td className="px-1.5 py-1 whitespace-nowrap">
-                <QualityScoreCell score={lookupRpdiagScore(rpdiagScores, item.providerId, item.serviceType, item.channelName || item.channel)} />
+                <QualityScoreCell score={lookupRpdiagScore(rpdiagScores, [item.providerName, item.providerId], item.serviceType, item.channelName || item.channel)} />
               </td>
               )}
               <td className="pl-1.5 pr-2 py-1.5 align-middle">
