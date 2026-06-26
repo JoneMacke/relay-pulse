@@ -157,7 +157,7 @@
       "priceRatioLine2": "¥/$",
       "priceRatioTooltip": "1ドル分のトークンに何人民元必要か、参考値",
       "quality": "品質",
-      "qualityTooltip": "rpdiag.relaypulse.top が独立にサンプリングした品質スコア（0-100）。チャネル内の各モデルが 5 点スパークライン（30日平均 / 7日平均 / 直近 3 サンプル）を重ねて描画。80 / 100 の 2 本の補助線が Y 軸の目盛りとして機能します。",
+      "qualityTooltip": "<diag>diag.relaypulse.top</diag> が独立にサンプリングした品質スコア（0-100）。チャネル内の各モデルが 5 点スパークライン（30日平均 / 7日平均 / 直近 3 サンプル）を重ねて描画。80 / 100 の 2 本の補助線が Y 軸の目盛りとして機能します。",
       "listedDays": "掲載日数",
       "listedDaysLine1": "掲載",
       "listedDaysLine2": "日数",

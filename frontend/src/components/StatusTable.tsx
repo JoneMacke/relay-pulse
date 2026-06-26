@@ -1,8 +1,7 @@
-import { useState, useEffect, useRef, useCallback, useMemo, useId, memo } from 'react';
-import { createPortal } from 'react-dom';
+import { useState, useEffect, useMemo, useId, memo } from 'react';
 import { List, type RowComponentProps } from 'react-window';
 import { ArrowUpDown, ArrowUp, ArrowDown, Zap, Shield, Filter } from 'lucide-react';
-import { useTranslation } from 'react-i18next';
+import { useTranslation, Trans } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { LANGUAGE_PATH_MAP, type SupportedLanguage } from '../i18n';
 import { StatusDot } from './StatusDot';
@@ -11,6 +10,7 @@ import { LayeredHeatmapBlock } from './LayeredHeatmapBlock';
 import { ChannelTypeIcon, parseChannelType } from './ChannelTypeIcon';
 import { ExternalLink } from './ExternalLink';
 import { HeaderInfoPopover } from './HeaderInfoPopover';
+import { HoverTooltip } from './HoverTooltip';
 import { AnnotationCell } from './annotations';
 import { FavoriteButton } from './FavoriteButton';
 import { getTimeRanges } from '../constants';
@@ -54,42 +54,6 @@ function ChannelCell({ channel, probeUrl, templateName, coldReason, className = 
   const { t } = useTranslation();
   const channelType = parseChannelType(channel);
   const hasTooltip = !!(channelType || probeUrl || templateName || coldReason);
-  const triggerRef = useRef<HTMLSpanElement>(null);
-  const leaveTimer = useRef<number>(0);
-  const [hover, setHover] = useState(false);
-  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
-
-  const updatePosition = useCallback(() => {
-    if (!triggerRef.current) return;
-    const rect = triggerRef.current.getBoundingClientRect();
-    setPos({ x: rect.left, y: rect.bottom });
-  }, []);
-
-  const handleEnter = useCallback(() => {
-    clearTimeout(leaveTimer.current);
-    updatePosition();
-    setHover(true);
-  }, [updatePosition]);
-
-  const handleLeave = useCallback(() => {
-    clearTimeout(leaveTimer.current);
-    leaveTimer.current = window.setTimeout(() => setHover(false), 100);
-  }, []);
-
-  // 卸载时清理定时器
-  useEffect(() => () => { clearTimeout(leaveTimer.current); }, []);
-
-  // tooltip 打开时跟随滚动/resize 更新位置
-  useEffect(() => {
-    if (!hover) return;
-    updatePosition();
-    window.addEventListener('resize', updatePosition);
-    window.addEventListener('scroll', updatePosition, true);
-    return () => {
-      window.removeEventListener('resize', updatePosition);
-      window.removeEventListener('scroll', updatePosition, true);
-    };
-  }, [hover, updatePosition]);
 
   const channelContent = (
     <>
@@ -103,53 +67,41 @@ function ChannelCell({ channel, probeUrl, templateName, coldReason, className = 
   }
 
   return (
-    <span
-      ref={triggerRef}
-      className={`inline-flex items-center gap-1 cursor-help ${className}`}
-      onMouseEnter={handleEnter}
-      onMouseLeave={handleLeave}
+    <HoverTooltip
+      triggerClassName={`gap-1 cursor-help ${className}`}
+      content={
+        <span className="flex flex-col gap-1">
+          {channelType && (
+            <span className="flex flex-col">
+              <span className="text-muted text-[10px]">{t('table.channelTooltip.channelType')}</span>
+              <span className="text-primary text-[11px]">
+                {t(`table.channelType.${channelType}`)} — {t(`table.channelType.${channelType}Desc`)}
+              </span>
+            </span>
+          )}
+          {probeUrl && (
+            <span className="flex flex-col">
+              <span className="text-muted text-[10px]">{t('table.channelTooltip.probeUrl')}</span>
+              <span className="text-primary font-mono text-[11px] break-all">{probeUrl}</span>
+            </span>
+          )}
+          {templateName && (
+            <span className="flex flex-col">
+              <span className="text-muted text-[10px]">{t('table.channelTooltip.template')}</span>
+              <span className="text-primary font-mono text-[11px] break-all">{templateName}</span>
+            </span>
+          )}
+          {coldReason && (
+            <span className="flex flex-col">
+              <span className="text-muted text-[10px]">{t('table.channelTooltip.coldReason', '冷板原因')}</span>
+              <span className="text-warning text-[11px] break-all">{coldReason}</span>
+            </span>
+          )}
+        </span>
+      }
     >
       {channelContent}
-      {/* Portal 到 body — 逃出 backdrop-filter 造成的 containing block */}
-      {hover && pos && createPortal(
-        <span
-          className="fixed px-2 py-1.5 bg-elevated border border-default text-xs rounded-lg shadow-lg z-50 select-text cursor-text md:min-w-[20rem] max-w-[90vw] md:max-w-2xl"
-          style={{ left: pos.x, top: pos.y }}
-          onMouseEnter={handleEnter}
-          onMouseLeave={handleLeave}
-        >
-          <span className="flex flex-col gap-1">
-            {channelType && (
-              <span className="flex flex-col">
-                <span className="text-muted text-[10px]">{t('table.channelTooltip.channelType')}</span>
-                <span className="text-primary text-[11px]">
-                  {t(`table.channelType.${channelType}`)} — {t(`table.channelType.${channelType}Desc`)}
-                </span>
-              </span>
-            )}
-            {probeUrl && (
-              <span className="flex flex-col">
-                <span className="text-muted text-[10px]">{t('table.channelTooltip.probeUrl')}</span>
-                <span className="text-primary font-mono text-[11px] break-all">{probeUrl}</span>
-              </span>
-            )}
-            {templateName && (
-              <span className="flex flex-col">
-                <span className="text-muted text-[10px]">{t('table.channelTooltip.template')}</span>
-                <span className="text-primary font-mono text-[11px] break-all">{templateName}</span>
-              </span>
-            )}
-            {coldReason && (
-              <span className="flex flex-col">
-                <span className="text-muted text-[10px]">{t('table.channelTooltip.coldReason', '冷板原因')}</span>
-                <span className="text-warning text-[11px] break-all">{coldReason}</span>
-              </span>
-            )}
-          </span>
-        </span>,
-        document.body,
-      )}
-    </span>
+    </HoverTooltip>
   );
 }
 
@@ -224,7 +176,7 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
   }
 
   const ranked = [...score.models].sort(compareModelKeys);
-  const title = ranked.map(formatModelTooltipRow).join('\n');
+  const tooltipRows = ranked.map(buildModelTooltipRow);
 
   const W = compact ? 36 : 44;
   const H = compact ? 14 : 36;
@@ -352,8 +304,8 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
     return <span className="text-muted text-xs">-</span>;
   }
 
-  const content = (
-    <span className={compact ? 'inline-flex items-center' : 'flex w-full items-center'} title={title || undefined}>
+  const sparkline = (
+    <span className={compact ? 'inline-flex items-center' : 'flex w-full items-center'}>
       <svg
         width={compact ? W : '100%'}
         height={H}
@@ -427,7 +379,32 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
     </span>
   );
 
-  if (!score.channel_url) return content;
+  // per-model 明细浮层：用共享 HoverTooltip（与通道列同款样式），替代原生 title，
+  // 让质量列 tip 与表内其它 tip 视觉一致。每个 model 一块：标识 + 30d/7d/近3次，
+  // 硬失败 model 追加一行高亮可用性提示。
+  const cell = (
+    <HoverTooltip
+      triggerClassName={compact ? '' : 'w-full'}
+      widthClass="w-auto max-w-[22rem]"
+      content={
+        <span className="flex flex-col gap-1.5">
+          {tooltipRows.map((row, i) => (
+            <span key={i} className="flex flex-col">
+              <span className="text-primary text-[11px] font-medium">{row.key}</span>
+              <span className="text-muted text-[10px]">{row.detail}</span>
+              {row.warning && (
+                <span className="text-warning text-[10px]">⚠ {row.warning}</span>
+              )}
+            </span>
+          ))}
+        </span>
+      }
+    >
+      {sparkline}
+    </HoverTooltip>
+  );
+
+  if (!score.channel_url) return cell;
 
   // 裸 <a>：保留新窗 + noopener；不复用 ExternalLink 因为它强制带 ↗ 图标，
   // 在密集表格里这点宝贵宽度还是留给 sparkline。
@@ -443,7 +420,7 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
       }
       onClick={() => trackEvent('click_external_link', { link_text: 'rpdiag quality score', link_url: score.channel_url, outbound: true })}
     >
-      {content}
+      {cell}
     </a>
   );
 }
@@ -510,7 +487,16 @@ function _modelFamilyRank(name: string | undefined): number {
   return 50;
 }
 
-function formatModelTooltipRow(m: RpdiagModelScore): string {
+interface ModelTooltipRow {
+  /** 模型标识（展示名/model_key）。 */
+  key: string;
+  /** 三组指标拼成一行：30d 均 / 7d 均 / 近 3 次。 */
+  detail: string;
+  /** 硬失败可用性提示（存在时单独一行高亮）。 */
+  warning?: string;
+}
+
+function buildModelTooltipRow(m: RpdiagModelScore): ModelTooltipRow {
   const fmt = (v: number | null | undefined) => (typeof v === 'number' ? v.toFixed(1) : '—');
   const key = m.model_key || m.model || '?';
   const t = m.trend;
@@ -535,8 +521,11 @@ function formatModelTooltipRow(m: RpdiagModelScore): string {
       recentStr = m.failed ? '不可测' : fmt(t?.latest);
     }
   }
-  const base = `${key}  30d=${fmt(t?.avg_30d)}  7d=${fmt(t?.avg_7d)}  近3次=${recentStr}`;
-  return m.availability_warning ? `${base}  ⚠ ${m.availability_warning}` : base;
+  return {
+    key,
+    detail: `30d=${fmt(t?.avg_30d)}  7d=${fmt(t?.avg_7d)}  近3次=${recentStr}`,
+    warning: m.availability_warning || undefined,
+  };
 }
 
 // react-window v2 虚拟列表行组件（rowComponent 接口）
@@ -1066,10 +1055,22 @@ function StatusTableComponent({
               <div className="flex items-center gap-1">
                 {t('table.headers.quality', '质量')}
                 <HeaderInfoPopover align="right" widthClass="w-56">
-                  {t(
-                    'table.headers.qualityTooltip',
-                    '由 rpdiag.relaypulse.top 独立采样的质量分（0-100）。通道里每个模型一条 5 点 sparkline 叠绘：30d 均 / 7d 均 / 最近 3 次单 sample；80 / 100 两条参考线作 Y 轴刻度。',
-                  )}
+                  {/* 文案内 <diag> 占位 → diag.relaypulse.top 外链（新标签打开 rpdiag 站点本身，
+                      与下方指向本站 /detect 的内链目的地不同，二者并存）。 */}
+                  <Trans
+                    i18nKey="table.headers.qualityTooltip"
+                    components={{
+                      diag: (
+                        <a
+                          href="https://diag.relaypulse.top"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-accent hover:underline"
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      ),
+                    }}
+                  />
                   {/* 了解评分方法的上下文内链 → /detect（hover 可点；首页爬虫锚点由页脚承担） */}
                   <Link
                     to={LANGUAGE_PATH_MAP[i18n.language as SupportedLanguage] ? `/${LANGUAGE_PATH_MAP[i18n.language as SupportedLanguage]}/detect` : '/detect'}
