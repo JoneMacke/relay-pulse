@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useId, memo } from 'react';
 import { createPortal } from 'react-dom';
 import { List, type RowComponentProps } from 'react-window';
-import { ArrowUpDown, ArrowUp, ArrowDown, Zap, Shield, Filter, Info } from 'lucide-react';
+import { ArrowUpDown, ArrowUp, ArrowDown, Zap, Shield, Filter } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { LANGUAGE_PATH_MAP, type SupportedLanguage } from '../i18n';
@@ -10,6 +10,7 @@ import { HeatmapBlock } from './HeatmapBlock';
 import { LayeredHeatmapBlock } from './LayeredHeatmapBlock';
 import { ChannelTypeIcon, parseChannelType } from './ChannelTypeIcon';
 import { ExternalLink } from './ExternalLink';
+import { HeaderInfoPopover } from './HeaderInfoPopover';
 import { AnnotationCell } from './annotations';
 import { FavoriteButton } from './FavoriteButton';
 import { getTimeRanges } from '../constants';
@@ -994,16 +995,9 @@ function StatusTableComponent({
                     <span>{t('table.headers.priceRatioLine1')}</span>
                     <span className="text-[10px] opacity-50 font-normal">{t('table.headers.priceRatioLine2')}</span>
                   </div>
-                  <span
-                    className="relative group/price-tip ml-1 inline-flex items-center cursor-help"
-                    onClick={(e) => e.stopPropagation()}
-                    onKeyDown={(e) => e.stopPropagation()}
-                  >
-                    <Info size={12} className="text-secondary opacity-70" aria-hidden="true" />
-                    <span className="absolute left-1/2 top-full z-50 mt-1 w-48 -translate-x-1/2 rounded-lg border border-default bg-elevated px-2 py-1.5 text-[11px] font-normal normal-case tracking-normal leading-snug whitespace-normal text-primary hidden shadow-lg group-hover/price-tip:block">
-                      {t('table.headers.priceRatioTooltip')}
-                    </span>
-                  </span>
+                  <HeaderInfoPopover className="ml-1" align="center" widthClass="w-48">
+                    {t('table.headers.priceRatioTooltip')}
+                  </HeaderInfoPopover>
                   <SortIcon columnKey="priceRatio" />
                 </div>
               </th>
@@ -1071,27 +1065,20 @@ function StatusTableComponent({
             >
               <div className="flex items-center gap-1">
                 {t('table.headers.quality', '质量')}
-                <span
-                  className="relative group/quality-tip inline-flex items-center cursor-help"
-                  onClick={(e) => e.stopPropagation()}
-                  onKeyDown={(e) => e.stopPropagation()}
-                >
-                  <Info size={12} className="text-secondary opacity-70" aria-hidden="true" />
-                  <span className="absolute right-0 top-full z-50 mt-1 w-56 rounded-lg border border-default bg-elevated px-2 py-1.5 text-[11px] font-normal normal-case tracking-normal leading-snug whitespace-normal text-primary hidden shadow-lg group-hover/quality-tip:block">
-                    {t(
-                      'table.headers.qualityTooltip',
-                      '由 rpdiag.relaypulse.top 独立采样的质量分（0-100）。通道里每个模型一条 5 点 sparkline 叠绘：30d 均 / 7d 均 / 最近 3 次单 sample；80 / 100 两条参考线作 Y 轴刻度。',
-                    )}
-                    {/* 了解评分方法的上下文内链 → /detect（hover 可点；首页爬虫锚点由页脚承担） */}
-                    <Link
-                      to={LANGUAGE_PATH_MAP[i18n.language as SupportedLanguage] ? `/${LANGUAGE_PATH_MAP[i18n.language as SupportedLanguage]}/detect` : '/detect'}
-                      onClick={(e) => e.stopPropagation()}
-                      className="mt-1.5 block text-accent hover:underline font-medium"
-                    >
-                      {t('table.qualityHintLink')} →
-                    </Link>
-                  </span>
-                </span>
+                <HeaderInfoPopover align="right" widthClass="w-56">
+                  {t(
+                    'table.headers.qualityTooltip',
+                    '由 rpdiag.relaypulse.top 独立采样的质量分（0-100）。通道里每个模型一条 5 点 sparkline 叠绘：30d 均 / 7d 均 / 最近 3 次单 sample；80 / 100 两条参考线作 Y 轴刻度。',
+                  )}
+                  {/* 了解评分方法的上下文内链 → /detect（hover 可点；首页爬虫锚点由页脚承担） */}
+                  <Link
+                    to={LANGUAGE_PATH_MAP[i18n.language as SupportedLanguage] ? `/${LANGUAGE_PATH_MAP[i18n.language as SupportedLanguage]}/detect` : '/detect'}
+                    onClick={(e) => e.stopPropagation()}
+                    className="mt-1.5 block text-accent hover:underline font-medium"
+                  >
+                    {t('table.qualityHintLink')} →
+                  </Link>
+                </HeaderInfoPopover>
                 {rpdiagScoresLoaded && <SortIcon columnKey="qualityScore" />}
               </div>
             </th>
