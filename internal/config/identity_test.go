@@ -152,3 +152,29 @@ monitors:
 		t.Fatalf("expected malformed channel_id rejection, got %v", err)
 	}
 }
+
+// TestBackfillFileIDs 确认回填幂等：补缺失的 channel_id/model_id、绝不覆盖既有、二次为 no-op。
+func TestBackfillFileIDs(t *testing.T) {
+	f := &MonitorFile{
+		Metadata: MonitorFileMetadata{ChannelID: ""},
+		Monitors: []ServiceConfig{
+			{Provider: "a", Service: "cc", Channel: "x", Model: "Opus", ModelID: "md_keep"},
+			{Provider: "a", Service: "cc", Channel: "x", Model: "Sonnet"},
+		},
+	}
+	if !BackfillFileIDs(f) {
+		t.Fatal("expected changed=true (channel_id + one model_id missing)")
+	}
+	if !IsValidChannelID(f.Metadata.ChannelID) {
+		t.Error("channel_id not filled")
+	}
+	if f.Monitors[0].ModelID != "md_keep" {
+		t.Error("existing model_id overwritten")
+	}
+	if !IsValidModelID(f.Monitors[1].ModelID) {
+		t.Error("missing model_id not filled")
+	}
+	if BackfillFileIDs(f) {
+		t.Error("second pass should be no-op (idempotent)")
+	}
+}

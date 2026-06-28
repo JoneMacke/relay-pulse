@@ -67,3 +67,20 @@ func collectModelIDsInto(seen map[string]string, monitors []ServiceConfig) error
 func modelIDLocation(m ServiceConfig) string {
 	return fmt.Sprintf("%s/%s/%s/%s", m.Provider, m.Service, m.Channel, m.Model)
 }
+
+// BackfillFileIDs 给文件补齐缺失的 channel_id（文件级）与 model_id（每行），
+// 绝不覆盖既有 id（幂等）。返回是否发生改动——供回填 CLI 报告，也供 store.Create 复用同一生成逻辑。
+func BackfillFileIDs(f *MonitorFile) bool {
+	changed := false
+	if f.Metadata.ChannelID == "" {
+		f.Metadata.ChannelID = NewChannelID()
+		changed = true
+	}
+	for i := range f.Monitors {
+		if f.Monitors[i].ModelID == "" {
+			f.Monitors[i].ModelID = NewModelID()
+			changed = true
+		}
+	}
+	return changed
+}

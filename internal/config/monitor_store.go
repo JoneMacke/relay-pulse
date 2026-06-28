@@ -207,15 +207,8 @@ func (s *MonitorStore) Create(file *MonitorFile) error {
 	}
 	file.Metadata.UpdatedAt = now
 
-	// 生成缺失的稳定 id（幂等：已有则不动）。channel_id 文件级、model_id 每行。
-	if file.Metadata.ChannelID == "" {
-		file.Metadata.ChannelID = NewChannelID()
-	}
-	for i := range file.Monitors {
-		if file.Monitors[i].ModelID == "" {
-			file.Monitors[i].ModelID = NewModelID()
-		}
-	}
+	// 生成缺失的稳定 id（幂等：已有则不动）。与回填 CLI 共用同一生成逻辑。
+	BackfillFileIDs(file)
 
 	if err := AtomicWriteYAML(path, file); err != nil {
 		return err
