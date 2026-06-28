@@ -81,6 +81,7 @@ function QualityRanking() {
           [d.providerName, d.providerId],
           d.serviceType,
           d.channelName || d.channel,
+          d.channelId,
         );
         return {
           id: d.id,

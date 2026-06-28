@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { buildRpdiagKey, lookupRpdiagScore } from './useRpdiagScores';
+import { buildRpdiagKey, buildRpdiagCidKey, lookupRpdiagScore } from './useRpdiagScores';
 import type { RpdiagScore, RpdiagScoresResponse } from '../types/monitor';
 
 describe('buildRpdiagKey', () => {
@@ -15,6 +15,18 @@ describe('buildRpdiagKey', () => {
 
   it('trims and lower-cases each segment', () => {
     expect(buildRpdiagKey('  SaiAI ', ' CC ', '  O-Max ')).toBe('saiai|cc|o-max');
+  });
+});
+
+describe('buildRpdiagCidKey', () => {
+  it('namespaces a trimmed channel id, undefined when empty', () => {
+    // Opaque id: trimmed but NOT lower-cased (symmetric with the Go cidBucketKey).
+    expect(buildRpdiagCidKey('ch_a')).toBe('cid:ch_a');
+    expect(buildRpdiagCidKey('CH_A')).toBe('cid:CH_A'); // case preserved, not lowered
+    expect(buildRpdiagCidKey('  ch_a ')).toBe('cid:ch_a');
+    expect(buildRpdiagCidKey('')).toBeUndefined();
+    expect(buildRpdiagCidKey('   ')).toBeUndefined();
+    expect(buildRpdiagCidKey(undefined)).toBeUndefined();
   });
 });
 
@@ -35,6 +47,30 @@ describe('lookupRpdiagScore', () => {
     expect(lookupRpdiagScore(scores, 'right.codes', 'cx', 'cx')).toBeUndefined();
     expect(lookupRpdiagScore(scores, undefined, 'cx', 'o-cx')).toBeUndefined();
     expect(lookupRpdiagScore(undefined, 'right.codes', 'cx', 'o-cx')).toBeUndefined();
+  });
+
+  describe('stable channel_id priority (cid bucket)', () => {
+    const cidScores: RpdiagScoresResponse = {
+      'cid:ch_a': score(91),
+      // Same logical channel still exposed under a legacy triple (transition window).
+      'p|cc|o-max': score(1),
+    };
+
+    it('prefers the cid bucket when channelId is present', () => {
+      expect(lookupRpdiagScore(cidScores, ['P'], 'cc', 'O-Max', 'ch_a')?.max_score).toBe(91);
+    });
+
+    it('falls back to the triple when the cid bucket misses', () => {
+      expect(lookupRpdiagScore(cidScores, ['P'], 'cc', 'O-Max', 'ch_missing')?.max_score).toBe(1);
+    });
+
+    it('uses the triple when channelId is absent (back-compat)', () => {
+      expect(lookupRpdiagScore(cidScores, ['P'], 'cc', 'O-Max')?.max_score).toBe(1);
+    });
+
+    it('resolves a cid hit even without service/channel (cid key is self-sufficient)', () => {
+      expect(lookupRpdiagScore(cidScores, undefined, undefined, undefined, 'ch_a')?.max_score).toBe(91);
+    });
   });
 
   describe('provider candidate fallback (display name first, slug fallback)', () => {

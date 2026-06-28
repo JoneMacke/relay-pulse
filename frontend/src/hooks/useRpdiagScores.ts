@@ -69,7 +69,15 @@ export function buildRpdiagKey(
   return [canonical(provider), canonical(service), canonical(channel)].join('|');
 }
 
-/** 按 (provider, service, channel) 查表，缺失返回 undefined。
+/** 构造与后端 cidBucketKey 对称的稳定 channel_id join key。
+ *  channelId 是 relay-pulse 不可变的 `ch_<uuidv4>`，只 trim、不 lower（与后端
+ *  strings.TrimSpace 同口径）；空/纯空白返回 undefined（不拿 "cid:" 撞表）。 */
+export function buildRpdiagCidKey(channelId: string | undefined): string | undefined {
+  const trimmed = channelId?.trim();
+  return trimmed ? `cid:${trimmed}` : undefined;
+}
+
+/** 查质量分：稳定 channel_id 优先、(provider, service, channel) 三元组兜底。
  *
  *  provider 接受单个字符串或候选数组，按顺序尝试、命中即返回。调用方传
  *  `[providerName, providerId]`（providerId = 归一化 slug）——**展示名优先、slug 兜底**：
@@ -82,8 +90,18 @@ export function lookupRpdiagScore(
   provider: string | undefined | ReadonlyArray<string | undefined>,
   service: string | undefined,
   channel: string | undefined,
+  channelId?: string,
 ): RpdiagScore | undefined {
-  if (!scores || !service || !channel) return undefined;
+  if (!scores) return undefined;
+  // 稳定 id 优先：与后端 "cid:"+id 桶键对称，自洽不依赖展示名，吸收 channel_name 漂移。
+  // cid key 自足，不需要 service/channel，故在三元组守卫之前查。
+  const cidKey = buildRpdiagCidKey(channelId);
+  if (cidKey) {
+    const cidHit = scores[cidKey];
+    if (cidHit) return cidHit;
+  }
+  // 兜底：rpdiag 尚未给该通道打 cid（过渡期）或 monitor 无 channel_id → 退三元组展示名。
+  if (!service || !channel) return undefined;
   const candidates = Array.isArray(provider) ? provider : [provider];
   for (const candidate of candidates) {
     if (!canonical(candidate)) continue; // 跳过 undefined / 空 / 纯空白候选

@@ -338,7 +338,7 @@ export function useMonitorData({
       ? filtered.map((item) => ({
           ...item,
           qualityScore:
-            lookupRpdiagScore(rpdiagScores, [item.providerName, item.providerId], item.serviceType, item.channelName || item.channel)
+            lookupRpdiagScore(rpdiagScores, [item.providerName, item.providerId], item.serviceType, item.channelName || item.channel, item.channelId)
               ?.max_score ?? null,
         }))
       : filtered;
