@@ -140,6 +140,11 @@ describe('monitorDataProcessor', () => {
   });
 
   describe('convertLegacyDataToProcessedData', () => {
+    it('carries channel_id into channelId (cross-product join anchor)', () => {
+      const result = convertLegacyDataToProcessedData(legacyItem({ channel_id: 'ch_legacy' }), 5000);
+      expect(result.channelId).toBe('ch_legacy');
+    });
+
     it('正确映射基础字段并规范化 provider 名称', () => {
       const result = convertLegacyDataToProcessedData(
         legacyItem({
@@ -230,6 +235,11 @@ describe('monitorDataProcessor', () => {
   });
 
   describe('convertGroupToProcessedData', () => {
+    it('carries channel_id into channelId (cross-product join anchor)', () => {
+      const result = convertGroupToProcessedData(group({ channel_id: 'ch_group' }), 5000);
+      expect(result.channelId).toBe('ch_group');
+    });
+
     it('多层 group 按最差状态合成时间线', () => {
       const parentLayer = layer({
         model: 'parent',

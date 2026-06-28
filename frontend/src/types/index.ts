@@ -177,6 +177,7 @@ export interface ProcessedMonitorData {
   listedDays?: number | null;          // 收录天数
   channel?: string;                    // 业务通道标识
   channelName?: string;                // Channel 显示名称
+  channelId?: string;                  // 通道稳定 id（跨产品 join 锚，Plan A 经 /api/status 暴露；旧后端/inline 缺失）
   board: BoardValue;                   // 板块：hot/secondary/cold
   coldReason?: string;                 // 冷板原因（仅 cold 有值）
   probeUrl?: string;                   // 探测端点 URL（脱敏后）
@@ -319,6 +320,7 @@ export interface MonitorGroup {
   price_max?: number;
   listed_days?: number;
   channel: string;
+  channel_id?: string;            // 通道稳定 id（跨产品 join 锚，多模型组级；旧后端缺失）
   channel_name?: string;
   board: BoardValue;
   cold_reason?: string;
