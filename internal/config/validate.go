@@ -47,6 +47,12 @@ func (c *AppConfig) validate() error {
 		return err
 	}
 
+	// model_id 是 YAML 字面字段，不来自 template、不参与继承，故可在模板解析前 fail-fast
+	// 校验格式与全局唯一（四元组唯一性因依赖 template 的 model 仍在 resolveTemplates 后校验）。
+	if err := c.validateModelIDs(); err != nil {
+		return err
+	}
+
 	// 2. 自动移板配置校验
 	if err := c.validateBoardAutoMove(); err != nil {
 		return err
@@ -493,6 +499,24 @@ func (c *AppConfig) validateMonitorFields() error {
 				return fmt.Errorf("monitor[%d]: %w", i, err)
 			}
 		}
+	}
+	return nil
+}
+
+// validateModelIDs 校验监测行稳定 id：非空 model_id 须格式合法（md_<uuidv4>）且全局唯一。
+// 空 model_id 合法——回填前的既有行 / 待 Create 生成，不在此报错（由回填 CLI 与创建路径补齐）。
+func (c *AppConfig) validateModelIDs() error {
+	for i, m := range c.Monitors {
+		if m.ModelID == "" {
+			continue
+		}
+		if !IsValidModelID(m.ModelID) {
+			return fmt.Errorf("monitor[%d] %s: model_id 格式非法 %q（应为 md_<uuidv4>）", i, modelIDLocation(m), m.ModelID)
+		}
+	}
+	// 全局唯一：复用 identity.go 的去重核，撞重 error 已含重复 id。
+	if err := collectModelIDsInto(make(map[string]string), c.Monitors); err != nil {
+		return err
 	}
 	return nil
 }

@@ -73,3 +73,37 @@ func TestCollectModelIDsDetectsDuplicate(t *testing.T) {
 		t.Errorf("error should name the dup id: %v", err)
 	}
 }
+
+// TestValidateRejectsDuplicateModelID 确认 validate() 拒绝跨监测行重复的 model_id。
+// fixtures 带 base_url+method 以越过更早的字段校验，触达 id 校验。
+func TestValidateRejectsDuplicateModelID(t *testing.T) {
+	cfg := &AppConfig{Monitors: []ServiceConfig{
+		{Provider: "a", Service: "cc", Channel: "x", Model: "Opus", ModelID: "md_dup", BaseURL: "https://a.example", Method: "POST"},
+		{Provider: "b", Service: "cc", Channel: "y", Model: "Sonnet", ModelID: "md_dup", BaseURL: "https://b.example", Method: "POST"},
+	}}
+	if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "md_dup") {
+		t.Fatalf("expected dup model_id rejection naming the id, got %v", err)
+	}
+}
+
+// TestValidateRejectsMalformedModelID 确认 validate() 拒绝格式非法的 model_id。
+func TestValidateRejectsMalformedModelID(t *testing.T) {
+	cfg := &AppConfig{Monitors: []ServiceConfig{
+		{Provider: "a", Service: "cc", Channel: "x", Model: "Opus", ModelID: "garbage", BaseURL: "https://a.example", Method: "POST"},
+	}}
+	if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "model_id") {
+		t.Fatalf("expected malformed model_id rejection, got %v", err)
+	}
+}
+
+// TestValidateAcceptsValidAndEmptyModelIDs 确认合法 model_id 通过，且空 model_id
+// （回填前的现有行）不被误拒——空值合法是向后兼容的关键。
+func TestValidateAcceptsValidAndEmptyModelIDs(t *testing.T) {
+	cfg := &AppConfig{Monitors: []ServiceConfig{
+		{Provider: "a", Service: "cc", Channel: "x", Model: "Opus", ModelID: NewModelID(), BaseURL: "https://a.example", Method: "POST"},
+		{Provider: "b", Service: "cc", Channel: "y", Model: "Sonnet", BaseURL: "https://b.example", Method: "POST"},
+	}}
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("valid+empty model_ids should pass, got %v", err)
+	}
+}
