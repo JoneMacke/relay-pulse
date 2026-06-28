@@ -730,8 +730,9 @@ func TestBuildScoresAllRetiredChannelHasNilScore(t *testing.T) {
 
 func TestBuildScoresDedupesRepeatedModelInAverage(t *testing.T) {
 	// Guard against a duplicated upstream (channel, model) row inflating the
-	// divisor: two fresh rows for the same model on the same channel count once.
-	// The first seen row (80) sets the contribution; the average is 80, not 70.
+	// divisor: two rows for the same model on the same channel count once. The
+	// dedup keeps the LARGEST rankLatest (deterministic, not export-order): the
+	// lower row (60) is first, the higher (80) second, and the average is 80.
 	c := newTestClient()
 	mk := func(v float64) *float64 { return &v }
 
@@ -740,19 +741,40 @@ func TestBuildScoresDedupesRepeatedModelInAverage(t *testing.T) {
 			ChannelName: "O-Max", RelaypulseChannelKey: "max",
 			ProviderName: "SaiAI", ServiceCLICommand: "claude",
 			Model: "claude-haiku-4-5", ModelKey: "claude-haiku-4-5",
-			ScoreTrend: ScoreTrend{Latest: mk(80), LatestAt: freshAt()},
+			ScoreTrend: ScoreTrend{Latest: mk(60), LatestAt: freshAt()},
 		},
 		{
 			ChannelName: "O-Max", RelaypulseChannelKey: "max",
 			ProviderName: "SaiAI", ServiceCLICommand: "claude",
 			Model: "claude-haiku-4-5", ModelKey: "claude-haiku-4-5",
-			ScoreTrend: ScoreTrend{Latest: mk(60), LatestAt: freshAt()},
+			ScoreTrend: ScoreTrend{Latest: mk(80), LatestAt: freshAt()},
 		},
 	}
 
 	entry := c.buildScores(rows)["saiai|cc|o-max"]
 	if entry.MaxScore == nil || *entry.MaxScore != 80 {
-		t.Fatalf("MaxScore = %v, want 80 (duplicate model counted once, first seen)", entry.MaxScore)
+		t.Fatalf("MaxScore = %v, want 80 (duplicate model counted once, max kept)", entry.MaxScore)
+	}
+}
+
+// When cid consolidation merges a renamed channel's halves, the same effective
+// model can appear twice in one cid bucket — one stale (rankLatest 0), one fresh.
+// The max-dedup must keep the fresh score regardless of export row order, so the
+// channel does not regress to 0 (the bug the legacy per-name buckets never hit).
+func TestBuildScoresCIDMergeKeepsFreshOverStaleModel(t *testing.T) {
+	rows := []rankingRow{
+		// Stale half (old name) first — under first-seen this would win at 0.
+		cidRow("P", "claude", "Old-Name", "Opus", "ch_a", 95, staleAt()),
+		// Fresh half (new name) second — its real rankLatest is 70.
+		cidRow("P", "claude", "New-Name", "Opus", "ch_a", 70, freshAt()),
+	}
+	scores := newTestClient().buildScoresAt(rows, testNow)
+	entry, ok := scores["cid:ch_a"]
+	if !ok {
+		t.Fatalf("missing cid:ch_a bucket, got %v", keysOf(scores))
+	}
+	if entry.MaxScore == nil || *entry.MaxScore != 70 {
+		t.Fatalf("MaxScore = %v, want 70 (fresh kept over stale 0)", entry.MaxScore)
 	}
 }
 
@@ -1099,4 +1121,136 @@ func keysOf(m map[string]Score) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// cidRow builds a minimal fresh, scorable rpdiag row for buildScoresAt unit
+// tests. latest_at is left to the caller (freshAt()/staleAt()).
+func cidRow(provider, service, channel, model, cid string, latest float64, at *string) rankingRow {
+	v := latest
+	return rankingRow{
+		ChannelName:         channel,
+		ProviderName:        provider,
+		ServiceCLICommand:   service,
+		Model:               model,
+		ModelKey:            model,
+		ScoreTrend:          ScoreTrend{Latest: &v, LatestAt: at},
+		RelaypulseChannelID: cid,
+	}
+}
+
+func TestRankingRowDecodesRelaypulseChannelID(t *testing.T) {
+	const body = `{"schema_version":"ranking-export.v5.9","items":[` +
+		`{"channel_name":"O-Max","provider_name":"P","service_cli_command":"claude",` +
+		`"model":"Opus","model_key":"opus","score_trend":{"latest":90.0},` +
+		`"relaypulse_channel_id":"ch_11111111-1111-4111-8111-111111111111"}]}`
+	var p exportPayload
+	if err := json.Unmarshal([]byte(body), &p); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := p.Items[0].RelaypulseChannelID; got != "ch_11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("RelaypulseChannelID = %q", got)
+	}
+}
+
+// A row carrying a cid buckets under "cid:"+id, NOT the legacy triple.
+func TestBuildScoresBucketsByChannelID(t *testing.T) {
+	at := freshAt()
+	rows := []rankingRow{cidRow("P", "claude", "O-Max", "Opus", "ch_a", 90, at)}
+	scores := newTestClient().buildScoresAt(rows, testNow)
+	if _, ok := scores["cid:ch_a"]; !ok {
+		t.Fatalf("missing cid bucket, got %v", keysOf(scores))
+	}
+	if _, ok := scores["p|cc|o-max"]; ok {
+		t.Fatalf("legacy key must be absent when cid present, got %v", keysOf(scores))
+	}
+}
+
+// No cid → legacy triple key (back-compat with every pre-v5.9 row).
+func TestBuildScoresWithoutCIDKeepsLegacyKey(t *testing.T) {
+	at := freshAt()
+	rows := []rankingRow{cidRow("P", "claude", "O-Max", "Opus", "", 90, at)}
+	scores := newTestClient().buildScoresAt(rows, testNow)
+	if _, ok := scores["p|cc|o-max"]; !ok {
+		t.Fatalf("missing legacy key, got %v", keysOf(scores))
+	}
+}
+
+// Mixed within one channel: one model tagged cid=X, a lagging (e.g. recently
+// retired) model still cid="" → BOTH consolidate into cid:X (no split bucket).
+func TestBuildScoresConsolidatesNullCIDStraggler(t *testing.T) {
+	at := freshAt()
+	rows := []rankingRow{
+		cidRow("P", "claude", "O-Max", "Opus", "ch_a", 90, at),
+		cidRow("P", "claude", "O-Max", "Sonnet", "", 80, at),
+	}
+	scores := newTestClient().buildScoresAt(rows, testNow)
+	entry, ok := scores["cid:ch_a"]
+	if !ok {
+		t.Fatalf("missing cid bucket, got %v", keysOf(scores))
+	}
+	if len(entry.Models) != 2 {
+		t.Fatalf("cid bucket models = %d, want 2 (straggler consolidated)", len(entry.Models))
+	}
+	if _, ok := scores["p|cc|o-max"]; ok {
+		t.Fatalf("legacy key must not survive consolidation, got %v", keysOf(scores))
+	}
+}
+
+// >1 distinct cid in one legacy triple → ambiguous → fail-closed to legacy key,
+// no cid bucket (else consumer's cid lookup sees a partial bucket, never falls back).
+func TestBuildScoresAmbiguousMultiCIDFallsBackToLegacy(t *testing.T) {
+	at := freshAt()
+	rows := []rankingRow{
+		cidRow("P", "claude", "O-Max", "Opus", "ch_a", 90, at),
+		cidRow("P", "claude", "O-Max", "Sonnet", "ch_b", 80, at),
+	}
+	scores := newTestClient().buildScoresAt(rows, testNow)
+	if _, ok := scores["p|cc|o-max"]; !ok {
+		t.Fatalf("missing legacy fallback key, got %v", keysOf(scores))
+	}
+	if _, ok := scores["cid:ch_a"]; ok {
+		t.Fatalf("cid:ch_a must not exist under ambiguity, got %v", keysOf(scores))
+	}
+	if _, ok := scores["cid:ch_b"]; ok {
+		t.Fatalf("cid:ch_b must not exist under ambiguity, got %v", keysOf(scores))
+	}
+}
+
+// Same cid under two services (a per-channel id reused across cc/cx = upstream
+// data bug) → guard: both triples fall back to legacy, no cross-service merge.
+func TestBuildScoresCrossServiceCIDReuseFallsBackToLegacy(t *testing.T) {
+	at := freshAt()
+	rows := []rankingRow{
+		cidRow("P", "claude", "O-Max", "Opus", "ch_a", 90, at),
+		cidRow("P", "codex", "O-Pro", "GPT", "ch_a", 70, at),
+	}
+	scores := newTestClient().buildScoresAt(rows, testNow)
+	if _, ok := scores["cid:ch_a"]; ok {
+		t.Fatalf("cross-service cid must not bucket, got %v", keysOf(scores))
+	}
+	if _, ok := scores["p|cc|o-max"]; !ok {
+		t.Fatalf("missing cc legacy fallback, got %v", keysOf(scores))
+	}
+	if _, ok := scores["p|cx|o-pro"]; !ok {
+		t.Fatalf("missing cx legacy fallback, got %v", keysOf(scores))
+	}
+}
+
+// Display-name drift: same cid exported under an old name and a new name (each
+// half captured at a different time) → both rejoin under one cid:X bucket. This
+// is the whole point of cid (survives channel_name drift).
+func TestBuildScoresMergesDriftedNamesUnderOneCID(t *testing.T) {
+	at := freshAt()
+	rows := []rankingRow{
+		cidRow("P", "claude", "Old-Name", "Opus", "ch_a", 90, at),
+		cidRow("P", "claude", "New-Name", "Sonnet", "ch_a", 80, at),
+	}
+	scores := newTestClient().buildScoresAt(rows, testNow)
+	entry, ok := scores["cid:ch_a"]
+	if !ok {
+		t.Fatalf("drifted names must merge under cid:ch_a, got %v", keysOf(scores))
+	}
+	if len(entry.Models) != 2 {
+		t.Fatalf("merged bucket models = %d, want 2", len(entry.Models))
+	}
 }

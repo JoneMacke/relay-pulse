@@ -34,6 +34,8 @@ import (
 	"sync"
 	"time"
 
+	"monitor/internal/logger"
+
 	"golang.org/x/sync/singleflight"
 )
 
@@ -315,16 +317,23 @@ type exportPayload struct {
 }
 
 type rankingRow struct {
-	ChannelName          string     `json:"channel_name"`
-	RelaypulseChannelKey string     `json:"relaypulse_channel_key"`
-	ProviderName         string     `json:"provider_name"`
-	ServiceCLICommand    string     `json:"service_cli_command"`
-	SubmissionSource     string     `json:"submission_source"`
-	Model                string     `json:"model"`
-	ModelKey             string     `json:"model_key"`
-	DetailURL            string     `json:"detail_url"`
-	FinalQualityScore    *float64   `json:"final_quality_score"`
-	ScoreTrend           ScoreTrend `json:"score_trend"`
+	ChannelName          string `json:"channel_name"`
+	RelaypulseChannelKey string `json:"relaypulse_channel_key"`
+	// RelaypulseChannelID is rpdiag export v5.9's immutable cross-product join
+	// anchor (`ch_<uuidv4>`): rpdiag's sampler captured it from relay-pulse's own
+	// /api/status channel_id, so it round-trips relay-pulse → rpdiag → here. ""/
+	// absent on pre-v5.9 wire or rows rpdiag has not yet tagged. NOT the same as
+	// RelaypulseChannelKey (a decoded display form) — this is the opaque stable id
+	// that drives cid-priority bucketing (see resolveBucketKeys / buildScoresAt).
+	RelaypulseChannelID string     `json:"relaypulse_channel_id"`
+	ProviderName        string     `json:"provider_name"`
+	ServiceCLICommand   string     `json:"service_cli_command"`
+	SubmissionSource    string     `json:"submission_source"`
+	Model               string     `json:"model"`
+	ModelKey            string     `json:"model_key"`
+	DetailURL           string     `json:"detail_url"`
+	FinalQualityScore   *float64   `json:"final_quality_score"`
+	ScoreTrend          ScoreTrend `json:"score_trend"`
 	// HardFailActive is rpdiag's current-availability gate: the newest ≥3
 	// consecutive terminal attempts were hard-fails (FAILED with no
 	// fingerprint score) and the latest fail is within rpdiag's 7-day stale
@@ -530,7 +539,8 @@ func (c *Client) buildScores(rows []rankingRow) map[string]Score {
 // the aggregation pass from drifting apart on the hard-fail/stale rules.
 type scoreRowView struct {
 	row           rankingRow
-	key           string
+	key           string // legacy triple at first; rewritten to the bucket key (cid: or legacy) in buildScoresAt
+	cid           string // raw relaypulse_channel_id ("" if none); opaque, trimmed, never lower-cased
 	service       string
 	modelKey      string
 	displayLatest *float64
@@ -597,6 +607,7 @@ func buildScoreRowView(row rankingRow, now time.Time) (scoreRowView, bool) {
 	return scoreRowView{
 		row:           row,
 		key:           ScoreKey(provider, service, channel),
+		cid:           strings.TrimSpace(row.RelaypulseChannelID),
 		service:       service,
 		modelKey:      modelKey,
 		displayLatest: displayLatest,
@@ -604,6 +615,84 @@ func buildScoreRowView(row rankingRow, now time.Time) (scoreRowView, bool) {
 		trend:         trend,
 		fresh:         fresh,
 	}, true
+}
+
+// cidBucketKey is the score-index key for a channel identified by its immutable
+// relay-pulse channel_id. The "cid:" prefix namespaces it apart from legacy
+// ScoreKey triples ("provider|service|channel"), so both key forms coexist in
+// one map without collision. cid is opaque — passed through trimmed, never
+// lower-cased.
+func cidBucketKey(cid string) string {
+	return "cid:" + cid
+}
+
+// resolveBucketKeys decides, per legacy ScoreKey triple, whether that channel's
+// rows bucket under a stable cid key ("cid:"+id) or stay on the legacy triple.
+// It returns a legacy-key → bucket-key map. Rules (fail-closed; never silently
+// pick an id):
+//   - 0 distinct cids in the triple  → legacy key (no stable id yet; back-compat).
+//   - exactly 1 cid X                → "cid:"+X for ALL the triple's rows, incl.
+//     cid-less stragglers (e.g. a recently-retired model not yet re-tagged),
+//     UNLESS X is observed under more than one service (a cid is per-channel
+//     hence single-service; cross-service reuse = a duplicated channel_id
+//     upstream) → then legacy key + error log.
+//   - >1 distinct cids in one triple → legacy key + error log (ambiguous; a cid
+//     bucket would be partial and the consumer would never fall back to legacy).
+//
+// Several legacy triples may resolve to the SAME "cid:"+X — the intended merge of
+// a channel whose display name drifted (old + new name halves rejoin under the
+// stable id). Per rpdiag's (cid,model)/(name,svc,prov,model) uniqueness each
+// modelKey still appears at most once per cid bucket, so the downstream
+// seen[modelKey] dedup and average stay correct regardless of row order.
+func resolveBucketKeys(views []scoreRowView) map[string]string {
+	cidsByLegacyKey := make(map[string]map[string]struct{}, len(views))
+	servicesByCID := make(map[string]map[string]struct{})
+	for _, view := range views {
+		if _, ok := cidsByLegacyKey[view.key]; !ok {
+			cidsByLegacyKey[view.key] = make(map[string]struct{})
+		}
+		if view.cid == "" {
+			continue
+		}
+		cidsByLegacyKey[view.key][view.cid] = struct{}{}
+		if servicesByCID[view.cid] == nil {
+			servicesByCID[view.cid] = make(map[string]struct{})
+		}
+		servicesByCID[view.cid][view.service] = struct{}{}
+	}
+
+	bucketKeys := make(map[string]string, len(cidsByLegacyKey))
+	for legacyKey, cids := range cidsByLegacyKey {
+		switch len(cids) {
+		case 0:
+			bucketKeys[legacyKey] = legacyKey
+		case 1:
+			cid := soleKey(cids)
+			if len(servicesByCID[cid]) > 1 {
+				logger.Error("rpdiag",
+					"relaypulse_channel_id reused across services; falling back to legacy join key",
+					"legacy_key", legacyKey, "relaypulse_channel_id", cid,
+					"service_count", len(servicesByCID[cid]))
+				bucketKeys[legacyKey] = legacyKey
+				continue
+			}
+			bucketKeys[legacyKey] = cidBucketKey(cid)
+		default:
+			logger.Error("rpdiag",
+				"multiple relaypulse_channel_id in one channel bucket; falling back to legacy join key",
+				"legacy_key", legacyKey, "distinct_cid_count", len(cids))
+			bucketKeys[legacyKey] = legacyKey
+		}
+	}
+	return bucketKeys
+}
+
+// soleKey returns the single key of a one-element set (caller guarantees len==1).
+func soleKey(m map[string]struct{}) string {
+	for k := range m {
+		return k
+	}
+	return ""
 }
 
 func (c *Client) buildScoresAt(rows []rankingRow, now time.Time) map[string]Score {
@@ -628,12 +717,25 @@ func (c *Client) buildScoresAt(rows []rankingRow, now time.Time) map[string]Scor
 		}
 	}
 
-	// rankAgg accumulates the active-model average for one channel. seen guards
-	// against a duplicated upstream (channel, model) row inflating the divisor.
+	// Consolidate to stable-id buckets where available: rewrite each view's key
+	// from its legacy triple to the resolved bucket key (a "cid:"+id or the same
+	// legacy triple). activeModels was already learned by (service, modelKey) and
+	// is unaffected; every downstream pass keys off view.key, so the output map,
+	// aggregation, and ChannelURL all follow the cid bucketing transparently.
+	bucketKeys := resolveBucketKeys(views)
+	for i := range views {
+		views[i].key = bucketKeys[views[i].key]
+	}
+
+	// rankAgg accumulates the active-model average for one channel. byModel keeps
+	// the largest rankLatest per active model: a (channel, model) is normally
+	// unique, but cid consolidation can merge a renamed channel's halves and a
+	// masquerading channel can report one effective model via two configs — taking
+	// the max both stops a duplicate from inflating the divisor AND stops export
+	// row order from picking a stale 0 over a fresh score. The distinct-model
+	// average (sum of maxes / distinct count) is otherwise unchanged.
 	type rankAgg struct {
-		sum   float64
-		count int
-		seen  map[string]bool
+		byModel map[string]float64
 	}
 
 	out := make(map[string]Score, len(views))
@@ -673,25 +775,33 @@ func (c *Client) buildScoresAt(rows []rankingRow, now time.Time) map[string]Scor
 		}
 		agg := aggs[view.key]
 		if agg == nil {
-			agg = &rankAgg{seen: make(map[string]bool)}
+			agg = &rankAgg{byModel: make(map[string]float64)}
 			aggs[view.key] = agg
 		}
-		if agg.seen[view.modelKey] {
-			continue
+		if prev, ok := agg.byModel[view.modelKey]; !ok || *view.rankLatest > prev {
+			agg.byModel[view.modelKey] = *view.rankLatest
 		}
-		agg.seen[view.modelKey] = true
-		agg.sum += *view.rankLatest
-		agg.count++
 	}
 
 	// Channels with no active-model rows are absent from aggs and keep the nil
 	// MaxScore zero value, sinking below every scored channel in the sort.
 	for key, agg := range aggs {
-		if agg.count == 0 {
+		if len(agg.byModel) == 0 {
 			continue
 		}
+		// Sum in sorted modelKey order so the average is deterministic across runs
+		// (Go map iteration is randomized and float addition is not associative).
+		modelKeys := make([]string, 0, len(agg.byModel))
+		for mk := range agg.byModel {
+			modelKeys = append(modelKeys, mk)
+		}
+		sort.Strings(modelKeys)
+		var sum float64
+		for _, mk := range modelKeys {
+			sum += agg.byModel[mk]
+		}
 		entry := out[key]
-		avg := agg.sum / float64(agg.count)
+		avg := sum / float64(len(agg.byModel))
 		entry.MaxScore = &avg
 		out[key] = entry
 	}
