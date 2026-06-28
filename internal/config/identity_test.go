@@ -107,3 +107,48 @@ func TestValidateAcceptsValidAndEmptyModelIDs(t *testing.T) {
 		t.Fatalf("valid+empty model_ids should pass, got %v", err)
 	}
 }
+
+// TestLoadMonitorsDirInjectsChannelID 确认文件级 channel_id 在 load 时下沉到每个监测行
+// 的运行时 ChannelID 字段（供 query.go 填进 /api/status）。
+func TestLoadMonitorsDirInjectsChannelID(t *testing.T) {
+	configDir, _ := setupTestMonitorsDir(t)
+	writeTestMonitorFile(t, configDir, "acme--cc--vip", `metadata:
+  revision: 1
+  channel_id: ch_11111111-1111-4111-8111-111111111111
+monitors:
+  - provider: acme
+    service: cc
+    channel: vip
+    template: cc-haiku-tiny
+    base_url: https://x.com
+`)
+	monitors, _, err := loadMonitorsDir(configDir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(monitors) != 1 {
+		t.Fatalf("expected 1 monitor, got %d", len(monitors))
+	}
+	if monitors[0].ChannelID != "ch_11111111-1111-4111-8111-111111111111" {
+		t.Errorf("channel_id not injected into ServiceConfig: %q", monitors[0].ChannelID)
+	}
+}
+
+// TestLoadMonitorsDirRejectsMalformedChannelID 确认手工 YAML 填了非法 channel_id 时
+// 加载失败（fail-closed，不静默）。
+func TestLoadMonitorsDirRejectsMalformedChannelID(t *testing.T) {
+	configDir, _ := setupTestMonitorsDir(t)
+	writeTestMonitorFile(t, configDir, "acme--cc--vip", `metadata:
+  revision: 1
+  channel_id: not-a-valid-id
+monitors:
+  - provider: acme
+    service: cc
+    channel: vip
+    template: cc-haiku-tiny
+    base_url: https://x.com
+`)
+	if _, _, err := loadMonitorsDir(configDir); err == nil || !strings.Contains(err.Error(), "channel_id") {
+		t.Fatalf("expected malformed channel_id rejection, got %v", err)
+	}
+}

@@ -384,6 +384,7 @@ func (h *Handler) buildMonitorResult(task config.ServiceConfig, latest *storage.
 		PriceMax:      task.PriceMax,
 		ListedDays:    listedDays,
 		Channel:       task.Channel,
+		ChannelID:     task.ChannelID,
 		ChannelName:   task.ChannelName,
 		Model:         task.Model,
 		RequestModel:  resolvedRequestModel(task),

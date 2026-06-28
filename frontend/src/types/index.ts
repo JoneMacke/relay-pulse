@@ -108,6 +108,7 @@ export interface MonitorResult {
   price_max?: number;                  // 参考倍率
   listed_days?: number;                // 收录天数
   channel: string;                     // 业务通道标识
+  channel_id?: string;                 // 通道稳定 id（跨产品 join 锚，可选/旧后端缺失）
   channel_name?: string;               // Channel 显示名称（可选）
   model?: string;                      // 模型展示名（可选）
   request_model?: string;              // 实际请求模型 ID（可选）

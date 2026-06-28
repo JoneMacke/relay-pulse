@@ -378,6 +378,7 @@ type MonitorResult struct {
 	PriceMax      *float64            `json:"price_max,omitempty"`     // 参考倍率
 	ListedDays    *int                `json:"listed_days,omitempty"`   // 收录天数（从 listed_since 计算）
 	Channel       string              `json:"channel"`                 // 业务通道标识
+	ChannelID     string              `json:"channel_id,omitempty"`    // 通道稳定 id（跨产品 join 锚，供 rpdiag sampler 发现）
 	ChannelName   string              `json:"channel_name,omitempty"`  // Channel 显示名称
 	Model         string              `json:"model,omitempty"`         // 模型展示名
 	RequestModel  string              `json:"request_model,omitempty"` // 实际请求模型 ID

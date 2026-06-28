@@ -23,6 +23,7 @@ type ServiceConfig struct {
 	Channel      string       `yaml:"channel" json:"channel"`                       // 业务通道标识（如 "vip-channel"），用于分类和过滤
 	Model        string       `yaml:"model" json:"model,omitempty"`                 // 模型系列名（展示/DB 键；可由 template 提供，config 可覆盖）
 	ModelID      string       `yaml:"model_id,omitempty" json:"model_id,omitempty"` // 监测行稳定唯一 id（md_<uuidv4>），系统生成、不可变；与 Model 一样不参与父子继承。Phase 1 起作内部存储键
+	ChannelID    string       `yaml:"-" json:"-"`                                   // 运行时注入：所属文件 channel_id 下沉到行（loadMonitorsDir），不持久化，经 MonitorResult.channel_id 暴露
 	RequestModel string       `yaml:"request_model,omitempty" json:"-"`             // 实际请求模型 ID（注入 {{MODEL}}/{{REQUEST_MODEL}}，为空时回退 Model）
 	Parent       string       `yaml:"parent" json:"parent,omitempty"`               // 父通道引用，格式 provider/service/channel
 	ChannelName  string       `yaml:"channel_name" json:"channel_name,omitempty"`   // Channel 显示名称（可选，未配置时回退到 channel）

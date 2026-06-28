@@ -106,6 +106,17 @@ func loadMonitorsDir(configDir string) ([]ServiceConfig, []MonitorFile, error) {
 			continue
 		}
 
+		// channel_id 若非空须格式合法（手工 YAML 误填则加载失败，fail-closed）
+		if cid := file.Metadata.ChannelID; cid != "" && !IsValidChannelID(cid) {
+			errs = append(errs, fmt.Errorf("%s: channel_id 格式非法 %q（应为 ch_<uuidv4>）", name, cid))
+			continue
+		}
+
+		// 文件级 channel_id 下沉到每个监测行（运行时字段），供 /api/status 经 MonitorResult 暴露
+		for i := range file.Monitors {
+			file.Monitors[i].ChannelID = file.Metadata.ChannelID
+		}
+
 		file.Path = fullPath
 		file.Key = key
 		seenKeys[key] = name
