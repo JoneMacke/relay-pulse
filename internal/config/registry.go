@@ -21,6 +21,10 @@ type MonitorFileMetadata struct {
 	Revision  int64  `yaml:"revision" json:"revision"`
 	CreatedAt string `yaml:"created_at,omitempty" json:"created_at,omitempty"`
 	UpdatedAt string `yaml:"updated_at,omitempty" json:"updated_at,omitempty"`
+
+	// ChannelID 通道稳定唯一 id（ch_<uuidv4>），系统生成、不可变、跨产品 join 锚。
+	// 空表示历史文件待回填（cmd/backfillids 或 admin 创建时补）。
+	ChannelID string `yaml:"channel_id,omitempty" json:"channel_id,omitempty"`
 }
 
 // MonitorFile 是 monitors.d/ 中单个文件的结构。
