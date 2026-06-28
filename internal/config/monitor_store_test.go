@@ -870,3 +870,100 @@ func TestCRUD_FullLifecycle(t *testing.T) {
 		t.Error("expected nil after Delete")
 	}
 }
+
+// --- 稳定 id：生成 / 暴露 / 不可变 ---
+
+// TestCreateGeneratesIDs 确认 Create 给缺失的 channel_id/model_id 生成合法值并落盘。
+func TestCreateGeneratesIDs(t *testing.T) {
+	configDir, _ := setupTestMonitorsDir(t)
+	store := NewMonitorStore(filepath.Join(configDir, MonitorsDirName))
+
+	file := &MonitorFile{
+		Metadata: MonitorFileMetadata{Source: "admin"},
+		Monitors: []ServiceConfig{
+			{Provider: "acme", Service: "cc", Channel: "vip", Model: "Opus", Template: "cc-haiku-tiny", BaseURL: "https://x.com"},
+		},
+	}
+	if err := store.Create(file); err != nil {
+		t.Fatal(err)
+	}
+	if !IsValidChannelID(file.Metadata.ChannelID) {
+		t.Errorf("channel_id not generated: %q", file.Metadata.ChannelID)
+	}
+	if !IsValidModelID(file.Monitors[0].ModelID) {
+		t.Errorf("model_id not generated: %q", file.Monitors[0].ModelID)
+	}
+	// 落盘后重新读应保留同一 id
+	got, err := store.Get(file.Key)
+	if err != nil || got == nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Metadata.ChannelID != file.Metadata.ChannelID {
+		t.Errorf("channel_id not persisted: got %q want %q", got.Metadata.ChannelID, file.Metadata.ChannelID)
+	}
+	if got.Monitors[0].ModelID != file.Monitors[0].ModelID {
+		t.Errorf("model_id not persisted: got %q want %q", got.Monitors[0].ModelID, file.Monitors[0].ModelID)
+	}
+}
+
+// TestListExposesChannelID 确认 List 摘要带出 channel_id（供 rpdiag sampler 发现）。
+func TestListExposesChannelID(t *testing.T) {
+	configDir, _ := setupTestMonitorsDir(t)
+	store := NewMonitorStore(filepath.Join(configDir, MonitorsDirName))
+
+	file := &MonitorFile{
+		Metadata: MonitorFileMetadata{Source: "admin"},
+		Monitors: []ServiceConfig{
+			{Provider: "acme", Service: "cc", Channel: "vip", Model: "Opus", Template: "cc-haiku-tiny", BaseURL: "https://x.com"},
+		},
+	}
+	if err := store.Create(file); err != nil {
+		t.Fatal(err)
+	}
+	list, err := store.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].ChannelID != file.Metadata.ChannelID {
+		t.Errorf("List did not expose channel_id: %+v", list)
+	}
+}
+
+// TestUpdateTreatsIDsAsImmutable 确认 Update 视 channel_id/model_id 为不可变：
+// 客户端 PUT 篡改的 id 一律从磁盘 existing 还原。
+func TestUpdateTreatsIDsAsImmutable(t *testing.T) {
+	configDir, _ := setupTestMonitorsDir(t)
+	store := NewMonitorStore(filepath.Join(configDir, MonitorsDirName))
+
+	file := &MonitorFile{
+		Metadata: MonitorFileMetadata{Source: "admin"},
+		Monitors: []ServiceConfig{
+			{Provider: "acme", Service: "cc", Channel: "vip", Model: "Opus", Template: "cc-haiku-tiny", BaseURL: "https://x.com"},
+		},
+	}
+	if err := store.Create(file); err != nil {
+		t.Fatal(err)
+	}
+	origChannelID := file.Metadata.ChannelID
+	origModelID := file.Monitors[0].ModelID
+
+	updated := &MonitorFile{
+		Metadata: MonitorFileMetadata{Source: "admin", ChannelID: "ch_tampered"},
+		Monitors: []ServiceConfig{
+			{Provider: "acme", Service: "cc", Channel: "vip", Model: "Opus", Template: "cc-haiku-tiny", BaseURL: "https://x.com", ModelID: "md_tampered"},
+		},
+	}
+	if err := store.Update(file.Key, updated, 1); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	got, err := store.Get(file.Key)
+	if err != nil || got == nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Metadata.ChannelID != origChannelID {
+		t.Errorf("channel_id must be immutable: got %q want %q", got.Metadata.ChannelID, origChannelID)
+	}
+	if got.Monitors[0].ModelID != origModelID {
+		t.Errorf("model_id must be immutable: got %q want %q", got.Monitors[0].ModelID, origModelID)
+	}
+}

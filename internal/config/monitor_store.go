@@ -77,6 +77,7 @@ func (s *MonitorStore) findExistingPath(key string) (string, error) {
 // MonitorSummary 是列表 API 返回的精简摘要。
 type MonitorSummary struct {
 	Key         string `json:"key"`
+	ChannelID   string `json:"channel_id,omitempty"` // 通道稳定 id（跨产品 join 锚，供 rpdiag sampler 发现）
 	Provider    string `json:"provider"`
 	Service     string `json:"service"`
 	Channel     string `json:"channel"`
@@ -131,6 +132,7 @@ func (s *MonitorStore) List() ([]MonitorSummary, error) {
 
 		summaries = append(summaries, MonitorSummary{
 			Key:         f.Key,
+			ChannelID:   f.Metadata.ChannelID,
 			Provider:    root.Provider,
 			Service:     root.Service,
 			Channel:     root.Channel,
@@ -205,6 +207,16 @@ func (s *MonitorStore) Create(file *MonitorFile) error {
 	}
 	file.Metadata.UpdatedAt = now
 
+	// 生成缺失的稳定 id（幂等：已有则不动）。channel_id 文件级、model_id 每行。
+	if file.Metadata.ChannelID == "" {
+		file.Metadata.ChannelID = NewChannelID()
+	}
+	for i := range file.Monitors {
+		if file.Monitors[i].ModelID == "" {
+			file.Monitors[i].ModelID = NewModelID()
+		}
+	}
+
 	if err := AtomicWriteYAML(path, file); err != nil {
 		return err
 	}
@@ -214,9 +226,12 @@ func (s *MonitorStore) Create(file *MonitorFile) error {
 	return nil
 }
 
-// preserveAdminHiddenFields 将 json:"-" 字段从 existing 合并到 updated。
-// 这些字段不参与 admin API JSON round-trip，PUT 更新时必须从磁盘文件回填。
+// preserveAdminHiddenFields 把 admin PUT 不应改写的持久化字段从 existing 合并到 updated：
+// 既含不参与 JSON round-trip 的 json:"-" 字段，也含对客户端可见但系统维护、不可变的稳定 id。
 func preserveAdminHiddenFields(updated, existing *MonitorFile) {
+	// channel_id 文件级不可变：无条件从 existing 还原（legacy 为空则保持空，回填交给 CLI）。
+	updated.Metadata.ChannelID = existing.Metadata.ChannelID
+
 	// root 对 root
 	updatedRoot := findRootMonitor(updated.Monitors)
 	existingRoot := findRootMonitor(existing.Monitors)
@@ -258,9 +273,11 @@ func childMatchKey(m ServiceConfig) string {
 	return strings.TrimSpace(m.Parent) + "\x00" + strings.TrimSpace(m.Model)
 }
 
-// copyAdminHiddenFields 将 src 的 json:"-" 持久化字段复制到 dst。
+// copyAdminHiddenFields 把 src 中 admin PUT 不应改写的监测行字段复制到 dst：
+// 含 json:"-" 持久化字段，以及对客户端可见但不可变的 model_id（强制从 existing 还原以保证 id 不可变）。
 // 注意：KeyType 和 AutoColdExempt 已改为 JSON 可见字段，通过 API round-trip 传递，无需在此回填。
 func copyAdminHiddenFields(dst, src *ServiceConfig) {
+	dst.ModelID = src.ModelID
 	dst.EnvVarName = src.EnvVarName
 	dst.RequestModel = src.RequestModel
 	dst.SkipURLValidation = src.SkipURLValidation
