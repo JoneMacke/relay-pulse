@@ -2,6 +2,7 @@
 /monitor
 /monitor-bin
 /migrate
+/backfillids
 /testenv
 # Database
 *.db
