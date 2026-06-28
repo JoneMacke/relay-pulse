@@ -43,6 +43,7 @@ type MonitorGroup struct {
 	PriceMax      *float64            `json:"price_max,omitempty"`
 	ListedDays    *int                `json:"listed_days,omitempty"`
 	Channel       string              `json:"channel"`
+	ChannelID     string              `json:"channel_id,omitempty"` // 通道稳定 id（跨产品 join 锚，运行时注入，组级；旧后端缺失）
 	ChannelName   string              `json:"channel_name,omitempty"`
 	Board         string              `json:"board"`
 	ColdReason    string              `json:"cold_reason,omitempty"`
@@ -190,6 +191,7 @@ func buildMonitorGroupFromParent(parent config.ServiceConfig, enableAnnotations 
 		PriceMax:      parent.PriceMax,
 		ListedDays:    listedDays,
 		Channel:       parent.Channel,
+		ChannelID:     parent.ChannelID,
 		ChannelName:   parent.ChannelName,
 		Board:         parent.Board,
 		ColdReason:    parent.ColdReason,
