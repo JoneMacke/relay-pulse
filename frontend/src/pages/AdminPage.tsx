@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Helmet } from 'react-helmet-async';
 import { useTranslation } from 'react-i18next';
+import { Loader2 } from 'lucide-react';
 import { useAdmin } from '../hooks/useAdmin';
 import { useMonitorAdmin } from '../hooks/useMonitorAdmin';
 import { useChangeAdmin } from '../hooks/useChangeAdmin';
@@ -25,6 +26,7 @@ export default function AdminPage() {
     page, setPage, isLoading, searchQuery, setSearchQuery,
     selectedSubmission, selectedApiKey, showApiKey, setShowApiKey,
     fetchDetail, fetchTemplates, updateSubmission, testSubmission, rejectSubmission, deleteSubmission, publishSubmission,
+    detailLoadingId, cancelDetail,
     setSelectedSubmission,
     error: submissionError,
     suggestedChannel,
@@ -34,6 +36,8 @@ export default function AdminPage() {
   const changeAdmin = useChangeAdmin(token);
 
   const handleTabChange = (tab: AdminTab) => {
+    cancelDetail();
+    monitor.cancelDetail();
     setActiveTab(tab);
     setShowCreateForm(false);
     monitor.setSelectedMonitor(null);
@@ -98,7 +102,9 @@ export default function AdminPage() {
 
               {/* 申请管理 Tab */}
               {activeTab === 'submissions' && (
-                selectedSubmission ? (
+                detailLoadingId && !selectedSubmission ? (
+                  <DetailLoading />
+                ) : selectedSubmission ? (
                   <SubmissionDetail
                     submission={selectedSubmission}
                     apiKey={selectedApiKey}
@@ -140,6 +146,8 @@ export default function AdminPage() {
                     }}
                     onCancel={() => setShowCreateForm(false)}
                   />
+                ) : monitor.detailLoadingId && !monitor.selectedMonitor ? (
+                  <DetailLoading />
                 ) : monitor.selectedMonitor && monitor.selectedKey ? (
                   <MonitorDetail
                     fetchTemplates={monitor.fetchTemplates}
@@ -222,6 +230,16 @@ export default function AdminPage() {
         </div>
       </main>
     </>
+  );
+}
+
+function DetailLoading() {
+  const { t } = useTranslation();
+  return (
+    <div className="flex items-center justify-center py-16 text-muted">
+      <Loader2 size={20} className="animate-spin mr-2" />
+      {t('admin.table.loading')}
+    </div>
   );
 }
 
