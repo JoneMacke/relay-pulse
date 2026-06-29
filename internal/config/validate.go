@@ -503,6 +503,20 @@ func (c *AppConfig) validateMonitorFields() error {
 	return nil
 }
 
+// CheckRuntimeModelIDs 运行时硬校验：所有监测行必须有非空 model_id。
+// 与 validateModelIDs（只校验格式/唯一、允许空，回填前兼容）分开——
+// Phase 1 起内部历史按 model_id 重键，展示读已切 model_id，缺 id 即该通道历史不可见，必须 fail-closed。
+// 故意不放进 validate()：present 是「已部署/已回填」运行时不变量，非配置语法不变量；
+// 放 validate() 会误伤大量用 model_id-less fixture 的 config 单测。
+func CheckRuntimeModelIDs(monitors []ServiceConfig) error {
+	for i, m := range monitors {
+		if strings.TrimSpace(m.ModelID) == "" {
+			return fmt.Errorf("monitor[%d] %s: 缺 model_id（内部历史已按 model_id 重键，缺即该通道历史不可见）。请运行 cmd/backfillids 回填 monitors.d/", i, modelIDLocation(m))
+		}
+	}
+	return nil
+}
+
 // validateModelIDs 校验监测行稳定 id：非空 model_id 须格式合法（md_<uuidv4>）且全局唯一。
 // 空 model_id 合法——回填前的既有行 / 待 Create 生成，不在此报错（由回填 CLI 与创建路径补齐）。
 func (c *AppConfig) validateModelIDs() error {

@@ -140,6 +140,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	// fail-closed：运行时所有监测行必须有 model_id（展示读已按 model_id；缺 id = 历史不可见）
+	if err := config.CheckRuntimeModelIDs(cfg.Monitors); err != nil {
+		logger.Error("main", "配置缺少 model_id，启动中止", "error", err)
+		os.Exit(1)
+	}
+
 	logger.Info("main", "配置加载完成",
 		"monitors", len(cfg.Monitors),
 		"interval", cfg.Interval,
@@ -445,6 +451,12 @@ func main() {
 		defer runtimeMu.Unlock()
 
 		if ctx.Err() != nil {
+			return
+		}
+
+		// fail-closed：热更新带入缺 model_id 的监测行则跳过本次重载（保留旧配置），避免线上历史不可见
+		if err := config.CheckRuntimeModelIDs(newCfg.Monitors); err != nil {
+			logger.Error("main", "热更新配置缺少 model_id，跳过本次重载", "error", err)
 			return
 		}
 
