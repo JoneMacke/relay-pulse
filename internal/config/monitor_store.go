@@ -108,6 +108,20 @@ type LatestProbeSnapshot struct {
 	Model     string `json:"model,omitempty"` // 这条记录归属的 model（多 model 通道用得着）
 }
 
+// RootMonitor 返回监测文件的父通道（无 parent 字段者）。
+// 空文件返回 nil。文件中父通道未必排在 Monitors[0]，故须遍历。
+func RootMonitor(mf *MonitorFile) *ServiceConfig {
+	if mf == nil || len(mf.Monitors) == 0 {
+		return nil
+	}
+	for i := range mf.Monitors {
+		if strings.TrimSpace(mf.Monitors[i].Parent) == "" {
+			return &mf.Monitors[i]
+		}
+	}
+	return &mf.Monitors[0]
+}
+
 // List 列出 monitors.d/ 下所有监测文件的摘要。
 func (s *MonitorStore) List() ([]MonitorSummary, error) {
 	_, files, err := loadMonitorsDir(filepath.Dir(s.dir))
@@ -121,14 +135,11 @@ func (s *MonitorStore) List() ([]MonitorSummary, error) {
 			continue
 		}
 
-		root := f.Monitors[0]
-		// 找到父通道（无 parent 字段的那个）
-		for _, m := range f.Monitors {
-			if strings.TrimSpace(m.Parent) == "" {
-				root = m
-				break
-			}
+		rootPtr := RootMonitor(&f)
+		if rootPtr == nil {
+			continue
 		}
+		root := *rootPtr
 
 		summaries = append(summaries, MonitorSummary{
 			Key:         f.Key,

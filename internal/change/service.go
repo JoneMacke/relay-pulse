@@ -488,7 +488,11 @@ func (s *Service) AdminApply(ctx context.Context, publicID string) error {
 	if err != nil {
 		return fmt.Errorf("读取通道配置失败: %w", err)
 	}
-	if len(mf.Monitors) == 0 {
+	if mf == nil {
+		return fmt.Errorf("通道已不存在（可能已被归档/删除），无法应用变更")
+	}
+	m := config.RootMonitor(mf)
+	if m == nil {
 		return fmt.Errorf("通道配置为空")
 	}
 
@@ -499,7 +503,6 @@ func (s *Service) AdminApply(ctx context.Context, publicID string) error {
 	}
 
 	// 应用变更到 ServiceConfig
-	m := &mf.Monitors[0]
 	for field, value := range changes {
 		switch field {
 		case "provider_name":

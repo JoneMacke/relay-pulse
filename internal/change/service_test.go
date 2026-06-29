@@ -2,7 +2,10 @@ package change
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -936,5 +939,109 @@ func TestService_Submit_SkipHostCheckWhenBaseURLEmpty(t *testing.T) {
 	}
 	if resp.PublicID == "" {
 		t.Error("expected non-empty PublicID")
+	}
+}
+
+// --- AdminApply helpers and tests ---
+
+// newApplyTestService 创建带临时 MonitorStore 的 Service，用于 AdminApply 系列测试。
+func newApplyTestService(t *testing.T) (*Service, *mockStore, *config.MonitorStore) {
+	t.Helper()
+	svc, store := newTestService(t)
+	monitorsDir := filepath.Join(t.TempDir(), config.MonitorsDirName)
+	if err := os.MkdirAll(monitorsDir, 0o755); err != nil {
+		t.Fatalf("mkdir monitors.d: %v", err)
+	}
+	ms := config.NewMonitorStore(monitorsDir)
+	svc.SetMonitorStore(ms)
+	return svc, store, ms
+}
+
+// seedChangeRequest 在 mockStore 中写入一条变更请求并返回指针。
+func seedChangeRequest(t *testing.T, store *mockStore, targetKey, applyMode string, changes map[string]string) *ChangeRequest {
+	t.Helper()
+	changesJSON, err := json.Marshal(changes)
+	if err != nil {
+		t.Fatalf("marshal changes: %v", err)
+	}
+	now := time.Now().Unix()
+	cr := &ChangeRequest{
+		PublicID:        "pub-" + applyMode + "-" + targetKey,
+		Status:          StatusPending,
+		TargetKey:       targetKey,
+		ApplyMode:       applyMode,
+		CurrentSnapshot: "{}",
+		ProposedChanges: string(changesJSON),
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := store.Save(context.Background(), cr); err != nil {
+		t.Fatalf("seed change request: %v", err)
+	}
+	return cr
+}
+
+// seedAutoChangeRequest 在 mockStore 中写入一条 auto 模式变更请求。
+func seedAutoChangeRequest(t *testing.T, store *mockStore, targetKey string, changes map[string]string) *ChangeRequest {
+	t.Helper()
+	return seedChangeRequest(t, store, targetKey, "auto", changes)
+}
+
+// seedMonitorFileChildFirst 写入一份 Monitors[0]=子通道、父通道(parent=="")排在后面的监测文件，
+// 用于验证 RootMonitor 不依赖 Monitors[0] 而是遍历找无 parent 的父通道。
+func seedMonitorFileChildFirst(t *testing.T, ms *config.MonitorStore, key string) {
+	t.Helper()
+	p, s, c, err := config.ParseMonitorFileKey(key)
+	if err != nil {
+		t.Fatalf("ParseMonitorFileKey(%q): %v", key, err)
+	}
+	mf := &config.MonitorFile{
+		Metadata: config.MonitorFileMetadata{Source: "test"},
+		Monitors: []config.ServiceConfig{
+			{Parent: p + "/" + s + "/" + c, Model: "child-model"},
+			{Provider: p, Service: s, Channel: c, Model: "Parent", ProviderName: "原名"},
+		},
+	}
+	if err := ms.Create(mf); err != nil {
+		t.Fatalf("seed child-first monitor file: %v", err)
+	}
+}
+
+// TestAdminApply_DeletedChannel_NoPanic 验证目标通道文件不存在时 AdminApply 返回错误而非 panic。
+func TestAdminApply_DeletedChannel_NoPanic(t *testing.T) {
+	svc, store, _ := newApplyTestService(t)
+	cr := seedAutoChangeRequest(t, store, "prov--cc--chan", map[string]string{"provider_name": "新名"})
+	// 通道文件从未创建（模拟提交后被删除）：ms.Get 返回 (nil, nil)
+
+	err := svc.AdminApply(context.Background(), cr.PublicID)
+	if err == nil {
+		t.Fatal("期望返回错误，实际 nil")
+	}
+	if !strings.Contains(err.Error(), "不存在") {
+		t.Fatalf("期望『通道不存在』类错误，实际: %v", err)
+	}
+}
+
+// TestAdminApply_ChildFirst_UpdatesRoot 验证 Monitors[0] 是子通道时，变更仍写入真正的父通道。
+func TestAdminApply_ChildFirst_UpdatesRoot(t *testing.T) {
+	svc, store, ms := newApplyTestService(t)
+	seedMonitorFileChildFirst(t, ms, "prov--cc--chan") // Monitors[0]=child, 父通道(parent=="")排在后面
+	cr := seedAutoChangeRequest(t, store, "prov--cc--chan", map[string]string{"provider_name": "改后名"})
+
+	if err := svc.AdminApply(context.Background(), cr.PublicID); err != nil {
+		t.Fatalf("apply 失败: %v", err)
+	}
+	mf, _ := ms.Get("prov--cc--chan")
+	if mf == nil || len(mf.Monitors) != 2 {
+		t.Fatalf("期望读回 2 个 monitor，实际 %#v", mf)
+	}
+	// 按索引断言（seed 顺序固定：Monitors[0]=child、Monitors[1]=parent），刻意不经
+	// config.RootMonitor——避免断言与被测取根逻辑同源：若 RootMonitor 退化成恒取
+	// Monitors[0]，AdminApply 会改到 child，此处父通道(索引1)未被改即变红。
+	if got := mf.Monitors[1].ProviderName; got != "改后名" {
+		t.Fatalf("父通道 provider_name 期望『改后名』，实际『%s』", got)
+	}
+	if got := mf.Monitors[0].ProviderName; got == "改后名" {
+		t.Fatalf("子通道 provider_name 不应被修改，实际『%s』", got)
 	}
 }
