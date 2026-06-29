@@ -25,8 +25,8 @@ var fieldsRequiringTest = map[string]bool{
 }
 
 // allowedFields 是用户可自助变更的 proposed_changes 字段白名单。
-// 刻意排除 category / sponsor_level：二者涉及商业分类与赞助权益，须人工对接，
-// 仅 adminUpdateableFields 开放给管理员后台调整（与前端 ChangeRequestPage 的可选项一致）。
+// 刻意排除 category / sponsor_level：二者涉及商业分类与赞助权益，须人工对接；
+// 如需调整通道字段，请通过通道管理（monitors.d/）直接编辑，变更请求采用只读审 diff 模型。
 var allowedFields = map[string]bool{
 	"provider_name": true,
 	"provider_url":  true,
@@ -424,20 +424,9 @@ func (s *Service) AdminGetDetail(ctx context.Context, publicID string) (*ChangeR
 	return cr, newKey, nil
 }
 
-// adminUpdateableFields 是管理员可编辑的 proposed_changes 白名单。
-var adminUpdateableFields = map[string]bool{
-	"provider_name": true,
-	"provider_url":  true,
-	"channel_name":  true,
-	"category":      true,
-	"sponsor_level": true,
-	"listed_since":  true,
-	"expires_at":    true,
-	"price_min":     true,
-	"price_max":     true,
-}
-
-// AdminUpdate 管理员更新变更请求内容（proposed_changes 字段 + admin_note）。
+// AdminUpdate 管理员更新变更请求的审核备注（admin_note）。
+// 变更请求采用「只读审 diff」：proposed_changes 不再经此端点编辑——要调整通道字段请到
+// 通道管理（monitors.d/）。传入非 admin_note 字段一律 fail-loud 拒绝，根除覆盖入口。
 func (s *Service) AdminUpdate(ctx context.Context, publicID string, updates map[string]any) (*ChangeRequest, error) {
 	cr, err := s.store.GetByPublicID(ctx, publicID)
 	if err != nil {
@@ -450,58 +439,30 @@ func (s *Service) AdminUpdate(ctx context.Context, publicID string, updates map[
 		return nil, fmt.Errorf("已应用的请求不能更新")
 	}
 
-	// 解析现有 proposed_changes
-	var changes map[string]string
-	if err := json.Unmarshal([]byte(cr.ProposedChanges), &changes); err != nil {
-		return nil, fmt.Errorf("解析变更内容失败: %w", err)
-	}
-	if changes == nil {
-		changes = make(map[string]string)
-	}
-
-	// 按白名单逐字段更新
-	for field, value := range updates {
-		switch field {
-		case "admin_note":
-			if v, ok := value.(string); ok {
-				cr.AdminNote = v
-			}
-		case "price_min", "price_max":
-			if adminUpdateableFields[field] {
-				s := fmt.Sprintf("%v", value)
-				if s == "" || s == "<nil>" {
-					// 空值视为删除该字段
-					delete(changes, field)
-				} else if _, err := strconv.ParseFloat(s, 64); err != nil {
-					return nil, fmt.Errorf("字段 %q 的值不是有效数字: %v", field, value)
-				} else {
-					changes[field] = s
-				}
-			}
-		default:
-			if adminUpdateableFields[field] {
-				if v, ok := value.(string); ok {
-					changes[field] = v
-				}
-			}
+	for field := range updates {
+		if field != "admin_note" {
+			return nil, fmt.Errorf("字段 %q 不可经此端点修改（变更请求只读；通道字段请在通道管理修改）", field)
 		}
 	}
-
-	changesJSON, err := json.Marshal(changes)
-	if err != nil {
-		return nil, fmt.Errorf("序列化变更内容失败: %w", err)
+	// 无可更新字段：直接返回，不空写库、不动 UpdatedAt。
+	if len(updates) == 0 {
+		return cr, nil
 	}
-	cr.ProposedChanges = string(changesJSON)
+
+	noteRaw, exists := updates["admin_note"]
+	if exists {
+		v, ok := noteRaw.(string)
+		if !ok {
+			return nil, fmt.Errorf("字段 \"admin_note\" 的值必须是字符串")
+		}
+		cr.AdminNote = v // 空串视为清空备注，合法。
+	}
 	cr.UpdatedAt = time.Now().Unix()
 
 	if err := s.store.Update(ctx, cr); err != nil {
 		return nil, err
 	}
-
-	logger.Info("change", "管理员更新变更请求",
-		"public_id", publicID,
-		"fields", len(updates))
-
+	logger.Info("change", "管理员更新审核备注", "public_id", publicID)
 	return cr, nil
 }
 

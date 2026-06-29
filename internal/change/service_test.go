@@ -1129,3 +1129,61 @@ func TestAdminApply_ChildFirst_UpdatesRoot(t *testing.T) {
 		t.Fatalf("子通道 provider_name 不应被修改，实际『%s』", got)
 	}
 }
+
+func TestAdminUpdate_RejectsNonNoteFields(t *testing.T) {
+	svc, store, _ := newApplyTestService(t)
+	cr := seedAutoChangeRequest(t, store, "prov--cc--chan", map[string]string{"provider_name": "原提议"})
+
+	_, err := svc.AdminUpdate(context.Background(), cr.PublicID, map[string]any{"provider_name": "篡改"})
+	if err == nil {
+		t.Fatal("传 proposed 字段应返回 error")
+	}
+	got, _ := store.GetByPublicID(context.Background(), cr.PublicID)
+	var changes map[string]string
+	_ = json.Unmarshal([]byte(got.ProposedChanges), &changes)
+	if changes["provider_name"] != "原提议" {
+		t.Fatalf("proposed_changes 不应被改，实际『%s』", changes["provider_name"])
+	}
+}
+
+func TestAdminUpdate_NoteOnly_OK(t *testing.T) {
+	svc, store, _ := newApplyTestService(t)
+	cr := seedAutoChangeRequest(t, store, "prov--cc--chan", map[string]string{"provider_name": "原提议"})
+	if _, err := svc.AdminUpdate(context.Background(), cr.PublicID, map[string]any{"admin_note": "审核中"}); err != nil {
+		t.Fatalf("note-only 不应报错: %v", err)
+	}
+	got, _ := store.GetByPublicID(context.Background(), cr.PublicID)
+	if got.AdminNote != "审核中" {
+		t.Fatalf("admin_note 应为『审核中』，实际『%s』", got.AdminNote)
+	}
+}
+
+func TestAdminUpdate_AppliedStatus_Rejected(t *testing.T) {
+	svc, store, _ := newApplyTestService(t)
+	cr := seedAutoChangeRequest(t, store, "prov--cc--chan", map[string]string{"provider_name": "原提议"})
+	// seed 默认 pending；改为 applied 后回写 store（mockStore 存的是副本，须 Update 才生效）。
+	cr.Status = StatusApplied
+	if err := store.Update(context.Background(), cr); err != nil {
+		t.Fatalf("回写 applied 状态失败: %v", err)
+	}
+
+	if _, err := svc.AdminUpdate(context.Background(), cr.PublicID, map[string]any{"admin_note": "x"}); err == nil {
+		t.Fatal("已应用的请求不应允许更新")
+	}
+}
+
+func TestAdminUpdate_MixedFields_Rejected(t *testing.T) {
+	svc, store, _ := newApplyTestService(t)
+	cr := seedAutoChangeRequest(t, store, "prov--cc--chan", map[string]string{"provider_name": "原提议"})
+
+	_, err := svc.AdminUpdate(context.Background(), cr.PublicID, map[string]any{"admin_note": "ok", "provider_name": "篡改"})
+	if err == nil {
+		t.Fatal("admin_note 混入 proposed 字段应整体拒绝")
+	}
+	got, _ := store.GetByPublicID(context.Background(), cr.PublicID)
+	var changes map[string]string
+	_ = json.Unmarshal([]byte(got.ProposedChanges), &changes)
+	if changes["provider_name"] != "原提议" {
+		t.Fatalf("proposed_changes 不应被改，实际『%s』", changes["provider_name"])
+	}
+}
