@@ -683,6 +683,183 @@ ORDER BY p.provider, p.service, p.channel, p.model, p.timestamp DESC
 	return result, nil
 }
 
+// dedupModelIDKeys 把入参 ProbeHistoryKey 列表按 model_id 去重，
+// 返回 model_id→入参 key 的反查表（first-wins）与去重后的 model_id 顺序列表。
+//
+// 返回 map 用于把 DB 行（其展示名列在改名后已是新名）映射回 caller 的 key——
+// 必须按 model_id 反查，绝不能用 DB 行的 provider/service/channel/model 重建 key。
+func dedupModelIDKeys(keys []ProbeHistoryKey) (map[string]ProbeHistoryKey, []string) {
+	keyByModelID := make(map[string]ProbeHistoryKey, len(keys))
+	modelIDs := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if _, dup := keyByModelID[k.ModelID]; dup {
+			continue
+		}
+		keyByModelID[k.ModelID] = k
+		modelIDs = append(modelIDs, k.ModelID)
+	}
+	return keyByModelID, modelIDs
+}
+
+// GetLatestBatchByModelID 按 model_id 批量获取每个监测项的最新记录（跨展示名历史连续）。
+//
+// 实现说明：
+// - CTE(keys) 仅承载 model_id 列，JOIN probe_history 命中部分索引 idx_probe_history_mid_ts
+// - 窗口函数 ROW_NUMBER() 按 model_id 分组取最新一条（rn=1）
+// - 结果 map 以入参 ProbeHistoryKey 为键，按 SELECT 出的 model_id 反查
+func (s *SQLiteStorage) GetLatestBatchByModelID(keys []ProbeHistoryKey) (map[ProbeHistoryKey]*ProbeRecord, error) {
+	ctx := s.effectiveCtx()
+	result := make(map[ProbeHistoryKey]*ProbeRecord, len(keys))
+	if len(keys) == 0 {
+		return result, nil
+	}
+
+	keyByModelID, modelIDs := dedupModelIDKeys(keys)
+
+	var b strings.Builder
+	args := make([]any, 0, len(modelIDs))
+
+	b.WriteString("WITH keys(model_id) AS (VALUES ")
+	for i, modelID := range modelIDs {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		b.WriteString("(?)")
+		args = append(args, modelID)
+	}
+	b.WriteString(`),
+ranked AS (
+	SELECT
+		p.model_id, p.id, p.provider, p.service, p.channel, p.model, p.status, p.sub_status, p.http_code, p.latency, p.timestamp,
+		ROW_NUMBER() OVER (PARTITION BY p.model_id ORDER BY p.timestamp DESC, p.id DESC) AS rn
+	FROM probe_history p
+	JOIN keys k ON p.model_id = k.model_id
+)
+SELECT model_id, id, provider, service, channel, model, status, sub_status, http_code, latency, timestamp
+FROM ranked
+WHERE rn = 1
+`)
+
+	rows, err := s.db.QueryContext(ctx, b.String(), args...)
+	if err != nil {
+		return nil, fmt.Errorf("按 model_id 批量查询最新记录失败: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		rec := &ProbeRecord{}
+		var modelID string
+		var subStatusStr string
+		if err := rows.Scan(
+			&modelID,
+			&rec.ID,
+			&rec.Provider,
+			&rec.Service,
+			&rec.Channel,
+			&rec.Model,
+			&rec.Status,
+			&subStatusStr,
+			&rec.HttpCode,
+			&rec.Latency,
+			&rec.Timestamp,
+		); err != nil {
+			return nil, fmt.Errorf("扫描 model_id 最新记录失败: %w", err)
+		}
+		rec.SubStatus = SubStatus(subStatusStr)
+		rec.ModelID = modelID
+		if key, ok := keyByModelID[modelID]; ok {
+			result[key] = rec
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("迭代 model_id 最新记录失败: %w", err)
+	}
+
+	return result, nil
+}
+
+// GetHistoryBatchByModelID 按 model_id 批量获取多个监测项的历史记录（时间范围，跨展示名历史连续）。
+//
+// 实现说明：
+// - CTE(keys) 仅承载 model_id，JOIN 命中部分索引；ORDER BY model_id, timestamp DESC 便于分桶
+// - 返回前对每个 key 的切片 reverse，保证时间升序（与 GetHistoryBatch 一致）
+// - 结果 map 以入参 ProbeHistoryKey 为键，按 SELECT 出的 model_id 反查
+func (s *SQLiteStorage) GetHistoryBatchByModelID(keys []ProbeHistoryKey, since time.Time) (map[ProbeHistoryKey][]*ProbeRecord, error) {
+	ctx := s.effectiveCtx()
+	result := make(map[ProbeHistoryKey][]*ProbeRecord, len(keys))
+	if len(keys) == 0 {
+		return result, nil
+	}
+
+	keyByModelID, modelIDs := dedupModelIDKeys(keys)
+
+	var b strings.Builder
+	args := make([]any, 0, len(modelIDs)+1)
+
+	b.WriteString("WITH keys(model_id) AS (VALUES ")
+	for i, modelID := range modelIDs {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		b.WriteString("(?)")
+		args = append(args, modelID)
+	}
+	b.WriteString(")\n")
+	b.WriteString(`
+SELECT
+	p.model_id, p.id, p.provider, p.service, p.channel, p.model, p.status, p.sub_status, p.http_code, p.latency, p.timestamp
+FROM probe_history p
+JOIN keys k ON p.model_id = k.model_id
+WHERE p.timestamp >= ?
+ORDER BY p.model_id, p.timestamp DESC
+`)
+	args = append(args, since.Unix())
+
+	rows, err := s.db.QueryContext(ctx, b.String(), args...)
+	if err != nil {
+		return nil, fmt.Errorf("按 model_id 批量查询历史记录失败: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		rec := &ProbeRecord{}
+		var modelID string
+		var subStatusStr string
+		if err := rows.Scan(
+			&modelID,
+			&rec.ID,
+			&rec.Provider,
+			&rec.Service,
+			&rec.Channel,
+			&rec.Model,
+			&rec.Status,
+			&subStatusStr,
+			&rec.HttpCode,
+			&rec.Latency,
+			&rec.Timestamp,
+		); err != nil {
+			return nil, fmt.Errorf("扫描 model_id 历史记录失败: %w", err)
+		}
+		rec.SubStatus = SubStatus(subStatusStr)
+		rec.ModelID = modelID
+		if key, ok := keyByModelID[modelID]; ok {
+			result[key] = append(result[key], rec)
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("迭代 model_id 历史记录失败: %w", err)
+	}
+
+	// DESC 取数利用索引，返回前对每个 key 翻转为时间升序
+	for k := range result {
+		reverseRecords(result[k])
+	}
+
+	return result, nil
+}
+
 // GetLatest 获取最新记录
 func (s *SQLiteStorage) GetLatest(provider, service, channel, model string) (*ProbeRecord, error) {
 	ctx := s.effectiveCtx()

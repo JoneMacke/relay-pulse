@@ -664,6 +664,164 @@ ORDER BY p.provider, p.service, p.channel, p.model, p.timestamp DESC
 	return result, nil
 }
 
+// GetLatestBatchByModelID 按 model_id 批量获取每个监测项的最新记录（跨展示名历史连续）。
+//
+// 实现说明：
+// - CTE(keys) 仅承载 model_id 列，JOIN probe_history 命中部分覆盖索引 idx_probe_history_mid_ts
+// - DISTINCT ON (model_id) + ORDER BY timestamp DESC 取每个 model_id 的最新一条
+// - 结果 map 以入参 ProbeHistoryKey 为键，按 SELECT 出的 model_id 反查
+func (s *PostgresStorage) GetLatestBatchByModelID(keys []ProbeHistoryKey) (map[ProbeHistoryKey]*ProbeRecord, error) {
+	ctx := s.effectiveCtx()
+	result := make(map[ProbeHistoryKey]*ProbeRecord, len(keys))
+	if len(keys) == 0 {
+		return result, nil
+	}
+
+	keyByModelID, modelIDs := dedupModelIDKeys(keys)
+
+	var b strings.Builder
+	args := make([]any, 0, len(modelIDs))
+
+	b.WriteString("WITH keys(model_id) AS (VALUES ")
+	for i, modelID := range modelIDs {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		fmt.Fprintf(&b, "($%d)", len(args)+1)
+		args = append(args, modelID)
+	}
+	b.WriteString(")\n")
+	b.WriteString(`
+SELECT DISTINCT ON (p.model_id)
+	p.model_id, p.id, p.provider, p.service, p.channel, p.model, p.status, p.sub_status, p.http_code, p.latency, p.timestamp
+FROM probe_history p
+JOIN keys k ON p.model_id = k.model_id
+ORDER BY p.model_id, p.timestamp DESC, p.id DESC
+`)
+
+	rows, err := s.pool.Query(ctx, b.String(), args...)
+	if err != nil {
+		return nil, fmt.Errorf("按 model_id 批量查询 PostgreSQL 最新记录失败: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		rec := &ProbeRecord{}
+		var modelID string
+		var subStatusStr string
+		if err := rows.Scan(
+			&modelID,
+			&rec.ID,
+			&rec.Provider,
+			&rec.Service,
+			&rec.Channel,
+			&rec.Model,
+			&rec.Status,
+			&subStatusStr,
+			&rec.HttpCode,
+			&rec.Latency,
+			&rec.Timestamp,
+		); err != nil {
+			return nil, fmt.Errorf("扫描 model_id PostgreSQL 最新记录失败: %w", err)
+		}
+		rec.SubStatus = SubStatus(subStatusStr)
+		rec.ModelID = modelID
+		if key, ok := keyByModelID[modelID]; ok {
+			result[key] = rec
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("迭代 model_id PostgreSQL 最新记录失败: %w", err)
+	}
+
+	return result, nil
+}
+
+// GetHistoryBatchByModelID 按 model_id 批量获取多个监测项的历史记录（时间范围，跨展示名历史连续）。
+//
+// 实现说明：
+// - CTE(keys) 仅承载 model_id，JOIN 命中部分索引；ORDER BY model_id, timestamp DESC 便于分桶
+// - 返回前对每个 key 的切片 reverse，保证时间升序（与 GetHistoryBatch 一致）
+// - 结果 map 以入参 ProbeHistoryKey 为键，按 SELECT 出的 model_id 反查
+func (s *PostgresStorage) GetHistoryBatchByModelID(keys []ProbeHistoryKey, since time.Time) (map[ProbeHistoryKey][]*ProbeRecord, error) {
+	ctx := s.effectiveCtx()
+	result := make(map[ProbeHistoryKey][]*ProbeRecord, len(keys))
+	if len(keys) == 0 {
+		return result, nil
+	}
+
+	keyByModelID, modelIDs := dedupModelIDKeys(keys)
+
+	var b strings.Builder
+	args := make([]any, 0, len(modelIDs)+1)
+
+	b.WriteString("WITH keys(model_id) AS (VALUES ")
+	for i, modelID := range modelIDs {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		fmt.Fprintf(&b, "($%d)", len(args)+1)
+		args = append(args, modelID)
+	}
+
+	sinceArgIndex := len(args) + 1
+	args = append(args, since.Unix())
+
+	b.WriteString(")\n")
+	fmt.Fprintf(&b, `
+SELECT
+	p.model_id, p.id, p.provider, p.service, p.channel, p.model, p.status, p.sub_status, p.http_code, p.latency, p.timestamp
+FROM probe_history p
+JOIN keys k ON p.model_id = k.model_id
+WHERE p.timestamp >= $%d
+ORDER BY p.model_id, p.timestamp DESC
+`, sinceArgIndex)
+
+	rows, err := s.pool.Query(ctx, b.String(), args...)
+	if err != nil {
+		return nil, fmt.Errorf("按 model_id 批量查询 PostgreSQL 历史记录失败: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		rec := &ProbeRecord{}
+		var modelID string
+		var subStatusStr string
+		if err := rows.Scan(
+			&modelID,
+			&rec.ID,
+			&rec.Provider,
+			&rec.Service,
+			&rec.Channel,
+			&rec.Model,
+			&rec.Status,
+			&subStatusStr,
+			&rec.HttpCode,
+			&rec.Latency,
+			&rec.Timestamp,
+		); err != nil {
+			return nil, fmt.Errorf("扫描 model_id PostgreSQL 历史记录失败: %w", err)
+		}
+		rec.SubStatus = SubStatus(subStatusStr)
+		rec.ModelID = modelID
+		if key, ok := keyByModelID[modelID]; ok {
+			result[key] = append(result[key], rec)
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("迭代 model_id PostgreSQL 历史记录失败: %w", err)
+	}
+
+	// DESC 取数利用索引，返回前对每个 key 翻转为时间升序
+	for k := range result {
+		reverseRecords(result[k])
+	}
+
+	return result, nil
+}
+
 // GetTimelineAggBatch 批量获取多个监测项的时间轴 bucket 聚合结果（时间范围）
 //
 // 设计目标：
@@ -935,6 +1093,267 @@ ORDER BY
 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("迭代 PostgreSQL 时间轴聚合结果失败: %w", err)
+	}
+
+	return result, nil
+}
+
+// GetTimelineAggBatchByModelID 按 model_id 批量获取时间轴 bucket 聚合结果（时间范围，跨展示名历史连续）。
+//
+// 语义与 GetTimelineAggBatch 完全一致（bucket 归属、边界排除、时段过滤、统计口径、http_code_breakdown），
+// 唯一差异：查询/分桶键从四元组 (provider,service,channel,model) 改为单列 model_id。
+// 结果 map 以入参 ProbeHistoryKey 为键，按聚合行输出的 model_id 反查命中。
+func (s *PostgresStorage) GetTimelineAggBatchByModelID(keys []ProbeHistoryKey, since, endTime time.Time, bucketCount int, bucketWindow time.Duration, timeFilter *DailyTimeFilter) (map[ProbeHistoryKey][]AggBucketRow, error) {
+	ctx := s.effectiveCtx()
+	result := make(map[ProbeHistoryKey][]AggBucketRow, len(keys))
+	if len(keys) == 0 {
+		return result, nil
+	}
+	if bucketCount <= 0 {
+		return result, nil
+	}
+
+	windowSec := int64(bucketWindow / time.Second)
+	if windowSec <= 0 {
+		return nil, fmt.Errorf("无效的 bucketWindow: %s", bucketWindow)
+	}
+
+	keyByModelID, modelIDs := dedupModelIDKeys(keys)
+
+	sinceUnix := since.Unix()
+	endUnix := endTime.Unix()
+
+	var b strings.Builder
+	args := make([]any, 0, len(modelIDs)+8)
+
+	// keys CTE：仅承载 model_id
+	b.WriteString("WITH keys(model_id) AS (VALUES ")
+	for i, modelID := range modelIDs {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		fmt.Fprintf(&b, "($%d)", len(args)+1)
+		args = append(args, modelID)
+	}
+	b.WriteString(")\n")
+
+	// 额外参数（紧跟 keys 之后）
+	sinceArg := len(args) + 1
+	args = append(args, sinceUnix)
+	endArg := len(args) + 1
+	args = append(args, endUnix)
+	windowSecArg := len(args) + 1
+	args = append(args, windowSec)
+	bucketCountArg := len(args) + 1
+	args = append(args, bucketCount)
+
+	// 时段过滤条件（UTC，左闭右开）
+	timeFilterCond := ""
+	if timeFilter != nil {
+		startMinArg := len(args) + 1
+		args = append(args, timeFilter.StartMinutes)
+		endMinArg := len(args) + 1
+		args = append(args, timeFilter.EndMinutes)
+
+		minutesExpr := "(EXTRACT(HOUR FROM timezone('UTC', to_timestamp(p.timestamp)))::int * 60 + EXTRACT(MINUTE FROM timezone('UTC', to_timestamp(p.timestamp)))::int)"
+		if timeFilter.CrossMidnight {
+			// 跨午夜： [start, 24:00) ∪ [00:00, end)
+			timeFilterCond = fmt.Sprintf(" AND (%s >= $%d OR %s < $%d)", minutesExpr, startMinArg, minutesExpr, endMinArg)
+		} else {
+			// 正常： [start, end)
+			timeFilterCond = fmt.Sprintf(" AND (%s >= $%d AND %s < $%d)", minutesExpr, startMinArg, minutesExpr, endMinArg)
+		}
+	}
+
+	// filtered：先计算 bucket_idx（口径与 GetTimelineAggBatch / api.buildTimeline 一致），再做聚合
+	// 不再 SELECT 四元组列——分组键已是 model_id
+	fmt.Fprintf(&b, `
+, filtered AS (
+	SELECT
+		p.model_id,
+		p.id,
+		p.status,
+		p.sub_status,
+		p.http_code,
+		p.latency,
+		p.timestamp,
+		($%d::int - 1 - (($%d::bigint - p.timestamp) / $%d::bigint))::int AS bucket_idx
+	FROM probe_history p
+	JOIN keys k ON p.model_id = k.model_id
+	WHERE p.timestamp > $%d
+	  AND p.timestamp <= $%d
+	  AND (($%d::bigint - p.timestamp) / $%d::bigint) < $%d::bigint
+%s
+)
+`, bucketCountArg, endArg, windowSecArg, sinceArg, endArg, endArg, windowSecArg, bucketCountArg, timeFilterCond)
+
+	// http_code_breakdown：仅统计红色(status==0)且有有效 http_code 的记录；分组键全部改为 model_id
+	b.WriteString(`
+, http_code_counts AS (
+	SELECT
+		model_id, bucket_idx, sub_status, http_code, COUNT(*)::int AS cnt
+	FROM filtered
+	WHERE status = 0
+	  AND http_code > 0
+	  AND sub_status IN ('server_error','client_error','auth_error','invalid_request','rate_limit')
+	GROUP BY model_id, bucket_idx, sub_status, http_code
+)
+, http_code_sub_agg AS (
+	SELECT
+		model_id, bucket_idx, sub_status,
+		jsonb_object_agg(http_code::text, cnt) AS codes
+	FROM http_code_counts
+	GROUP BY model_id, bucket_idx, sub_status
+)
+, http_code_bucket_agg AS (
+	SELECT
+		model_id, bucket_idx,
+		COALESCE(jsonb_object_agg(sub_status, codes), '{}'::jsonb) AS breakdown
+	FROM http_code_sub_agg
+	GROUP BY model_id, bucket_idx
+)
+SELECT
+	f.model_id,
+	f.bucket_idx,
+	COUNT(*)::int AS total,
+	(ARRAY_AGG(f.status ORDER BY f.timestamp DESC, f.id DESC))[1]::int AS last_status,
+	COALESCE(SUM(CASE WHEN f.status > 0 THEN f.latency ELSE 0 END), 0)::bigint AS latency_sum,
+	COALESCE(SUM(CASE WHEN f.status > 0 THEN 1 ELSE 0 END), 0)::int AS latency_count,
+	COALESCE(SUM(CASE WHEN f.latency > 0 THEN f.latency ELSE 0 END), 0)::bigint AS all_latency_sum,
+	COALESCE(SUM(CASE WHEN f.latency > 0 THEN 1 ELSE 0 END), 0)::int AS all_latency_count,
+
+	COALESCE(SUM(CASE WHEN f.status = 1 THEN 1 ELSE 0 END), 0)::int AS available,
+	COALESCE(SUM(CASE WHEN f.status = 2 THEN 1 ELSE 0 END), 0)::int AS degraded,
+	COALESCE(SUM(CASE WHEN f.status = 0 THEN 1 ELSE 0 END), 0)::int AS unavailable,
+	COALESCE(SUM(CASE WHEN f.status NOT IN (0,1,2) THEN 1 ELSE 0 END), 0)::int AS missing,
+
+	COALESCE(SUM(CASE WHEN f.status = 2 AND f.sub_status = 'slow_latency' THEN 1 ELSE 0 END), 0)::int AS slow_latency,
+	COALESCE(SUM(CASE WHEN f.sub_status = 'rate_limit' AND f.status IN (0,2) THEN 1 ELSE 0 END), 0)::int AS rate_limit,
+
+	COALESCE(SUM(CASE WHEN f.status = 0 AND f.sub_status = 'server_error' THEN 1 ELSE 0 END), 0)::int AS server_error,
+	COALESCE(SUM(CASE WHEN f.status = 0 AND f.sub_status = 'client_error' THEN 1 ELSE 0 END), 0)::int AS client_error,
+	COALESCE(SUM(CASE WHEN f.status = 0 AND f.sub_status = 'auth_error' THEN 1 ELSE 0 END), 0)::int AS auth_error,
+	COALESCE(SUM(CASE WHEN f.status = 0 AND f.sub_status = 'invalid_request' THEN 1 ELSE 0 END), 0)::int AS invalid_request,
+	COALESCE(SUM(CASE WHEN f.status = 0 AND f.sub_status = 'network_error' THEN 1 ELSE 0 END), 0)::int AS network_error,
+	COALESCE(SUM(CASE WHEN f.status = 0 AND f.sub_status = 'response_timeout' THEN 1 ELSE 0 END), 0)::int AS response_timeout,
+	COALESCE(SUM(CASE WHEN f.status = 0 AND f.sub_status = 'content_mismatch' THEN 1 ELSE 0 END), 0)::int AS content_mismatch,
+
+	COALESCE(h.breakdown, '{}'::jsonb) AS http_code_breakdown
+FROM filtered f
+LEFT JOIN http_code_bucket_agg h
+	ON h.model_id = f.model_id AND h.bucket_idx = f.bucket_idx
+GROUP BY
+	f.model_id, f.bucket_idx, h.breakdown
+ORDER BY
+	f.model_id, f.bucket_idx
+`)
+
+	rows, err := s.pool.Query(ctx, b.String(), args...)
+	if err != nil {
+		return nil, fmt.Errorf("按 model_id 批量查询 PostgreSQL 时间轴聚合失败: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			modelID         string
+			bucketIdx       int
+			total           int
+			lastStatus      int
+			latencySum      int64
+			latencyCount    int
+			allLatencySum   int64
+			allLatencyCount int
+
+			available       int
+			degraded        int
+			unavailable     int
+			missing         int
+			slowLatency     int
+			rateLimit       int
+			serverError     int
+			clientError     int
+			authError       int
+			invalidRequest  int
+			networkError    int
+			responseTimeout int
+			contentMismatch int
+
+			breakdownRaw []byte
+		)
+
+		if err := rows.Scan(
+			&modelID,
+			&bucketIdx,
+			&total,
+			&lastStatus,
+			&latencySum,
+			&latencyCount,
+			&allLatencySum,
+			&allLatencyCount,
+			&available,
+			&degraded,
+			&unavailable,
+			&missing,
+			&slowLatency,
+			&rateLimit,
+			&serverError,
+			&clientError,
+			&authError,
+			&invalidRequest,
+			&networkError,
+			&responseTimeout,
+			&contentMismatch,
+			&breakdownRaw,
+		); err != nil {
+			return nil, fmt.Errorf("扫描 model_id PostgreSQL 时间轴聚合结果失败: %w", err)
+		}
+
+		var httpCodeBreakdown map[string]map[int]int
+		// breakdownRaw 可能为 "{}" 或其他 jsonb
+		if len(breakdownRaw) > 0 && string(breakdownRaw) != "null" {
+			if err := json.Unmarshal(breakdownRaw, &httpCodeBreakdown); err != nil {
+				return nil, fmt.Errorf("解析 model_id PostgreSQL http_code_breakdown 失败: %w", err)
+			}
+			// 兼容：如果为空对象，保持空 map（omitempty 会省略）
+			if len(httpCodeBreakdown) == 0 {
+				httpCodeBreakdown = nil
+			}
+		}
+
+		key, ok := keyByModelID[modelID]
+		if !ok {
+			continue
+		}
+		result[key] = append(result[key], AggBucketRow{
+			BucketIndex:     bucketIdx,
+			Total:           total,
+			LastStatus:      lastStatus,
+			LatencySum:      latencySum,
+			LatencyCount:    latencyCount,
+			AllLatencySum:   allLatencySum,
+			AllLatencyCount: allLatencyCount,
+			StatusCounts: StatusCounts{
+				Available:         available,
+				Degraded:          degraded,
+				Unavailable:       unavailable,
+				Missing:           missing,
+				SlowLatency:       slowLatency,
+				RateLimit:         rateLimit,
+				ServerError:       serverError,
+				ClientError:       clientError,
+				AuthError:         authError,
+				InvalidRequest:    invalidRequest,
+				NetworkError:      networkError,
+				ResponseTimeout:   responseTimeout,
+				ContentMismatch:   contentMismatch,
+				HttpCodeBreakdown: httpCodeBreakdown,
+			},
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("迭代 model_id PostgreSQL 时间轴聚合结果失败: %w", err)
 	}
 
 	return result, nil

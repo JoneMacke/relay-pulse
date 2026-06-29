@@ -38,6 +38,12 @@ func (panicStorage) GetLatestBatch([]MonitorKey) (map[MonitorKey]*ProbeRecord, e
 func (panicStorage) GetHistoryBatch([]MonitorKey, time.Time) (map[MonitorKey][]*ProbeRecord, error) {
 	panic("not implemented")
 }
+func (panicStorage) GetLatestBatchByModelID([]ProbeHistoryKey) (map[ProbeHistoryKey]*ProbeRecord, error) {
+	panic("not implemented")
+}
+func (panicStorage) GetHistoryBatchByModelID([]ProbeHistoryKey, time.Time) (map[ProbeHistoryKey][]*ProbeRecord, error) {
+	panic("not implemented")
+}
 func (panicStorage) MigrateChannelData([]ChannelMigrationMapping) error { panic("not implemented") }
 func (panicStorage) GetServiceState(string, string, string, string) (*ServiceState, error) {
 	panic("not implemented")

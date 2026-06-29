@@ -61,6 +61,12 @@ func (m *mockStorage) GetHistoryBatch(keys []storage.MonitorKey, _ time.Time) (m
 	}
 	return result, nil
 }
+func (m *mockStorage) GetLatestBatchByModelID(_ []storage.ProbeHistoryKey) (map[storage.ProbeHistoryKey]*storage.ProbeRecord, error) {
+	return nil, nil
+}
+func (m *mockStorage) GetHistoryBatchByModelID(_ []storage.ProbeHistoryKey, _ time.Time) (map[storage.ProbeHistoryKey][]*storage.ProbeRecord, error) {
+	return nil, nil
+}
 func (m *mockStorage) MigrateChannelData(_ []storage.ChannelMigrationMapping) error { return nil }
 func (m *mockStorage) GetServiceState(_, _, _, _ string) (*storage.ServiceState, error) {
 	return nil, nil

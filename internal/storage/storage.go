@@ -249,6 +249,15 @@ type RecordStorage interface {
 
 	// GetHistoryBatch 批量获取多个监测项的历史记录（时间范围）
 	GetHistoryBatch(keys []MonitorKey, since time.Time) (map[MonitorKey][]*ProbeRecord, error)
+
+	// GetLatestBatchByModelID 按 model_id 批量获取每个监测项的最新记录，跨展示名历史连续。
+	// 返回 map 以入参 ProbeHistoryKey 为键（通过 model_id 反查命中），
+	// 绝不用 DB 行的展示名列重建 key——改名后 DB 行 model 是新名，与 caller key 不等会静默丢失。
+	GetLatestBatchByModelID(keys []ProbeHistoryKey) (map[ProbeHistoryKey]*ProbeRecord, error)
+
+	// GetHistoryBatchByModelID 按 model_id 批量获取多个监测项的历史记录（时间范围），跨展示名历史连续。
+	// 返回 map 同样以入参 ProbeHistoryKey 为键（语义见 GetLatestBatchByModelID）。
+	GetHistoryBatchByModelID(keys []ProbeHistoryKey, since time.Time) (map[ProbeHistoryKey][]*ProbeRecord, error)
 }
 
 // EventStorage 状态变更检测的持久化操作
@@ -371,6 +380,11 @@ type TimelineAggStorage interface {
 	// - 仅聚合 (since, endTime] 的数据，严格排除 timestamp==since 的边界数据
 	// - 聚合窗口由 bucketCount + bucketWindow 决定（与 api.determineBucketStrategy 一致）
 	GetTimelineAggBatch(keys []MonitorKey, since, endTime time.Time, bucketCount int, bucketWindow time.Duration, timeFilter *DailyTimeFilter) (map[MonitorKey][]AggBucketRow, error)
+
+	// GetTimelineAggBatchByModelID 按 model_id 批量获取时间轴 bucket 聚合结果（时间范围），跨展示名历史连续。
+	// 语义与 GetTimelineAggBatch 完全一致，仅查询/分桶键从四元组改为 model_id；
+	// 返回 map 以入参 ProbeHistoryKey 为键（通过 model_id 反查命中）。
+	GetTimelineAggBatchByModelID(keys []ProbeHistoryKey, since, endTime time.Time, bucketCount int, bucketWindow time.Duration, timeFilter *DailyTimeFilter) (map[ProbeHistoryKey][]AggBucketRow, error)
 }
 
 // ArchiveStorage 为"历史数据归档"提供的可选能力接口

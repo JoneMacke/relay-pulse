@@ -361,6 +361,117 @@ func TestGetHistoryBatch_EmptyKeys(t *testing.T) {
 	}
 }
 
+// --- *BatchByModelID（model_id 维度批量读，跨展示名历史连续）---
+
+// TestGetLatestBatchByModelIDKeysByInput 验证返回 map 以入参 ProbeHistoryKey 为键，
+// 通过 model_id 反查命中——即使 caller key 携带的展示名（Model）与 DB 行的展示名不同。
+func TestGetLatestBatchByModelIDKeysByInput(t *testing.T) {
+	s := newTestStore(t)
+	// row written under the NEW display name, same stable model_id
+	if err := s.SaveRecord(&ProbeRecord{Provider: "P", Service: "cc", Channel: "c", Model: "NewName", ModelID: "md_x", Status: 1, Timestamp: 2000}); err != nil {
+		t.Fatal(err)
+	}
+	// caller key carries a DIFFERENT display Model (e.g. an old/aliased name) — lookup must still hit, keyed by input
+	key := ProbeHistoryKey{ModelID: "md_x", Provider: "P", Service: "cc", Channel: "c", Model: "WhateverDisplayName"}
+	m, err := s.GetLatestBatchByModelID([]ProbeHistoryKey{key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m[key]; !ok {
+		t.Fatalf("returned map must be keyed by the INPUT key (not reconstructed from DB row). got keys: %v", m)
+	}
+	if m[key] == nil || m[key].Timestamp != 2000 {
+		t.Fatalf("wrong record for key")
+	}
+}
+
+func TestGetHistoryBatchByModelIDKeysByInput(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.SaveRecord(&ProbeRecord{Provider: "P", Service: "cc", Channel: "c", Model: "NewName", ModelID: "md_x", Status: 1, Timestamp: 2000}); err != nil {
+		t.Fatal(err)
+	}
+	key := ProbeHistoryKey{ModelID: "md_x", Provider: "P", Service: "cc", Channel: "c", Model: "WhateverDisplayName"}
+	m, err := s.GetHistoryBatchByModelID([]ProbeHistoryKey{key}, time.Unix(0, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m[key]) != 1 {
+		t.Fatalf("history batch must key by input key; got %v", m)
+	}
+}
+
+func TestGetLatestBatchByModelID_EmptyKeys(t *testing.T) {
+	s := newTestStore(t)
+	m, err := s.GetLatestBatchByModelID(nil)
+	if err != nil {
+		t.Fatalf("GetLatestBatchByModelID: %v", err)
+	}
+	if m == nil || len(m) != 0 {
+		t.Fatalf("expected non-nil empty map, got %v", m)
+	}
+}
+
+func TestGetHistoryBatchByModelID_EmptyKeys(t *testing.T) {
+	s := newTestStore(t)
+	m, err := s.GetHistoryBatchByModelID(nil, time.Unix(0, 0))
+	if err != nil {
+		t.Fatalf("GetHistoryBatchByModelID: %v", err)
+	}
+	if m == nil || len(m) != 0 {
+		t.Fatalf("expected non-nil empty map, got %v", m)
+	}
+}
+
+// TestGetLatestBatchByModelID_MultiKey 多 model_id：各取最新、按 model_id 分桶，
+// 缺失 model_id 不出现在结果里，since 之前的历史不影响最新选取。
+func TestGetLatestBatchByModelID_MultiKey(t *testing.T) {
+	s := newTestStore(t)
+	keyA := ProbeHistoryKey{ModelID: "md_a", Provider: "P", Service: "cc", Channel: "c", Model: "A"}
+	keyB := ProbeHistoryKey{ModelID: "md_b", Provider: "P", Service: "cc", Channel: "c", Model: "B"}
+	keyMissing := ProbeHistoryKey{ModelID: "md_missing", Provider: "P", Service: "cc", Channel: "c", Model: "Z"}
+
+	mustSave(t, s, &ProbeRecord{Provider: "P", Service: "cc", Channel: "c", Model: "A", ModelID: "md_a", Status: 1, Timestamp: 1000})
+	mustSave(t, s, &ProbeRecord{Provider: "P", Service: "cc", Channel: "c", Model: "A", ModelID: "md_a", Status: 1, Timestamp: 3000})
+	mustSave(t, s, &ProbeRecord{Provider: "P", Service: "cc", Channel: "c", Model: "B", ModelID: "md_b", Status: 1, Timestamp: 1500})
+
+	m, err := s.GetLatestBatchByModelID([]ProbeHistoryKey{keyA, keyB, keyMissing})
+	if err != nil {
+		t.Fatalf("GetLatestBatchByModelID: %v", err)
+	}
+	if len(m) != 2 {
+		t.Fatalf("expected 2 keys, got %d: %v", len(m), m)
+	}
+	if m[keyA] == nil || m[keyA].Timestamp != 3000 {
+		t.Errorf("keyA: want ts 3000, got %v", m[keyA])
+	}
+	if m[keyB] == nil || m[keyB].Timestamp != 1500 {
+		t.Errorf("keyB: want ts 1500, got %v", m[keyB])
+	}
+	if _, ok := m[keyMissing]; ok {
+		t.Errorf("expected missing model_id to be absent from result")
+	}
+}
+
+// TestGetHistoryBatchByModelID_AscendingAndFilter 验证 since 过滤 + 升序返回。
+func TestGetHistoryBatchByModelID_AscendingAndFilter(t *testing.T) {
+	s := newTestStore(t)
+	key := ProbeHistoryKey{ModelID: "md_a", Provider: "P", Service: "cc", Channel: "c", Model: "A"}
+	for _, ts := range []int64{1000, 2000, 3000} {
+		mustSave(t, s, &ProbeRecord{Provider: "P", Service: "cc", Channel: "c", Model: "A", ModelID: "md_a", Status: 1, Timestamp: ts})
+	}
+
+	m, err := s.GetHistoryBatchByModelID([]ProbeHistoryKey{key}, time.Unix(1800, 0))
+	if err != nil {
+		t.Fatalf("GetHistoryBatchByModelID: %v", err)
+	}
+	if len(m[key]) != 2 { // 2000, 3000
+		t.Fatalf("want 2 records after since, got %d", len(m[key]))
+	}
+	if m[key][0].Timestamp >= m[key][1].Timestamp {
+		t.Errorf("records not ascending: %d >= %d", m[key][0].Timestamp, m[key][1].Timestamp)
+	}
+}
+
 // --- MigrateChannelData ---
 
 func TestMigrateChannelData(t *testing.T) {
