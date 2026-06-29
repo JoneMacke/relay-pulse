@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { apiGet, apiPost, apiPut, apiDelete, ApiError } from '../utils/apiClient';
 import type {
   AdminSubmission,
@@ -31,6 +31,8 @@ export function useAdmin() {
   const [selectedSubmission, setSelectedSubmission] = useState<AdminSubmission | null>(null);
   const [selectedApiKey, setSelectedApiKey] = useState<string>('');
   const [showApiKey, setShowApiKey] = useState(false);
+  const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null);
+  const detailAbortRef = useRef<AbortController | null>(null);
 
   const [error, setError] = useState<string | null>(null);
   const [suggestedChannel, setSuggestedChannel] = useState<string>('');
@@ -120,20 +122,35 @@ export function useAdmin() {
   // Fetch detail
   const fetchDetail = useCallback(async (publicId: string) => {
     if (!token) return;
+    detailAbortRef.current?.abort(); // 中止上一条在途详情，防止迟到响应覆盖新选中项
+    const ac = new AbortController();
+    detailAbortRef.current = ac;
+    setDetailLoadingId(publicId);
     setError(null);
-
     try {
       const resp = await apiGet<AdminDetailResponse>(
         `/api/admin/submissions/${publicId}`,
-        { headers: authHeaders() },
+        { headers: authHeaders(), signal: ac.signal },
       );
+      if (ac.signal.aborted) return;
       setSelectedSubmission(resp.submission);
       setSelectedApiKey(resp.api_key);
       setShowApiKey(false);
     } catch (e) {
+      if (ac.signal.aborted || (e instanceof DOMException && e.name === 'AbortError')) return;
       setError(e instanceof ApiError ? e.message : '加载详情失败');
+    } finally {
+      // 仅当自己仍是最新一次请求时才清 loading：被后续请求取代的旧请求不得清掉新请求的 loading 态
+      if (detailAbortRef.current === ac) setDetailLoadingId(null);
     }
   }, [token, authHeaders]);
+
+  // 供切 tab / 返回列表时中止在途详情请求，避免迟到响应写回已离开的视图
+  const cancelDetail = useCallback(() => {
+    detailAbortRef.current?.abort();
+    detailAbortRef.current = null;
+    setDetailLoadingId(null);
+  }, []);
 
   // Update submission
   const updateSubmission = useCallback(async (publicId: string, updates: Record<string, unknown>) => {
@@ -244,7 +261,9 @@ export function useAdmin() {
     selectedApiKey,
     showApiKey,
     setShowApiKey,
+    detailLoadingId,
     fetchDetail,
+    cancelDetail,
     fetchTemplates,
     updateSubmission,
     testSubmission,

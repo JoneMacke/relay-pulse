@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { apiGet, apiPost, apiPut, apiDelete, ApiError } from '../utils/apiClient';
 import type {
   MonitorSummary,
@@ -42,6 +42,8 @@ export function useMonitorAdmin(token: string) {
   const [selectedMonitor, setSelectedMonitor] = useState<MonitorFile | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [probeTargets, setProbeTargets] = useState<ProbeTarget[]>([]);
+  const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null);
+  const detailAbortRef = useRef<AbortController | null>(null);
 
   // Probe：父通道与各子通道可独立探测，状态按 target key 分桶（key=target model，
   // 父通道用 PARENT_TARGET_KEY=''），避免多按钮互相覆盖结果。
@@ -104,25 +106,40 @@ export function useMonitorAdmin(token: string) {
   // Fetch detail
   const fetchDetail = useCallback(async (key: string) => {
     if (!token) return;
+    detailAbortRef.current?.abort(); // 中止上一条在途详情，防止迟到响应覆盖新选中项
+    const ac = new AbortController();
+    detailAbortRef.current = ac;
+    setDetailLoadingId(key);
     setError(null);
-    // 切换详情时清空上一通道的 probe 结果，避免串台。
-    setProbingTargets({});
-    setProbeResults({});
-    setProbeErrors({});
-    setProbeTargets([]);
 
     try {
       const resp = await apiGet<AdminMonitorDetailResponse>(
         `/api/admin/monitors/${key}`,
-        { headers: authHeaders() },
+        { headers: authHeaders(), signal: ac.signal },
       );
+      if (ac.signal.aborted) return;
+      // 详情成功返回后再清空上一通道的 probe 结果，避免串台；被取消的旧请求不清，
+      // 让当前显示的通道保留其探测结果直到新详情真正就绪。
+      setProbingTargets({});
+      setProbeResults({});
+      setProbeErrors({});
       setSelectedMonitor(resp.monitor);
       setProbeTargets(resp.probe_targets || []);
       setSelectedKey(key);
     } catch (e) {
+      if (ac.signal.aborted || (e instanceof DOMException && e.name === 'AbortError')) return;
       setError(e instanceof ApiError ? e.message : '加载详情失败');
+    } finally {
+      if (detailAbortRef.current === ac) setDetailLoadingId(null);
     }
   }, [token, authHeaders]);
+
+  // 供切 tab / 返回列表时中止在途详情请求
+  const cancelDetail = useCallback(() => {
+    detailAbortRef.current?.abort();
+    detailAbortRef.current = null;
+    setDetailLoadingId(null);
+  }, []);
 
   // Create
   const createMonitor = useCallback(async (file: MonitorFile) => {
@@ -290,7 +307,9 @@ export function useMonitorAdmin(token: string) {
     probeTargets,
     setSelectedMonitor,
     setSelectedKey,
+    detailLoadingId,
     fetchDetail,
+    cancelDetail,
     fetchTemplates,
     createMonitor,
     updateMonitor,
