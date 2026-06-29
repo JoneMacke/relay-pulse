@@ -888,6 +888,12 @@
       "adminEdit": "Admin Edit",
       "readOnly": "Read-only",
       "currentSnapshot": "Current Snapshot",
+      "liveUnavailable": {
+        "manual": "Channel is in manual mode; showing submission snapshot",
+        "deleted": "Channel no longer exists; showing submission snapshot",
+        "error": "Failed to read current config; showing submission snapshot"
+      },
+      "editElsewhereHint": "To adjust other channel fields, go to Monitor Management",
       "colField": "Field",
       "colCurrent": "Current",
       "colProposed": "Proposed",

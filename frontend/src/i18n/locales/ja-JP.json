@@ -855,6 +855,12 @@
       "adminEdit": "管理者による編集",
       "readOnly": "読み取り専用",
       "currentSnapshot": "現在のスナップショット",
+      "liveUnavailable": {
+        "manual": "チャネルは手動モードです。提出時のスナップショットを表示します",
+        "deleted": "チャネルが存在しません。提出時のスナップショットを表示します",
+        "error": "現在の設定を読み取れませんでした。提出時のスナップショットを表示します"
+      },
+      "editElsewhereHint": "他のチャネルフィールドを変更するには、チャネル管理へ移動してください",
       "colField": "項目",
       "colCurrent": "現在",
       "colProposed": "変更後",

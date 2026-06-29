@@ -77,6 +77,9 @@ export interface AdminChangeRequest {
   test_passed_at?: number;
   test_latency_ms?: number;
   test_http_code?: number;
+  /** 通道实时当前值（仅 proposed 涉及字段；后端 AdminList 填充）。manual/已删/读失败时缺省。 */
+  live_current?: Record<string, string>;
+  live_current_source?: 'auto' | 'manual' | 'deleted' | 'error';
   admin_note?: string;
   reviewed_at?: number;
   applied_at?: number;

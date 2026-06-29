@@ -1,31 +1,22 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Loader2, AlertCircle, ChevronDown, ChevronUp, Check, X, Play, Trash2, Save, ArrowRight } from 'lucide-react';
+import {
+  Loader2,
+  AlertCircle,
+  ChevronDown,
+  ChevronUp,
+  Check,
+  X,
+  Play,
+  Trash2,
+  Save,
+  ArrowRight,
+} from 'lucide-react';
 import type { AdminChangeRequest, ChangeRequestStatus } from '../../types/change';
 import { fieldShapeClass } from './fieldStyles';
+import { FormField, ReadOnlyField } from './FormControls';
 
-// ── 编辑相关常量与工具 ──────────────────────────────────
-
-const EDITABLE_PROPOSED_FIELDS = [
-  'provider_name',
-  'provider_url',
-  'channel_name',
-  'category',
-  'sponsor_level',
-  'listed_since',
-  'expires_at',
-  'price_min',
-  'price_max',
-] as const;
-
-const SPONSOR_LEVEL_OPTIONS = ['', 'public', 'signal', 'pulse', 'beacon', 'backbone', 'core'] as const;
-
-type EditableProposedField = (typeof EDITABLE_PROPOSED_FIELDS)[number];
-
-interface EditDraft {
-  proposed: Record<EditableProposedField, string>;
-  admin_note: string;
-}
+// ── JSON 解析工具 ────────────────────────────────────────
 
 function parseJsonRecord(json: string | undefined): Record<string, string> {
   if (!json) return {};
@@ -39,45 +30,65 @@ function parseJsonRecord(json: string | undefined): Record<string, string> {
   }
 }
 
-function buildInitialDraft(cr: AdminChangeRequest): EditDraft {
-  const proposed = parseJsonRecord(cr.proposed_changes);
-  const snapshot = parseJsonRecord(cr.current_snapshot);
-  // 提议未涉及的字段回退到提交时的快照原值，避免管理员看到全空表单
-  return {
-    proposed: {
-      provider_name: proposed.provider_name ?? snapshot.provider_name ?? '',
-      provider_url:  proposed.provider_url  ?? snapshot.provider_url  ?? '',
-      channel_name:  proposed.channel_name  ?? snapshot.channel_name  ?? '',
-      category:      proposed.category      ?? snapshot.category      ?? '',
-      sponsor_level: proposed.sponsor_level ?? snapshot.sponsor_level ?? '',
-      listed_since:  proposed.listed_since  ?? snapshot.listed_since  ?? '',
-      expires_at:    proposed.expires_at    ?? snapshot.expires_at    ?? '',
-      price_min:     proposed.price_min     ?? snapshot.price_min     ?? '',
-      price_max:     proposed.price_max     ?? snapshot.price_max     ?? '',
-    },
-    admin_note: cr.admin_note ?? '',
-  };
+// ── AdminNoteEditor 子组件 ───────────────────────────────
+
+interface AdminNoteEditorProps {
+  cr: AdminChangeRequest;
+  onUpdate: (id: string, updates: Record<string, unknown>) => void;
 }
 
-function getChangedUpdates(original: EditDraft, draft: EditDraft): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  for (const field of EDITABLE_PROPOSED_FIELDS) {
-    if (draft.proposed[field] !== original.proposed[field]) {
-      result[field] = draft.proposed[field];
-    }
+/**
+ * 审核备注编辑器：
+ *   - status 非 'applied' → 可编辑（FormField），有改动时显示保存按钮
+ *   - status === 'applied' → 只读展示（ReadOnlyField）
+ * 父组件重新拉取数据后以新的 key（`${public_id}-${admin_note}`）重挂载，自动重置本地草稿。
+ * 见调用处 key 设置。
+ */
+function AdminNoteEditor({ cr, onUpdate }: AdminNoteEditorProps) {
+  const { t } = useTranslation();
+  const sourceNote = cr.admin_note ?? '';
+  const [note, setNote] = useState(sourceNote);
+  const dirty = note !== sourceNote;
+
+  if (cr.status === 'applied') {
+    return (
+      <div className="rounded-lg border border-default/60 bg-elevated/20 p-3">
+        <ReadOnlyField label={t('admin.changes.adminNote')} value={sourceNote} />
+      </div>
+    );
   }
-  if (draft.admin_note !== original.admin_note) {
-    result.admin_note = draft.admin_note;
-  }
-  return result;
+
+  return (
+    <div className="rounded-lg border border-default/60 bg-elevated/20 p-3 space-y-2">
+      <FormField
+        label={t('admin.changes.adminNote')}
+        value={note}
+        onChange={setNote}
+        placeholder={t('admin.changes.adminNotePlaceholder')}
+        multiline
+      />
+      {dirty && (
+        <div className="flex justify-end">
+          <button
+            onClick={() => onUpdate(cr.public_id, { admin_note: note })}
+            className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-accent/10 text-accent hover:bg-accent/20 transition"
+          >
+            <Save size={11} />
+            {t('common.save', { defaultValue: '保存' })}
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
+
+// ── ChangeRequestList 主组件 ─────────────────────────────
 
 interface ChangeRequestListProps {
   changes: AdminChangeRequest[];
   isLoading: boolean;
   statusFilter: ChangeRequestStatus | 'all';
   setStatusFilter: (f: ChangeRequestStatus | 'all') => void;
-  onSelect: (id: string) => void;
   onUpdate: (id: string, updates: Record<string, unknown>) => void;
   onApprove: (id: string) => void;
   onReject: (id: string, note: string) => void;
@@ -108,7 +119,6 @@ export function ChangeRequestList({
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [rejectNote, setRejectNote] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [editDrafts, setEditDrafts] = useState<Record<string, EditDraft>>({});
 
   // 字段键 → 本地化标签；未收录的键回退原始键名，避免漏译时出现空白
   const fieldLabel = (key: string) => t(`admin.changes.fields.${key}`, { defaultValue: key });
@@ -178,26 +188,15 @@ export function ChangeRequestList({
         <div className="space-y-2">
           {changes.map(cr => {
             const isExpanded = expandedId === cr.public_id;
-            const proposedChanges = parseJsonRecord(cr.proposed_changes);
-            const currentSnapshot = parseJsonRecord(cr.current_snapshot);
-            const originalDraft = buildInitialDraft(cr);
-            const draft = editDrafts[cr.public_id] ?? originalDraft;
-            const changedUpdates = getChangedUpdates(originalDraft, draft);
-            const hasEdits = Object.keys(changedUpdates).length > 0;
-            const canEdit = cr.status !== 'applied';
+            const proposed = parseJsonRecord(cr.proposed_changes);
+            const snapshot = parseJsonRecord(cr.current_snapshot);
+            const liveCurrent = cr.live_current ?? {};
 
             return (
               <div key={cr.public_id} className="rounded-xl border border-default bg-surface overflow-hidden">
                 {/* Row header */}
                 <button
-                  onClick={() => {
-                    if (!isExpanded) {
-                      setEditDrafts(prev =>
-                        prev[cr.public_id] ? prev : { ...prev, [cr.public_id]: buildInitialDraft(cr) }
-                      );
-                    }
-                    setExpandedId(isExpanded ? null : cr.public_id);
-                  }}
+                  onClick={() => setExpandedId(isExpanded ? null : cr.public_id)}
                   className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-elevated/50 transition"
                 >
                   <code className="text-xs text-muted font-mono">{cr.public_id.slice(0, 8)}</code>
@@ -217,107 +216,56 @@ export function ChangeRequestList({
                 {/* Expanded detail */}
                 {isExpanded && (
                   <div className="px-4 pb-4 border-t border-default/50 space-y-3">
-                    {/* Proposed changes */}
+                    {/* 只读 diff：当前值 → 提议值 */}
                     <div className="mt-3">
                       <div className="text-xs font-medium text-muted mb-1">{t('admin.changes.proposedChanges')}</div>
+                      {cr.live_current_source && cr.live_current_source !== 'auto' && (
+                        <div className="text-[11px] text-warning mb-1">
+                          {t(`admin.changes.liveUnavailable.${cr.live_current_source}`)}
+                        </div>
+                      )}
                       <div className="space-y-1">
-                        {Object.entries(proposedChanges).map(([k, v]) => (
-                          <div key={k} className="flex gap-2 text-sm">
-                            <span className="text-muted min-w-[100px]">{fieldLabel(k)}:</span>
-                            <span className="text-primary font-medium">{v}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Admin edit section */}
-                    <div className="mt-2 rounded-lg border border-default/60 bg-elevated/20 p-3 space-y-2">
-                      <div className="text-xs font-medium text-muted">
-                        {t('admin.changes.adminEdit', { defaultValue: '管理员修改' })}
-                        {cr.status === 'applied' && (
-                          <span className="ml-2 text-muted opacity-60">({t('admin.changes.readOnly', { defaultValue: '只读' })})</span>
-                        )}
-                      </div>
-
-                      {/* admin_note */}
-                      <div>
-                        <div className="text-xs text-muted mb-1">{t('admin.changes.adminNote')}</div>
-                        <textarea
-                          value={draft.admin_note}
-                          readOnly={!canEdit}
-                          onChange={e => {
-                            const value = e.target.value;
-                            setEditDrafts(prev => ({
-                              ...prev,
-                              [cr.public_id]: { ...draft, admin_note: value },
-                            }));
-                          }}
-                          rows={2}
-                          className={`${fieldShapeClass({ dense: true, xs: true })} w-full resize-none read-only:opacity-60 read-only:cursor-not-allowed`}
-                        />
-                      </div>
-
-                      {/* Editable proposed fields */}
-                      <div className="space-y-1.5">
-                        {/* 列头：字段 / 当前 → 改为，避免管理员分不清哪列是现值哪列是改后 */}
+                        {/* 列头 */}
                         <div className="grid grid-cols-[110px_1fr_auto_1fr] gap-2 items-center text-[11px] font-medium uppercase tracking-wide text-muted/70">
                           <span>{t('admin.changes.colField')}</span>
                           <span>{t('admin.changes.colCurrent')}</span>
                           <span aria-hidden="true" />
                           <span>{t('admin.changes.colProposed')}</span>
                         </div>
-                        {EDITABLE_PROPOSED_FIELDS.map(field => (
-                          <div key={field} className="grid grid-cols-[110px_1fr_auto_1fr] gap-2 items-center">
-                            <span className="text-xs text-muted truncate" title={field}>{fieldLabel(field)}</span>
-                            <span className="text-xs text-secondary truncate" title={currentSnapshot[field] || ''}>{currentSnapshot[field] || '—'}</span>
-                            <ArrowRight className="w-3 h-3 flex-shrink-0 text-muted/50" aria-hidden="true" />
-                            {field === 'sponsor_level' ? (
-                              <select
-                                value={draft.proposed.sponsor_level}
-                                disabled={!canEdit}
-                                onChange={e => {
-                                  const value = e.target.value;
-                                  setEditDrafts(prev => ({
-                                    ...prev,
-                                    [cr.public_id]: { ...draft, proposed: { ...draft.proposed, sponsor_level: value } },
-                                  }));
-                                }}
-                                className={`${fieldShapeClass({ dense: true, xs: true })} disabled:opacity-60 disabled:cursor-not-allowed`}
-                              >
-                                {SPONSOR_LEVEL_OPTIONS.map(opt => (
-                                  <option key={opt || 'empty'} value={opt}>{opt || '(空)'}</option>
-                                ))}
-                              </select>
-                            ) : (
-                              <input
-                                type="text"
-                                value={draft.proposed[field]}
-                                readOnly={!canEdit}
-                                onChange={e => {
-                                  const value = e.target.value;
-                                  setEditDrafts(prev => ({
-                                    ...prev,
-                                    [cr.public_id]: { ...draft, proposed: { ...draft.proposed, [field]: value } },
-                                  }));
-                                }}
-                                className={`${fieldShapeClass({ dense: true, xs: true })} read-only:opacity-60 read-only:cursor-not-allowed`}
-                              />
-                            )}
-                          </div>
-                        ))}
+                        {/* 逐字段只读 diff */}
+                        {Object.entries(proposed).map(([k, v]) => {
+                          // 当前值（"现网真实值"）取值策略：
+                          //   auto            → live_current 优先、缺失回退提交快照
+                          //   manual          → 提交快照（人工通道无实时配置，快照是合法参照，warning 已说明）
+                          //   deleted / error → 不显示（''→'—'）：通道已删/读失败时没有可信"当前值"，
+                          //                     展示陈旧快照会误导审批方对错误基线放行（warning 已说明原因）
+                          //   其他/未知        → 提交快照（防御性向后兼容）
+                          const src = cr.live_current_source;
+                          const current = (
+                            src === 'auto'   ? (liveCurrent[k] ?? snapshot[k]) :
+                            src === 'manual' ? snapshot[k] :
+                            src === 'deleted' || src === 'error' ? '' :
+                            snapshot[k]
+                          ) ?? '';
+                          return (
+                            <div key={k} className="grid grid-cols-[110px_1fr_auto_1fr] gap-2 items-center text-sm">
+                              <span className="text-xs text-muted truncate" title={k}>{fieldLabel(k)}</span>
+                              <span className="text-xs text-secondary truncate" title={current}>{current || '—'}</span>
+                              <ArrowRight className="w-3 h-3 flex-shrink-0 text-muted/50" aria-hidden="true" />
+                              <span className="text-xs text-primary font-medium truncate" title={v}>{v || '—'}</span>
+                            </div>
+                          );
+                        })}
                       </div>
-
-                      {hasEdits && canEdit && (
-                        <div className="flex justify-end pt-1">
-                          <button
-                            onClick={() => onUpdate(cr.public_id, changedUpdates)}
-                            className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-accent/10 text-accent hover:bg-accent/20 transition"
-                          >
-                            <Save size={11} />{t('common.save', { defaultValue: '保存' })}
-                          </button>
-                        </div>
-                      )}
+                      <p className="mt-2 text-[11px] text-muted">{t('admin.changes.editElsewhereHint')}</p>
                     </div>
+
+                    {/* 审核备注（可编辑 / 只读）。key 确保父级 refetch 后以新备注重置本地草稿 */}
+                    <AdminNoteEditor
+                      key={`${cr.public_id}-${cr.admin_note ?? ''}`}
+                      cr={cr}
+                      onUpdate={onUpdate}
+                    />
 
                     {/* New API Key indicator */}
                     {cr.new_key_last4 && (
@@ -346,88 +294,80 @@ export function ChangeRequestList({
 
                     {/* Actions */}
                     <div className="space-y-2 pt-2">
-                      {hasEdits && canEdit && (
-                        <div className="flex items-center gap-1 text-xs text-warning" role="alert" aria-live="assertive">
-                          <AlertCircle className="w-3 h-3 flex-shrink-0" />
-                          有未保存修改，请先保存再审批
-                        </div>
-                      )}
                       <div className="flex gap-2 flex-wrap">
-                      {cr.status === 'pending' && (
-                        <>
-                          <button
-                            onClick={() => onApprove(cr.public_id)}
-                            disabled={(hasEdits && canEdit) || !!pendingActions?.[cr.public_id]}
-                            title={hasEdits && canEdit ? '请先保存修改' : undefined}
-                            className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-accent/10 text-accent hover:bg-accent/20 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            {pendingActions?.[cr.public_id] === 'approve'
-                              ? <Loader2 size={12} className="animate-spin" />
-                              : <Check size={12} />}
-                            {t('admin.changes.approve')}
-                          </button>
-                          <div className="flex items-center gap-1">
-                            <input
-                              type="text"
-                              value={rejectNote}
-                              onChange={e => setRejectNote(e.target.value)}
-                              placeholder={t('admin.changes.rejectNotePlaceholder')}
-                              className="px-2 py-1 text-xs rounded-lg bg-elevated border border-default text-primary w-48"
-                            />
+                        {cr.status === 'pending' && (
+                          <>
                             <button
-                              onClick={() => { onReject(cr.public_id, rejectNote); setRejectNote(''); }}
+                              onClick={() => onApprove(cr.public_id)}
                               disabled={!!pendingActions?.[cr.public_id]}
-                              className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-danger/10 text-danger hover:bg-danger/20 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                              className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-accent/10 text-accent hover:bg-accent/20 transition disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                              {pendingActions?.[cr.public_id] === 'reject'
+                              {pendingActions?.[cr.public_id] === 'approve'
                                 ? <Loader2 size={12} className="animate-spin" />
-                                : <X size={12} />}
-                              {t('admin.changes.reject')}
+                                : <Check size={12} />}
+                              {t('admin.changes.approve')}
+                            </button>
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="text"
+                                value={rejectNote}
+                                onChange={e => setRejectNote(e.target.value)}
+                                placeholder={t('admin.changes.rejectNotePlaceholder')}
+                                className={`${fieldShapeClass({ dense: true, xs: true })} w-48`}
+                              />
+                              <button
+                                onClick={() => { onReject(cr.public_id, rejectNote); setRejectNote(''); }}
+                                disabled={!!pendingActions?.[cr.public_id]}
+                                className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-danger/10 text-danger hover:bg-danger/20 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                {pendingActions?.[cr.public_id] === 'reject'
+                                  ? <Loader2 size={12} className="animate-spin" />
+                                  : <X size={12} />}
+                                {t('admin.changes.reject')}
+                              </button>
+                            </div>
+                          </>
+                        )}
+                        {cr.status === 'approved' && cr.apply_mode === 'auto' && (
+                          <button
+                            onClick={() => onApply(cr.public_id)}
+                            disabled={!!pendingActions?.[cr.public_id]}
+                            className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-success/10 text-success hover:bg-success/20 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {pendingActions?.[cr.public_id] === 'apply'
+                              ? <Loader2 size={12} className="animate-spin" />
+                              : <Play size={12} />}
+                            {t('admin.changes.apply')}
+                          </button>
+                        )}
+                        {confirmDeleteId === cr.public_id ? (
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs text-danger">{t('admin.changes.confirmDelete')}</span>
+                            <button
+                              onClick={() => { onDelete(cr.public_id); setConfirmDeleteId(null); }}
+                              className="px-2 py-1 text-xs rounded bg-danger text-white"
+                            >
+                              {t('admin.changes.delete')}
+                            </button>
+                            <button
+                              onClick={() => setConfirmDeleteId(null)}
+                              className="px-2 py-1 text-xs rounded border border-default text-muted"
+                            >
+                              {t('common.cancel')}
                             </button>
                           </div>
-                        </>
-                      )}
-                      {cr.status === 'approved' && cr.apply_mode === 'auto' && (
-                        <button
-                          onClick={() => onApply(cr.public_id)}
-                          disabled={(hasEdits && canEdit) || !!pendingActions?.[cr.public_id]}
-                          title={hasEdits && canEdit ? '请先保存修改' : undefined}
-                          className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-success/10 text-success hover:bg-success/20 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          {pendingActions?.[cr.public_id] === 'apply'
-                            ? <Loader2 size={12} className="animate-spin" />
-                            : <Play size={12} />}
-                          {t('admin.changes.apply')}
-                        </button>
-                      )}
-                      {confirmDeleteId === cr.public_id ? (
-                        <div className="flex items-center gap-1">
-                          <span className="text-xs text-danger">{t('admin.changes.confirmDelete')}</span>
+                        ) : (
                           <button
-                            onClick={() => { onDelete(cr.public_id); setConfirmDeleteId(null); }}
-                            className="px-2 py-1 text-xs rounded bg-danger text-white"
+                            onClick={() => setConfirmDeleteId(cr.public_id)}
+                            disabled={!!pendingActions?.[cr.public_id]}
+                            className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg text-muted hover:text-danger transition ml-auto disabled:opacity-50 disabled:cursor-not-allowed"
                           >
+                            {pendingActions?.[cr.public_id] === 'delete'
+                              ? <Loader2 size={12} className="animate-spin" />
+                              : <Trash2 size={12} />}
                             {t('admin.changes.delete')}
                           </button>
-                          <button
-                            onClick={() => setConfirmDeleteId(null)}
-                            className="px-2 py-1 text-xs rounded border border-default text-muted"
-                          >
-                            {t('common.cancel')}
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          onClick={() => setConfirmDeleteId(cr.public_id)}
-                          disabled={!!pendingActions?.[cr.public_id]}
-                          className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg text-muted hover:text-danger transition ml-auto disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          {pendingActions?.[cr.public_id] === 'delete'
-                            ? <Loader2 size={12} className="animate-spin" />
-                            : <Trash2 size={12} />}
-                          {t('admin.changes.delete')}
-                        </button>
-                      )}
+                        )}
                       </div>
                     </div>
                   </div>

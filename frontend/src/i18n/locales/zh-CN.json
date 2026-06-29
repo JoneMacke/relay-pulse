@@ -891,6 +891,12 @@
       "adminEdit": "管理员修改",
       "readOnly": "只读",
       "currentSnapshot": "当前快照",
+      "liveUnavailable": {
+        "manual": "该通道为人工模式，对照提交时快照",
+        "deleted": "通道已不存在，对照提交时快照",
+        "error": "读取当前配置失败，对照提交时快照"
+      },
+      "editElsewhereHint": "如需调整其它通道字段，请到「通道管理」",
       "colField": "字段",
       "colCurrent": "当前",
       "colProposed": "改为",
