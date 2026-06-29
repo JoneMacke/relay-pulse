@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"monitor/internal/config"
@@ -132,6 +133,12 @@ func (s *PostgresStorage) Init() error {
 		return err
 	}
 	if err := s.ensureErrorDetailColumn(); err != nil {
+		return err
+	}
+	if err := s.ensureProbeHistoryModelIDColumn(); err != nil {
+		return err
+	}
+	if err := s.ensureProbeHistoryModelIDIndex(); err != nil {
 		return err
 	}
 
@@ -330,6 +337,79 @@ func (s *PostgresStorage) ensureErrorDetailColumn() error {
 	}
 
 	logger.Info("storage", "已为 probe_history 表添加 error_detail 列 (PostgreSQL)")
+	return nil
+}
+
+// ensureProbeHistoryModelIDColumn 在旧表上添加 model_id 列（向后兼容，可空，无默认值）
+func (s *PostgresStorage) ensureProbeHistoryModelIDColumn() error {
+	ctx := s.effectiveCtx()
+	checkQuery := `
+		SELECT COUNT(*)
+		FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = 'probe_history' AND column_name = 'model_id'
+	`
+
+	var count int
+	if err := s.pool.QueryRow(ctx, checkQuery).Scan(&count); err != nil {
+		return fmt.Errorf("查询 PostgreSQL 表结构失败: %w", err)
+	}
+
+	if count > 0 {
+		return nil // 列已存在，无需添加
+	}
+
+	if _, err := s.pool.Exec(ctx, `ALTER TABLE probe_history ADD COLUMN model_id TEXT`); err != nil {
+		return fmt.Errorf("添加 model_id 列失败: %w", err)
+	}
+
+	logger.Info("storage", "已为 probe_history 表添加 model_id 列 (PostgreSQL)")
+	return nil
+}
+
+// ensureProbeHistoryModelIDIndex 创建 model_id 的部分覆盖索引（处理 invalid 残留，幂等）。
+// 使用 CREATE INDEX CONCURRENTLY，不能在事务内运行；Init() 的 ensure 段直接用 s.pool.Exec，符合此约束。
+func (s *PostgresStorage) ensureProbeHistoryModelIDIndex() error {
+	ctx := s.effectiveCtx()
+
+	// 检查索引是否存在，以及是否有效（CONCURRENTLY 中断会留下 invalid 索引）。
+	// 用 to_regclass 按当前 search_path 解析，并校验索引归属 probe_history，
+	// 避免其他 schema 下同名索引导致误判跳过创建（索引不存在时 to_regclass 返回 NULL → 0 行 → 走 no-rows 分支创建）。
+	var exists, valid bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT true, i.indisvalid
+		FROM pg_class c
+		JOIN pg_index i ON i.indexrelid = c.oid
+		WHERE c.oid = to_regclass('idx_probe_history_mid_ts')
+		  AND i.indrelid = to_regclass('probe_history')`).Scan(&exists, &valid)
+	if err != nil {
+		// 没有行表示索引不存在，继续创建
+		if errors.Is(err, pgx.ErrNoRows) {
+			exists = false
+		} else {
+			return fmt.Errorf("检查 model_id 索引状态失败: %w", err)
+		}
+	}
+
+	if exists && !valid {
+		// 清理 CONCURRENTLY 中断后留下的 invalid 索引
+		if _, derr := s.pool.Exec(ctx, `DROP INDEX CONCURRENTLY IF EXISTS idx_probe_history_mid_ts`); derr != nil {
+			return fmt.Errorf("清理 invalid model_id 索引失败: %w", derr)
+		}
+		exists = false
+	}
+
+	if exists {
+		return nil // 索引已存在且有效，无需创建
+	}
+
+	if _, err := s.pool.Exec(ctx, `
+		CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_probe_history_mid_ts
+		ON probe_history (model_id, timestamp DESC)
+		INCLUDE (status, sub_status, latency, id, http_code)
+		WHERE model_id IS NOT NULL`); err != nil {
+		return fmt.Errorf("创建 model_id 索引失败: %w", err)
+	}
+
 	return nil
 }
 

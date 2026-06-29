@@ -653,6 +653,23 @@ func TestSaveStatusEvent_Idempotent(t *testing.T) {
 	}
 }
 
+// --- model_id column and index ---
+
+func TestInitAddsModelIDColumnAndIndex(t *testing.T) {
+	s := newTestStore(t)
+
+	// model_id column must exist
+	cols := columnNames(t, s.db, "probe_history")
+	if !cols["model_id"] {
+		t.Fatal("probe_history 缺 model_id 列")
+	}
+
+	// partial index must exist
+	if !sqliteObjectExists(t, s.db, "index", "idx_probe_history_mid_ts") {
+		t.Fatal("缺 idx_probe_history_mid_ts 索引")
+	}
+}
+
 // --- WithContext ---
 
 func TestWithContext(t *testing.T) {

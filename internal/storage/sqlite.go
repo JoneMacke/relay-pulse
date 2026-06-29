@@ -94,6 +94,12 @@ func (s *SQLiteStorage) Init() error {
 	if err := s.ensureErrorDetailColumn(); err != nil {
 		return err
 	}
+	if err := s.ensureProbeHistoryModelIDColumn(); err != nil {
+		return err
+	}
+	if err := s.ensureProbeHistoryModelIDIndex(); err != nil {
+		return err
+	}
 
 	// 在列迁移完成后创建索引
 	//
@@ -370,6 +376,56 @@ func (s *SQLiteStorage) ensureErrorDetailColumn() error {
 	}
 
 	logger.Info("storage", "已为 probe_history 表添加 error_detail 列")
+	return nil
+}
+
+// ensureProbeHistoryModelIDColumn 在旧表上添加 model_id 列（向后兼容，可空，无默认值）
+func (s *SQLiteStorage) ensureProbeHistoryModelIDColumn() error {
+	ctx := s.effectiveCtx()
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(probe_history)`)
+	if err != nil {
+		return fmt.Errorf("检查 model_id 列失败: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid          int
+			name         string
+			colType      string
+			notNull      int
+			defaultValue sql.NullString
+			pk           int
+		)
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &pk); err != nil {
+			return fmt.Errorf("扫描表结构失败: %w", err)
+		}
+		if name == "model_id" {
+			return nil // 列已存在，无需添加
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("遍历表结构失败: %w", err)
+	}
+
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE probe_history ADD COLUMN model_id TEXT`); err != nil {
+		return fmt.Errorf("添加 model_id 列失败: %w", err)
+	}
+
+	logger.Info("storage", "已为 probe_history 表添加 model_id 列")
+	return nil
+}
+
+// ensureProbeHistoryModelIDIndex 创建 model_id 的部分索引（幂等）
+func (s *SQLiteStorage) ensureProbeHistoryModelIDIndex() error {
+	ctx := s.effectiveCtx()
+	if _, err := s.db.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_probe_history_mid_ts
+		ON probe_history(model_id, timestamp DESC)
+		WHERE model_id IS NOT NULL`); err != nil {
+		return fmt.Errorf("创建 model_id 索引失败: %w", err)
+	}
 	return nil
 }
 
