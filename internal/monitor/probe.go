@@ -31,7 +31,8 @@ type ProbeResult struct {
 	Provider        string
 	Service         string
 	Channel         string
-	Model           string            // 模型标识
+	Model           string            // 模型展示名
+	ModelID         string            // 稳定模型 id（md_<uuidv4>），为空表示配置未填
 	Status          int               // 1=绿, 0=红, 2=黄
 	SubStatus       storage.SubStatus // 细分状态（黄色/红色原因）
 	HttpCode        int               // HTTP 状态码（0 表示非 HTTP 错误）
@@ -133,6 +134,7 @@ func (p *Prober) Probe(ctx context.Context, cfg *config.ServiceConfig) *ProbeRes
 		Service:   cfg.Service,
 		Channel:   cfg.Channel,
 		Model:     cfg.Model,
+		ModelID:   cfg.ModelID,
 		Timestamp: time.Now().Unix(),
 		SubStatus: storage.SubStatusNone,
 		HttpCode:  0, // 默认为 0，表示非 HTTP 错误
@@ -897,6 +899,7 @@ func (p *Prober) SaveResult(result *ProbeResult) (*storage.ProbeRecord, error) {
 		Service:     result.Service,
 		Channel:     result.Channel,
 		Model:       result.Model,
+		ModelID:     result.ModelID,
 		Status:      result.Status,
 		SubStatus:   result.SubStatus,
 		HttpCode:    result.HttpCode,

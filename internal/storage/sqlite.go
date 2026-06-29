@@ -509,8 +509,8 @@ func (s *SQLiteStorage) Close() error {
 func (s *SQLiteStorage) SaveRecord(record *ProbeRecord) error {
 	ctx := s.effectiveCtx()
 	query := `
-		INSERT INTO probe_history (provider, service, channel, model, status, sub_status, http_code, latency, timestamp, error_detail)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO probe_history (provider, service, channel, model, status, sub_status, http_code, latency, timestamp, error_detail, model_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	result, err := s.db.ExecContext(ctx, query,
@@ -524,6 +524,7 @@ func (s *SQLiteStorage) SaveRecord(record *ProbeRecord) error {
 		record.Latency,
 		record.Timestamp,
 		record.ErrorDetail,
+		record.ModelID,
 	)
 
 	if err != nil {

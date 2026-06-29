@@ -670,6 +670,23 @@ func TestInitAddsModelIDColumnAndIndex(t *testing.T) {
 	}
 }
 
+// --- model_id write path ---
+
+func TestSaveRecordPersistsModelID(t *testing.T) {
+	s := newTestStore(t)
+	rec := &ProbeRecord{Provider: "P", Service: "cc", Channel: "c", Model: "Opus", ModelID: "md_test-1", Status: 1, Timestamp: 1000}
+	if err := s.SaveRecord(rec); err != nil {
+		t.Fatal(err)
+	}
+	var got sql.NullString
+	if err := s.db.QueryRow(`SELECT model_id FROM probe_history WHERE provider='P'`).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Valid || got.String != "md_test-1" {
+		t.Fatalf("model_id 未持久化，got %#v", got)
+	}
+}
+
 // --- WithContext ---
 
 func TestWithContext(t *testing.T) {

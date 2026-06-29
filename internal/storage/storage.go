@@ -28,7 +28,8 @@ type ProbeRecord struct {
 	Provider    string
 	Service     string
 	Channel     string    // 业务通道标识
-	Model       string    // 模型标识（可为空，兼容旧数据）
+	Model       string    // 模型展示名（可为空，兼容旧数据）
+	ModelID     string    // 稳定模型 id（md_<uuidv4>），为空表示尚未回填
 	Status      int       // 1=绿, 0=红, 2=黄
 	SubStatus   SubStatus // 细分状态（黄色/红色原因）
 	HttpCode    int       // HTTP 状态码（0 表示非 HTTP 错误，如网络错误）

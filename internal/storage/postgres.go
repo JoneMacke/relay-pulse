@@ -490,8 +490,8 @@ func (s *PostgresStorage) Close() error {
 func (s *PostgresStorage) SaveRecord(record *ProbeRecord) error {
 	ctx := s.effectiveCtx()
 	query := `
-		INSERT INTO probe_history (provider, service, channel, model, status, sub_status, http_code, latency, timestamp, error_detail)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		INSERT INTO probe_history (provider, service, channel, model, status, sub_status, http_code, latency, timestamp, error_detail, model_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING id
 	`
 
@@ -506,6 +506,7 @@ func (s *PostgresStorage) SaveRecord(record *ProbeRecord) error {
 		record.Latency,
 		record.Timestamp,
 		record.ErrorDetail,
+		record.ModelID,
 	).Scan(&record.ID)
 
 	if err != nil {
