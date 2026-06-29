@@ -701,6 +701,50 @@ func TestUpdate_ChildMatchingIgnoresOrder(t *testing.T) {
 	}
 }
 
+// --- Update: child model-id–based matching (Task 8) ---
+
+// TestPreserveHiddenFieldsAcrossChildModelRename 验证当子通道展示名被重命名时，
+// 只要 model_id 相同，admin 隐藏字段（EnvVarName/RequestModel 等）仍被保留。
+// 这是 Task 8 所修复的 bug：旧逻辑仅按 parent+model 匹配，改名后找不到匹配导致字段丢失。
+func TestPreserveHiddenFieldsAcrossChildModelRename(t *testing.T) {
+	existing := &MonitorFile{Monitors: []ServiceConfig{
+		{Provider: "P", Service: "cc", Channel: "c"},
+		{Parent: "P/cc/c", Model: "OldName", ModelID: "md_x", EnvVarName: "FOO", RequestModel: "real-model"},
+	}}
+	updated := &MonitorFile{Monitors: []ServiceConfig{
+		{Provider: "P", Service: "cc", Channel: "c"},
+		{Parent: "P/cc/c", Model: "NewName", ModelID: "md_x"}, // 展示名已改，model_id 不变，客户端未携带隐藏字段
+	}}
+	preserveAdminHiddenFields(updated, existing)
+	child := &updated.Monitors[1]
+	if child.EnvVarName != "FOO" {
+		t.Errorf("EnvVarName 应跨改名保留，got %q", child.EnvVarName)
+	}
+	if child.RequestModel != "real-model" {
+		t.Errorf("RequestModel 应跨改名保留，got %q", child.RequestModel)
+	}
+	if child.ModelID != "md_x" {
+		t.Errorf("ModelID 应保留，got %q", child.ModelID)
+	}
+}
+
+// TestPreserveHiddenFieldsLegacyNoIDStillMatchesByModel 验证无 model_id 的 legacy 子通道
+// 仍按展示名（parent+model）匹配，确保零回归。
+func TestPreserveHiddenFieldsLegacyNoIDStillMatchesByModel(t *testing.T) {
+	existing := &MonitorFile{Monitors: []ServiceConfig{
+		{Provider: "P", Service: "cc", Channel: "c"},
+		{Parent: "P/cc/c", Model: "M1", EnvVarName: "BAR"},
+	}}
+	updated := &MonitorFile{Monitors: []ServiceConfig{
+		{Provider: "P", Service: "cc", Channel: "c"},
+		{Parent: "P/cc/c", Model: "M1"}, // 展示名不变，无 model_id
+	}}
+	preserveAdminHiddenFields(updated, existing)
+	if updated.Monitors[1].EnvVarName != "BAR" {
+		t.Errorf("legacy 按展示名匹配应保留 EnvVarName，got %q", updated.Monitors[1].EnvVarName)
+	}
+}
+
 func TestDelete_Success(t *testing.T) {
 	configDir, _ := setupTestMonitorsDir(t)
 	store := NewMonitorStore(filepath.Join(configDir, MonitorsDirName))

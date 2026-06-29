@@ -232,19 +232,31 @@ func preserveAdminHiddenFields(updated, existing *MonitorFile) {
 		copyAdminHiddenFields(updatedRoot, existingRoot)
 	}
 
-	// child 按 parent+model 匹配
-	existingChildren := make(map[string]*ServiceConfig, len(existing.Monitors))
+	// child 按双通道匹配：model_id 优先，展示名兜底（zero regression for legacy children without id）。
+	existingByID := make(map[string]*ServiceConfig, len(existing.Monitors))    // parent + NUL + model_id
+	existingByModel := make(map[string]*ServiceConfig, len(existing.Monitors)) // parent + NUL + model（展示名）
 	for i := range existing.Monitors {
 		if strings.TrimSpace(existing.Monitors[i].Parent) == "" {
 			continue
 		}
-		existingChildren[childMatchKey(existing.Monitors[i])] = &existing.Monitors[i]
+		if key, ok := childMatchKeyByModelID(existing.Monitors[i]); ok {
+			existingByID[key] = &existing.Monitors[i]
+		}
+		existingByModel[childMatchKeyByModel(existing.Monitors[i])] = &existing.Monitors[i]
 	}
 	for i := range updated.Monitors {
 		if strings.TrimSpace(updated.Monitors[i].Parent) == "" {
 			continue
 		}
-		if src, ok := existingChildren[childMatchKey(updated.Monitors[i])]; ok {
+		// Pass 1: 按 model_id 匹配（跨展示名改名保留 hidden fields）
+		if key, ok := childMatchKeyByModelID(updated.Monitors[i]); ok {
+			if src, hit := existingByID[key]; hit {
+				copyAdminHiddenFields(&updated.Monitors[i], src)
+				continue
+			}
+		}
+		// Pass 2: 按展示名匹配（legacy 无 id / id 未命中时的兜底）
+		if src, ok := existingByModel[childMatchKeyByModel(updated.Monitors[i])]; ok {
 			copyAdminHiddenFields(&updated.Monitors[i], src)
 		}
 		// 新增 child（无匹配）不继承，删除 child（不在 updated 中）自然消失
@@ -261,8 +273,18 @@ func findRootMonitor(monitors []ServiceConfig) *ServiceConfig {
 	return nil
 }
 
-// childMatchKey 生成子通道匹配键：parent + NUL + model。
-func childMatchKey(m ServiceConfig) string {
+// childMatchKeyByModelID 返回按 parent+model_id 的稳定匹配键。
+// model_id 为空时 ok=false，调用方应回退到展示名匹配。
+func childMatchKeyByModelID(m ServiceConfig) (string, bool) {
+	id := strings.TrimSpace(m.ModelID)
+	if id == "" {
+		return "", false
+	}
+	return strings.TrimSpace(m.Parent) + "\x00" + id, true
+}
+
+// childMatchKeyByModel 返回按 parent+展示名 的匹配键（legacy 兜底）。
+func childMatchKeyByModel(m ServiceConfig) string {
 	return strings.TrimSpace(m.Parent) + "\x00" + strings.TrimSpace(m.Model)
 }
 
