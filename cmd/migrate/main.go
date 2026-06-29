@@ -190,6 +190,11 @@ func run(configFile string, dryRun bool) error {
 			Monitors: g.monitors,
 		}
 
+		// 铸入稳定 id（channel_id 文件级 / model_id 每行），与 MonitorStore.Create / 回填 CLI
+		// 共用同一幂等逻辑。否则迁移产物缺 model_id，会触发 CheckRuntimeModelIDs fail-closed
+		// 在启动期中止、或热更新期跳过整份配置。
+		config.BackfillFileIDs(&file)
+
 		path := filepath.Join(monitorsDirPath, key+".yaml")
 		if _, err := os.Stat(path); err == nil {
 			return fmt.Errorf("文件已存在: %s（请先手动处理）", path)

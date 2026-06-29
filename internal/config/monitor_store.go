@@ -222,7 +222,8 @@ func (s *MonitorStore) Create(file *MonitorFile) error {
 // preserveAdminHiddenFields 把 admin PUT 不应改写的持久化字段从 existing 合并到 updated：
 // 既含不参与 JSON round-trip 的 json:"-" 字段，也含对客户端可见但系统维护、不可变的稳定 id。
 func preserveAdminHiddenFields(updated, existing *MonitorFile) {
-	// channel_id 文件级不可变：无条件从 existing 还原（legacy 为空则保持空，回填交给 CLI）。
+	// channel_id 文件级不可变：先无条件从 existing 还原，防止 admin PUT 篡改；legacy 空值由
+	// 调用方 Update 在写盘前的 BackfillFileIDs 自动补齐（不再依赖手动跑回填 CLI）。
 	updated.Metadata.ChannelID = existing.Metadata.ChannelID
 
 	// root 对 root
@@ -341,8 +342,13 @@ func (s *MonitorStore) Update(key string, file *MonitorFile, expectedRevision in
 		return fmt.Errorf("PSC 不可变更: %s -> %s", key, newKey)
 	}
 
-	// 回填 json:"-" 字段，防止 admin API round-trip 丢失
+	// 回填 json:"-" 字段与既有稳定 id（按 parent+model_id/展示名匹配），防止 admin API round-trip 丢失。
 	preserveAdminHiddenFields(file, &existing)
+
+	// 给仍缺失稳定 id 的行铸新 id（真新增的父/子行，或 legacy 空 id）；与 Create / 回填 CLI
+	// 共用同一幂等逻辑，已有 id 绝不覆盖。缺这步时，经 admin 编辑新增的子通道行会无 model_id，
+	// 触发 CheckRuntimeModelIDs fail-closed 跳过整份配置热更新（admin 保存返回 200，运行态却静默不变）。
+	BackfillFileIDs(file)
 
 	file.Metadata.Revision = expectedRevision + 1
 	file.Metadata.CreatedAt = existing.Metadata.CreatedAt // 保留创建时间

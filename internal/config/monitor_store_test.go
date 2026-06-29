@@ -517,6 +517,64 @@ func TestUpdate_NewChildDoesNotInheritHiddenFields(t *testing.T) {
 	}
 }
 
+// TestUpdate_MintsModelIDForNewChild 复现并防回归 owlai/cx/O-web 事故：
+// admin「编辑→保存」给既有通道新增子通道行时，前端不携带 model_id；v2.53.0 起
+// CheckRuntimeModelIDs 是 fail-closed 硬校验，任一行缺 model_id 会跳过整份配置热更新
+// （admin 保存仍返回 200，运行态却静默不变）。Update 必须像 Create 一样对真新增行铸
+// model_id（既有 id 幂等不动），否则一次普通编辑就会卡死全站热更新。
+func TestUpdate_MintsModelIDForNewChild(t *testing.T) {
+	configDir, _ := setupTestMonitorsDir(t)
+	store := NewMonitorStore(filepath.Join(configDir, MonitorsDirName))
+
+	// 既有文件：父行已有稳定 id（模拟已回填的父），暂无子通道。
+	writeTestMonitorFile(t, configDir, "acme--cc--vip", strings.Join([]string{
+		"metadata:",
+		"  source: admin",
+		"  revision: 1",
+		"  channel_id: ch_11111111-1111-4111-8111-111111111111",
+		"  created_at: \"2026-03-14T00:00:00Z\"",
+		"  updated_at: \"2026-03-14T00:00:00Z\"",
+		"monitors:",
+		"  - provider: acme",
+		"    service: cc",
+		"    channel: vip",
+		"    model: Parent",
+		"    model_id: md_22222222-2222-4222-8222-222222222222",
+	}, "\n"))
+
+	// admin 保存：父行（带原 id）+ 新增子通道（前端不发 model_id）。
+	updated := &MonitorFile{
+		Monitors: []ServiceConfig{
+			{Provider: "acme", Service: "cc", Channel: "vip", Model: "Parent",
+				ModelID: "md_22222222-2222-4222-8222-222222222222"},
+			{Parent: "acme/cc/vip", Model: "gpt-5.4"},
+		},
+	}
+	if err := store.Update("acme--cc--vip", updated, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.Get("acme--cc--vip")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 新增子通道必须被铸入合法 model_id，否则 CheckRuntimeModelIDs 会拦下整份热更新。
+	child := findMonitorByModel(t, got.Monitors, "gpt-5.4")
+	if !IsValidModelID(child.ModelID) {
+		t.Errorf("新增子通道未铸 model_id: %q", child.ModelID)
+	}
+	// 父行稳定 id 不可变。
+	parent := findMonitorByModel(t, got.Monitors, "Parent")
+	if parent.ModelID != "md_22222222-2222-4222-8222-222222222222" {
+		t.Errorf("父行 model_id 应不可变, got %q", parent.ModelID)
+	}
+	// 整份配置应通过 fail-closed 运行时校验。
+	if err := CheckRuntimeModelIDs(got.Monitors); err != nil {
+		t.Errorf("CheckRuntimeModelIDs 应通过: %v", err)
+	}
+}
+
 func TestUpdate_DeletedChildDisappears(t *testing.T) {
 	configDir, _ := setupTestMonitorsDir(t)
 	store := NewMonitorStore(filepath.Join(configDir, MonitorsDirName))
