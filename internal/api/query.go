@@ -164,24 +164,21 @@ func (h *Handler) queryAndSerialize(ctx context.Context, period, align string, t
 	return json.Marshal(result)
 }
 
-// getStatusBatch 批量查询（GetLatestBatch + GetHistoryBatch/GetTimelineAggBatch）
-// 将 N 个监测项的查询从 2N 次 SQL 往返降为 2 次，显著优化 7d/30d 场景性能
+// getStatusBatch 批量查询（GetLatestBatchByModelID + GetHistoryBatchByModelID/GetTimelineAggBatchByModelID）
+// 将 N 个监测项的查询从 2N 次 SQL 往返降为 2 次，显著优化 7d/30d 场景性能。
+// 按 model_id（稳定键）查询，改展示名不再断历史；结果 map 以 ProbeHistoryKey 为键，
+// 组装时用同一构建方式反查（见 probeHistoryKey）。
 func (h *Handler) getStatusBatch(ctx context.Context, monitors []config.ServiceConfig, since, endTime time.Time, period string, degradedWeight float64, timeFilter *TimeFilter, enableAnnotations bool, enableDBTimelineAgg bool) ([]MonitorResult, error) {
 	store := h.storage.WithContext(ctx)
 
-	// 构建查询 key 列表
-	keys := make([]storage.MonitorKey, 0, len(monitors))
+	// 构建查询 key 列表（model_id 维度）
+	keys := make([]storage.ProbeHistoryKey, 0, len(monitors))
 	for _, task := range monitors {
-		keys = append(keys, storage.MonitorKey{
-			Provider: task.Provider,
-			Service:  task.Service,
-			Channel:  task.Channel,
-			Model:    task.Model,
-		})
+		keys = append(keys, probeHistoryKey(task))
 	}
 
 	// 批量获取最新记录
-	latestMap, err := store.GetLatestBatch(keys)
+	latestMap, err := store.GetLatestBatchByModelID(keys)
 	if err != nil {
 		return nil, fmt.Errorf("批量查询最新记录失败: %w", err)
 	}
@@ -190,9 +187,9 @@ func (h *Handler) getStatusBatch(ctx context.Context, monitors []config.ServiceC
 	//
 	// 保守策略：
 	// - 仅当 enable_db_timeline_agg=true 且存储实现支持 TimelineAggStorage 时启用
-	// - 任意错误都回退到原有 GetHistoryBatch + buildTimeline 逻辑，确保不影响功能
+	// - 任意错误都回退到 GetHistoryBatchByModelID + buildTimeline 逻辑，确保不影响功能
 	useDBAgg := enableDBTimelineAgg && (period == "7d" || period == "30d")
-	var aggMap map[storage.MonitorKey][]storage.AggBucketRow
+	var aggMap map[storage.ProbeHistoryKey][]storage.AggBucketRow
 	if useDBAgg {
 		if aggStore, ok := store.(storage.TimelineAggStorage); ok {
 			bucketCount, bucketWindow, _ := h.determineBucketStrategy(period)
@@ -205,7 +202,7 @@ func (h *Handler) getStatusBatch(ctx context.Context, monitors []config.ServiceC
 						CrossMidnight: timeFilter.CrossMidnight,
 					}
 				}
-				aggMap, err = aggStore.GetTimelineAggBatch(keys, since, endTime, bucketCount, bucketWindow, tf)
+				aggMap, err = aggStore.GetTimelineAggBatchByModelID(keys, since, endTime, bucketCount, bucketWindow, tf)
 				if err != nil {
 					logger.Warn("api", "DB 时间轴聚合失败，回退到应用层聚合", "error", err, "period", period, "monitors", len(monitors))
 					aggMap = nil
@@ -217,9 +214,9 @@ func (h *Handler) getStatusBatch(ctx context.Context, monitors []config.ServiceC
 	}
 
 	// 回退路径：批量获取历史记录（原有逻辑）
-	var historyMap map[storage.MonitorKey][]*storage.ProbeRecord
+	var historyMap map[storage.ProbeHistoryKey][]*storage.ProbeRecord
 	if aggMap == nil {
-		historyMap, err = store.GetHistoryBatch(keys, since)
+		historyMap, err = store.GetHistoryBatchByModelID(keys, since)
 		if err != nil {
 			return nil, fmt.Errorf("批量查询历史记录失败: %w", err)
 		}
@@ -228,12 +225,7 @@ func (h *Handler) getStatusBatch(ctx context.Context, monitors []config.ServiceC
 	// 组装结果（保持原有顺序）
 	results := make([]MonitorResult, len(monitors))
 	for i, task := range monitors {
-		key := storage.MonitorKey{
-			Provider: task.Provider,
-			Service:  task.Service,
-			Channel:  task.Channel,
-			Model:    task.Model,
-		}
+		key := probeHistoryKey(task)
 		if aggMap != nil {
 			// timeline 由 DB 聚合结果生成（与 buildTimeline 输出格式一致）
 			res := h.buildMonitorResult(task, latestMap[key], nil, endTime, period, degradedWeight, timeFilter, enableAnnotations)
@@ -256,14 +248,14 @@ func (h *Handler) getStatusSerial(ctx context.Context, monitors []config.Service
 	for _, task := range monitors {
 		monitorKey := formatMonitorKey(task.Provider, task.Service, task.Channel, task.Model)
 
-		// 获取最新记录
-		latest, err := store.GetLatest(task.Provider, task.Service, task.Channel, task.Model)
+		// 获取最新记录（按 model_id 稳定键查询，改展示名不断历史）
+		latest, err := store.GetLatestByModelID(task.ModelID)
 		if err != nil {
 			return nil, fmt.Errorf("查询失败 %s: %w", monitorKey, err)
 		}
 
 		// 获取历史记录
-		history, err := store.GetHistory(task.Provider, task.Service, task.Channel, task.Model, since)
+		history, err := store.GetHistoryByModelID(task.ModelID, since)
 		if err != nil {
 			return nil, fmt.Errorf("查询历史失败 %s: %w", monitorKey, err)
 		}
@@ -291,14 +283,14 @@ func (h *Handler) getStatusConcurrent(ctx context.Context, monitors []config.Ser
 		g.Go(func() error {
 			monitorKey := formatMonitorKey(task.Provider, task.Service, task.Channel, task.Model)
 
-			// 获取最新记录
-			latest, err := store.GetLatest(task.Provider, task.Service, task.Channel, task.Model)
+			// 获取最新记录（按 model_id 稳定键查询，改展示名不断历史）
+			latest, err := store.GetLatestByModelID(task.ModelID)
 			if err != nil {
 				return fmt.Errorf("GetLatest %s: %w", monitorKey, err)
 			}
 
 			// 获取历史记录
-			history, err := store.GetHistory(task.Provider, task.Service, task.Channel, task.Model, since)
+			history, err := store.GetHistoryByModelID(task.ModelID, since)
 			if err != nil {
 				return fmt.Errorf("GetHistory %s: %w", monitorKey, err)
 			}
@@ -422,6 +414,21 @@ func formatMonitorKey(provider, service, channel, model string) string {
 		return provider + "/" + service + "/" + channel
 	}
 	return provider + "/" + service + "/" + channel + "/" + model
+}
+
+// probeHistoryKey 从运行时监测行构建 model_id 维度的 probe_history 查询键。
+//
+// ModelID 是批量读方法（GetLatestBatchByModelID 等）的查询与去重键；Provider/Service/
+// Channel/Model 仅用于日志与让返回 map 与调用方按身份对齐。构建查询列表与组装结果时
+// 必须复用本函数，保证两处 key 完全一致（否则结果 map 反查会静默 miss）。
+func probeHistoryKey(task config.ServiceConfig) storage.ProbeHistoryKey {
+	return storage.ProbeHistoryKey{
+		ModelID:  task.ModelID,
+		Provider: task.Provider,
+		Service:  task.Service,
+		Channel:  task.Channel,
+		Model:    task.Model,
+	}
 }
 
 // parsePeriod 解析时间范围（仅用于验证）

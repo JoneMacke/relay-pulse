@@ -166,13 +166,12 @@ func (h *Handler) AdminListMonitors(c *gin.Context) {
 // injectLatestProbe 给一批 summary 填充 LatestProbe 字段。
 //
 // 实现：
-//  1. 从 h.config.Monitors（已 resolveTemplates + parent_inheritance，model 字段是模板填充后的真实值）
-//     收集每个父 PSC 对应的所有 (PSCM, summaryIndex) 关联
-//  2. 用 storage.GetLatestBatch 一次批量查询所有 PSCM
+//  1. 从 h.config.Monitors（已 resolveTemplates + parent_inheritance，model_id 字段已回填）
+//     收集每个父 PSC 对应的所有 (model_id key, summaryIndex) 关联
+//  2. 用 storage.GetLatestBatchByModelID 一次按 model_id 批量查询
 //  3. 对每个 summary，选 timestamp 最大的记录填充 LatestProbe
 //
-// 与 AdminGetMonitorLogs 共用同一 PSCM 来源策略（运行时已解析配置），
-// 确保列表展示与日志面板字段级一致。
+// 按 model_id 稳定键查询，改展示名不断历史；列表活化与状态展示读路径口径一致。
 func (h *Handler) injectLatestProbe(summaries []config.MonitorSummary) {
 	if len(summaries) == 0 || h.storage == nil {
 		return
@@ -190,20 +189,15 @@ func (h *Handler) injectLatestProbe(summaries []config.MonitorSummary) {
 		pscToSummaryIdx[pscKey{s.Provider, s.Service, s.Channel}] = i
 	}
 
-	// 收集所有 PSCM；同时记录每个 PSCM 归属哪个 summary
-	keys := make([]storage.MonitorKey, 0, len(summaries))
-	keyToSummaryIdx := make(map[storage.MonitorKey]int, len(summaries))
+	// 收集所有 model_id 查询键；同时记录每个 key 归属哪个 summary
+	keys := make([]storage.ProbeHistoryKey, 0, len(summaries))
+	keyToSummaryIdx := make(map[storage.ProbeHistoryKey]int, len(summaries))
 	for _, m := range appCfg.Monitors {
 		idx, ok := pscToSummaryIdx[pscKey{m.Provider, m.Service, m.Channel}]
 		if !ok {
 			continue
 		}
-		k := storage.MonitorKey{
-			Provider: m.Provider,
-			Service:  m.Service,
-			Channel:  m.Channel,
-			Model:    m.Model,
-		}
+		k := probeHistoryKey(m)
 		keys = append(keys, k)
 		keyToSummaryIdx[k] = idx
 	}
@@ -211,7 +205,7 @@ func (h *Handler) injectLatestProbe(summaries []config.MonitorSummary) {
 		return
 	}
 
-	records, err := h.storage.GetLatestBatch(keys)
+	records, err := h.storage.GetLatestBatchByModelID(keys)
 	if err != nil {
 		logger.Warn("admin", "批量查询最新探测记录失败，列表退化为不带 latest_probe",
 			"key_count", len(keys), "error", err)
@@ -916,6 +910,7 @@ func (h *Handler) AdminGetMonitorLogs(c *gin.Context) {
 	db := h.storage.WithContext(queryCtx)
 	logs := make([]adminMonitorLogItem, 0, limit)
 	for _, k := range keys {
+		// admin logs 故意保留 PSCM 查询：孤儿/legacy（改名前）历史仍可按旧展示名查到
 		records, err := db.GetHistoryWithLimit(k.provider, k.service, k.channel, k.model, since, limit)
 		if err != nil {
 			logger.Error("admin", "查询监测日志失败",

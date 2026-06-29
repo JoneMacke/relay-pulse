@@ -249,7 +249,7 @@ func (h *Handler) executeStatusQuery(ctx context.Context, queries []StatusQuery)
 				// 聚合该 channel 下的所有 model，取最差状态
 				worstStatus := -1
 				var worstRecord *storage.ProbeRecord
-				for _, model := range ch.models {
+				for _, cm := range ch.models {
 					// 检查 context 是否已取消
 					select {
 					case <-ctx.Done():
@@ -257,10 +257,11 @@ func (h *Handler) executeStatusQuery(ctx context.Context, queries []StatusQuery)
 					default:
 					}
 
-					latest, err := store.GetLatest(target.provider, target.service, ch.name, model)
+					// 按 model_id 稳定键查询，改展示名不断历史
+					latest, err := store.GetLatestByModelID(cm.modelID)
 					if err != nil {
-						return nil, fmt.Errorf("查询失败(provider=%s service=%s channel=%s model=%s): %w",
-							target.provider, target.service, ch.name, model, err)
+						return nil, fmt.Errorf("查询失败(provider=%s service=%s channel=%s model=%s model_id=%s): %w",
+							target.provider, target.service, ch.name, cm.model, cm.modelID, err)
 					}
 
 					status := -1
@@ -320,12 +321,19 @@ func (h *Handler) executeStatusQuery(ctx context.Context, queries []StatusQuery)
 	}, nil
 }
 
+// channelModel 是 channel 下单个监测层的 model 标识。
+// modelID 是状态读取的稳定查询键（改展示名不断历史）；model 仅用于日志/错误信息。
+type channelModel struct {
+	model   string // 展示名（原始配置值，仅用于日志/错误信息）
+	modelID string // 稳定 model_id（查询键）
+}
+
 // channelInfo 通道信息（内部使用）
 type channelInfo struct {
-	name        string   // 原始配置值（用于数据库查询和 API 返回）
-	displayName string   // 显示名称（仅在与 name 不同时非空）
-	board       string   // hot/cold（channel 级别的 board 状态）
-	models      []string // 该 channel 下的所有 model（原始配置值）
+	name        string         // 原始配置值（用于 API 返回）
+	displayName string         // 显示名称（仅在与 name 不同时非空）
+	board       string         // hot/cold（channel 级别的 board 状态）
+	models      []channelModel // 该 channel 下的所有监测层（model_id + 展示名）
 }
 
 // serviceTarget 服务目标（内部使用）
@@ -406,8 +414,9 @@ func expandQueryTargets(monitors []config.ServiceConfig, boardsEnabled bool, q S
 		svcConfigs := serviceMap[svcLower]
 
 		// 收集该 service 下的 channel（并聚合每个 channel 的 models）
-		channelMap := make(map[string]*channelInfo)             // key: lowercase channel
-		modelSetByChannel := make(map[string]map[string]string) // chLower -> modelLower -> original model
+		channelMap := make(map[string]*channelInfo)                   // key: lowercase channel
+		modelSetByChannel := make(map[string]map[string]channelModel) // chLower -> model_id -> 监测层
+		modelIDsByChannel := make(map[string][]string)                // chLower -> 去重后的 model_id 列表
 
 		// board 统计：记录每个 channel 下是否有 hot/secondary/cold model
 		type boardStat struct {
@@ -444,25 +453,28 @@ func expandQueryTargets(monitors []config.ServiceConfig, boardsEnabled bool, q S
 				}
 			}
 
-			modelLower := strings.ToLower(strings.TrimSpace(m.Model))
+			// 以 model_id 为去重键（状态查询的稳定键）。同一 channel 下不同展示名但
+			// 同 model_id 的监测层会被折叠为一次查询（与状态展示读路径口径一致）。
+			modelID := strings.TrimSpace(m.ModelID)
 			if _, ok := modelSetByChannel[chLower]; !ok {
-				modelSetByChannel[chLower] = make(map[string]string)
+				modelSetByChannel[chLower] = make(map[string]channelModel)
 			}
-			if _, ok := modelSetByChannel[chLower][modelLower]; !ok {
-				modelSetByChannel[chLower][modelLower] = strings.TrimSpace(m.Model)
+			if _, ok := modelSetByChannel[chLower][modelID]; !ok {
+				modelSetByChannel[chLower][modelID] = channelModel{
+					model:   strings.TrimSpace(m.Model),
+					modelID: modelID,
+				}
+				modelIDsByChannel[chLower] = append(modelIDsByChannel[chLower], modelID)
 			}
 		}
 
 		// 为每个 channel 填充 models 列表和 board 状态
 		for chLower, ch := range channelMap {
-			for _, model := range modelSetByChannel[chLower] {
-				ch.models = append(ch.models, model)
-			}
-			if len(ch.models) == 0 {
-				// 兼容旧数据：model 为空时使用空字符串查询
-				ch.models = []string{""}
-			} else {
-				sort.Strings(ch.models)
+			// 按 model_id 排序，保证输出确定性（不依赖 map 迭代顺序）
+			ids := modelIDsByChannel[chLower]
+			sort.Strings(ids)
+			for _, id := range ids {
+				ch.models = append(ch.models, modelSetByChannel[chLower][id])
 			}
 
 			// 计算 channel 的 board：仅当 boards 启用且该 channel 全为 cold 时，视为 cold
