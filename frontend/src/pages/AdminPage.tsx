@@ -117,7 +117,7 @@ export default function AdminPage() {
                     onDelete={() => deleteSubmission(selectedSubmission.public_id)}
                     onPublish={(board) => publishSubmission(selectedSubmission.public_id, board)}
                     suggestedChannel={suggestedChannel}
-                    onBack={() => setSelectedSubmission(null)}
+                    onBack={() => { cancelDetail(); setSelectedSubmission(null); }}
                   />
                 ) : (
                   <SubmissionList
@@ -154,6 +154,7 @@ export default function AdminPage() {
                     monitorFile={monitor.selectedMonitor}
                     monitorKey={monitor.selectedKey}
                     onBack={() => {
+                      monitor.cancelDetail();
                       monitor.setSelectedMonitor(null);
                       monitor.setSelectedKey(null);
                     }}
