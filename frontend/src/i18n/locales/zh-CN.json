@@ -904,7 +904,8 @@
         "listed_since": "收录日期",
         "expires_at": "到期日期",
         "price_min": "最低价",
-        "price_max": "最高价"
+        "price_max": "最高价",
+        "base_url": "API 基础地址"
       },
       "testInfo": "测试信息",
       "testType": "服务类型",

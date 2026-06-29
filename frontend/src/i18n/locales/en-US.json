@@ -901,7 +901,8 @@
         "listed_since": "Listed Since",
         "expires_at": "Expires At",
         "price_min": "Min Price",
-        "price_max": "Max Price"
+        "price_max": "Max Price",
+        "base_url": "API Base URL"
       },
       "testInfo": "Test Info",
       "testType": "Service Type",

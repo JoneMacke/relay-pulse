@@ -860,15 +860,16 @@
       "colProposed": "Новое",
       "fields": {
         "provider_name": "Название провайдера",
-        "provider_url": "Сайт",
-        "website_url": "Сайт",
+        "provider_url": "URL сайта",
+        "website_url": "URL сайта",
         "channel_name": "Название канала",
         "category": "Категория",
         "sponsor_level": "Уровень спонсора",
         "listed_since": "Дата добавления",
         "expires_at": "Срок действия",
         "price_min": "Мин. цена",
-        "price_max": "Макс. цена"
+        "price_max": "Макс. цена",
+        "base_url": "Базовый URL API"
       },
       "testInfo": "Информация о тесте",
       "testType": "Тип сервиса",
