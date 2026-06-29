@@ -1030,6 +1030,144 @@ func (s *PostgresStorage) GetHistory(provider, service, channel, model string, s
 	return records, nil
 }
 
+// GetLatestByModelID 按 model_id 获取最新一条记录（跨展示名历史连续）。
+func (s *PostgresStorage) GetLatestByModelID(modelID string) (*ProbeRecord, error) {
+	ctx := s.effectiveCtx()
+	query := `
+		SELECT id, provider, service, channel, model, status, sub_status, http_code, latency, timestamp
+		FROM probe_history
+		WHERE model_id = $1
+		ORDER BY timestamp DESC, id DESC
+		LIMIT 1
+	`
+
+	var record ProbeRecord
+	var subStatusStr string
+	err := s.pool.QueryRow(ctx, query, modelID).Scan(
+		&record.ID,
+		&record.Provider,
+		&record.Service,
+		&record.Channel,
+		&record.Model,
+		&record.Status,
+		&subStatusStr,
+		&record.HttpCode,
+		&record.Latency,
+		&record.Timestamp,
+	)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("按 model_id 查询 PostgreSQL 最新记录失败: %w", err)
+	}
+
+	record.SubStatus = SubStatus(subStatusStr)
+	record.ModelID = modelID
+	return &record, nil
+}
+
+// GetHistoryByModelID 按 model_id 获取 since 之后的历史记录（时间升序，跨展示名历史连续）。
+func (s *PostgresStorage) GetHistoryByModelID(modelID string, since time.Time) ([]*ProbeRecord, error) {
+	ctx := s.effectiveCtx()
+	query := `
+		SELECT id, provider, service, channel, model, status, sub_status, http_code, latency, timestamp
+		FROM probe_history
+		WHERE model_id = $1 AND timestamp >= $2
+		ORDER BY timestamp DESC
+	`
+
+	rows, err := s.pool.Query(ctx, query, modelID, since.Unix())
+	if err != nil {
+		return nil, fmt.Errorf("按 model_id 查询 PostgreSQL 历史记录失败: %w", err)
+	}
+	defer rows.Close()
+
+	var records []*ProbeRecord
+	for rows.Next() {
+		var record ProbeRecord
+		var subStatusStr string
+		if err := rows.Scan(
+			&record.ID,
+			&record.Provider,
+			&record.Service,
+			&record.Channel,
+			&record.Model,
+			&record.Status,
+			&subStatusStr,
+			&record.HttpCode,
+			&record.Latency,
+			&record.Timestamp,
+		); err != nil {
+			return nil, fmt.Errorf("扫描 model_id PostgreSQL 历史记录失败: %w", err)
+		}
+		record.SubStatus = SubStatus(subStatusStr)
+		record.ModelID = modelID
+		records = append(records, &record)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("迭代 model_id PostgreSQL 历史记录失败: %w", err)
+	}
+
+	reverseRecords(records)
+	return records, nil
+}
+
+// GetHistoryWithLimitByModelID 按 model_id 获取 since 之后最近 limit 条记录（timestamp DESC + id DESC）。
+// 返回值保留时间倒序（最新在前）；包含 ErrorDetail 字段。
+func (s *PostgresStorage) GetHistoryWithLimitByModelID(modelID string, since time.Time, limit int) ([]*ProbeRecord, error) {
+	ctx := s.effectiveCtx()
+	if limit <= 0 {
+		limit = 200
+	}
+
+	query := `
+		SELECT id, provider, service, channel, model, status, sub_status, http_code, latency, timestamp, error_detail
+		FROM probe_history
+		WHERE model_id = $1 AND timestamp >= $2
+		ORDER BY timestamp DESC, id DESC
+		LIMIT $3
+	`
+
+	rows, err := s.pool.Query(ctx, query, modelID, since.Unix(), limit)
+	if err != nil {
+		return nil, fmt.Errorf("按 model_id 查询 PostgreSQL 限量历史记录失败: %w", err)
+	}
+	defer rows.Close()
+
+	records := make([]*ProbeRecord, 0, limit)
+	for rows.Next() {
+		var record ProbeRecord
+		var subStatusStr string
+		if err := rows.Scan(
+			&record.ID,
+			&record.Provider,
+			&record.Service,
+			&record.Channel,
+			&record.Model,
+			&record.Status,
+			&subStatusStr,
+			&record.HttpCode,
+			&record.Latency,
+			&record.Timestamp,
+			&record.ErrorDetail,
+		); err != nil {
+			return nil, fmt.Errorf("扫描 model_id PostgreSQL 限量历史记录失败: %w", err)
+		}
+		record.SubStatus = SubStatus(subStatusStr)
+		record.ModelID = modelID
+		records = append(records, &record)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("迭代 model_id PostgreSQL 限量历史记录失败: %w", err)
+	}
+
+	return records, nil
+}
+
 // GetHistoryWithLimit 获取指定 PSCM 在 since 之后的最近 limit 条记录，按 timestamp DESC + id DESC 返回。
 // 返回值保留时间倒序（最新在前），适合直接喂给管理后台日志面板；调用方需要升序时自行 reverseRecords。
 // 与 GetHistory 不同，此方法返回 ErrorDetail 字段（error_detail 不在覆盖索引 INCLUDE 列内，limit ≤ 1000 时回表成本可接受）。

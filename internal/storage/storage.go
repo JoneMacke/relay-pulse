@@ -197,14 +197,26 @@ type EventFilters struct {
 	Types    []EventType // 按事件类型过滤（可选，如 ["DOWN", "UP"]）
 }
 
+// ProbeHistoryKey 是 probe_history 的稳定身份键（model_id 维度）。
+// ModelID 是查询/分桶键；Provider/Service/Channel/Model 仅供日志与返回 map 对齐当前展示名。
+type ProbeHistoryKey struct {
+	ModelID  string
+	Provider string
+	Service  string
+	Channel  string
+	Model    string
+}
+
 // ===== 领域子接口 =====
 
 // RecordStorage 探测记录的读写操作
 //
 // 索引依赖说明：
-// - GetLatest 和 GetHistory 的性能依赖于 idx_probe_history_pscm_ts_cover 覆盖索引
-// - 两个方法都必须包含完整的 (provider, service, channel, model) 等值条件
-// - ⚠️ 如果新增不带 channel/model 参数的查询方法，需要重新评估索引策略
+//   - GetLatest 和 GetHistory 的性能依赖于 idx_probe_history_pscm_ts_cover 覆盖索引
+//   - 两个方法都必须包含完整的 (provider, service, channel, model) 等值条件
+//   - GetLatestByModelID / GetHistoryByModelID / GetHistoryWithLimitByModelID 依赖
+//     idx_probe_history_mid_ts 部分索引（WHERE model_id IS NOT NULL）
+//   - ⚠️ 如果新增不带 channel/model 参数的查询方法，需要重新评估索引策略
 type RecordStorage interface {
 	// SaveRecord 保存探测记录
 	SaveRecord(record *ProbeRecord) error
@@ -219,6 +231,18 @@ type RecordStorage interface {
 	// 与 GetHistory 不同，该方法返回值包含 ErrorDetail 字段，用于管理后台日志明细展示。
 	// limit <= 0 时回退到 200；上限 clamp 由上层 handler 负责。
 	GetHistoryWithLimit(provider, service, channel, model string, since time.Time, limit int) ([]*ProbeRecord, error)
+
+	// GetLatestByModelID 按 model_id 获取最新一条记录，跨展示名（model 字段）历史连续。
+	// 返回 nil, nil 表示无记录。
+	GetLatestByModelID(modelID string) (*ProbeRecord, error)
+
+	// GetHistoryByModelID 按 model_id 获取 since 之后的历史记录（时间升序），跨展示名历史连续。
+	GetHistoryByModelID(modelID string, since time.Time) ([]*ProbeRecord, error)
+
+	// GetHistoryWithLimitByModelID 按 model_id 获取 since 之后最近 limit 条记录（timestamp DESC + id DESC）。
+	// 与 GetHistoryByModelID 不同，该方法返回值包含 ErrorDetail 字段，返回倒序（最新在前）。
+	// limit <= 0 时回退到 200。
+	GetHistoryWithLimitByModelID(modelID string, since time.Time, limit int) ([]*ProbeRecord, error)
 
 	// GetLatestBatch 批量获取每个监测项的最新记录
 	GetLatestBatch(keys []MonitorKey) (map[MonitorKey]*ProbeRecord, error)

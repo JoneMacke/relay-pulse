@@ -23,6 +23,15 @@ func (panicStorage) GetHistory(string, string, string, string, time.Time) ([]*Pr
 func (panicStorage) GetHistoryWithLimit(string, string, string, string, time.Time, int) ([]*ProbeRecord, error) {
 	panic("not implemented")
 }
+func (panicStorage) GetLatestByModelID(string) (*ProbeRecord, error) {
+	panic("not implemented")
+}
+func (panicStorage) GetHistoryByModelID(string, time.Time) ([]*ProbeRecord, error) {
+	panic("not implemented")
+}
+func (panicStorage) GetHistoryWithLimitByModelID(string, time.Time, int) ([]*ProbeRecord, error) {
+	panic("not implemented")
+}
 func (panicStorage) GetLatestBatch([]MonitorKey) (map[MonitorKey]*ProbeRecord, error) {
 	panic("not implemented")
 }

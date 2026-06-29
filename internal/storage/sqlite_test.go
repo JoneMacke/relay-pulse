@@ -687,6 +687,40 @@ func TestSaveRecordPersistsModelID(t *testing.T) {
 	}
 }
 
+// --- model_id 读路径 ---
+
+func TestGetHistoryByModelIDSurvivesRename(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.SaveRecord(&ProbeRecord{Provider: "P", Service: "cc", Channel: "c", Model: "OldName", ModelID: "md_x", Status: 1, Timestamp: 1000}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveRecord(&ProbeRecord{Provider: "P", Service: "cc", Channel: "c", Model: "NewName", ModelID: "md_x", Status: 1, Timestamp: 2000}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetHistoryByModelID("md_x", time.Unix(0, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("model_id 应跨展示名连续，want 2 got %d", len(got))
+	}
+	latest, err := s.GetLatestByModelID("md_x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest == nil || latest.Timestamp != 2000 {
+		t.Fatalf("GetLatestByModelID 应返回最新行，got %#v", latest)
+	}
+	// 限量
+	lim, err := s.GetHistoryWithLimitByModelID("md_x", time.Unix(0, 0), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lim) != 1 {
+		t.Fatalf("limit=1 应返回 1 行，got %d", len(lim))
+	}
+}
+
 // --- WithContext ---
 
 func TestWithContext(t *testing.T) {
