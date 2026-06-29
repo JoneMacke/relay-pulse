@@ -307,6 +307,86 @@ func (s *Service) IssueProofWithExpiry(jobID, testType, apiURL, apiKey string) (
 
 // === 管理端 API ===
 
+// fillLiveCurrent 给变更请求填充通道的实时当前值（仅 proposed 涉及字段）。
+// 永不返回错误：manual/已删/读失败时仅置 LiveCurrentSource，LiveCurrent 留空，
+// 前端据此回退展示 current_snapshot，绝不让列表因实时读失败而整体不可用。
+func (s *Service) fillLiveCurrent(cr *ChangeRequest) {
+	s.mu.RLock()
+	ms := s.monitorStore
+	s.mu.RUnlock()
+
+	// 先判 manual：manual 通道本就不在 monitors.d/，与 ms 是否就绪无关，
+	// 不应在 ms==nil 时被误标 error。
+	if cr.ApplyMode != "auto" {
+		cr.LiveCurrentSource = "manual"
+		return
+	}
+	if ms == nil {
+		cr.LiveCurrentSource = "error"
+		return
+	}
+	mf, err := ms.Get(cr.TargetKey)
+	if err != nil {
+		cr.LiveCurrentSource = "error"
+		return
+	}
+	if mf == nil {
+		cr.LiveCurrentSource = "deleted"
+		return
+	}
+	root := config.RootMonitor(mf)
+	if root == nil {
+		cr.LiveCurrentSource = "deleted"
+		return
+	}
+	var changes map[string]string
+	if err := json.Unmarshal([]byte(cr.ProposedChanges), &changes); err != nil {
+		cr.LiveCurrentSource = "error"
+		return
+	}
+	live := make(map[string]string, len(changes))
+	for field := range changes {
+		live[field] = currentFieldValue(root, field)
+	}
+	cr.LiveCurrent = live
+	cr.LiveCurrentSource = "auto"
+}
+
+// currentFieldValue 读取通道某字段的当前字符串值（覆盖全部可能出现在 proposed_changes 的字段，
+// 含历史脏数据写入的商业字段，保证显示健壮）。
+func currentFieldValue(m *config.ServiceConfig, field string) string {
+	switch field {
+	case "provider_name":
+		return m.ProviderName
+	case "provider_url":
+		return m.ProviderURL
+	case "channel_name":
+		return m.ChannelName
+	case "base_url":
+		return m.BaseURL
+	case "category":
+		return m.Category
+	case "sponsor_level":
+		return string(m.SponsorLevel)
+	case "listed_since":
+		return m.ListedSince
+	case "expires_at":
+		return m.ExpiresAt
+	case "price_min":
+		if m.PriceMin != nil {
+			return strconv.FormatFloat(*m.PriceMin, 'f', -1, 64)
+		}
+		return ""
+	case "price_max":
+		if m.PriceMax != nil {
+			return strconv.FormatFloat(*m.PriceMax, 'f', -1, 64)
+		}
+		return ""
+	default:
+		return ""
+	}
+}
+
 // AdminList 管理员列表查询
 func (s *Service) AdminList(ctx context.Context, status string, limit, offset int) ([]*ChangeRequest, int, error) {
 	if limit <= 0 || limit > 100 {
@@ -315,7 +395,14 @@ func (s *Service) AdminList(ctx context.Context, status string, limit, offset in
 	if offset < 0 {
 		offset = 0
 	}
-	return s.store.List(ctx, status, limit, offset)
+	list, total, err := s.store.List(ctx, status, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	for _, cr := range list {
+		s.fillLiveCurrent(cr)
+	}
+	return list, total, nil
 }
 
 // AdminGetDetail 管理员获取详情（含解密新 API Key）
@@ -333,6 +420,7 @@ func (s *Service) AdminGetDetail(ctx context.Context, publicID string) (*ChangeR
 		}
 	}
 
+	s.fillLiveCurrent(cr)
 	return cr, newKey, nil
 }
 

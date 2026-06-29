@@ -1022,6 +1022,90 @@ func TestAdminApply_DeletedChannel_NoPanic(t *testing.T) {
 	}
 }
 
+// seedManualChangeRequest 在 mockStore 中写入一条 manual 模式变更请求。
+func seedManualChangeRequest(t *testing.T, store *mockStore, targetKey string, changes map[string]string) *ChangeRequest {
+	t.Helper()
+	return seedChangeRequest(t, store, targetKey, "manual", changes)
+}
+
+// seedMonitorFile 写入一份单父通道的监测文件；P/S/C 由 key 推导，其余字段取 m。
+func seedMonitorFile(t *testing.T, ms *config.MonitorStore, key string, m config.ServiceConfig) {
+	t.Helper()
+	p, s, c, err := config.ParseMonitorFileKey(key)
+	if err != nil {
+		t.Fatalf("ParseMonitorFileKey(%q): %v", key, err)
+	}
+	m.Provider, m.Service, m.Channel = p, s, c
+	mf := &config.MonitorFile{
+		Metadata: config.MonitorFileMetadata{Source: "test"},
+		Monitors: []config.ServiceConfig{m},
+	}
+	if err := ms.Create(mf); err != nil {
+		t.Fatalf("seed monitor file %q: %v", key, err)
+	}
+}
+
+func TestAdminList_FillsLiveCurrent_Auto(t *testing.T) {
+	svc, store, ms := newApplyTestService(t)
+	seedMonitorFile(t, ms, "prov--cc--chan", config.ServiceConfig{
+		ProviderName: "现网真实名", BaseURL: "https://live.example.com",
+	})
+	// 提交时快照是旧名；提议只改 provider_name
+	seedAutoChangeRequest(t, store, "prov--cc--chan", map[string]string{"provider_name": "用户提议名"})
+
+	list, _, err := svc.AdminList(context.Background(), "all", 20, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr := list[0]
+	if cr.LiveCurrentSource != "auto" {
+		t.Fatalf("source 期望 auto，实际 %s", cr.LiveCurrentSource)
+	}
+	if cr.LiveCurrent["provider_name"] != "现网真实名" {
+		t.Fatalf("live provider_name 期望『现网真实名』，实际『%s』", cr.LiveCurrent["provider_name"])
+	}
+	if _, ok := cr.LiveCurrent["base_url"]; ok {
+		t.Fatal("live_current 不应包含未提议的 base_url")
+	}
+}
+
+func TestAdminList_LiveCurrent_DeletedAndManual(t *testing.T) {
+	svc, store, _ := newApplyTestService(t)
+	seedAutoChangeRequest(t, store, "gone--cc--chan", map[string]string{"provider_name": "x"}) // auto 但无文件
+	seedManualChangeRequest(t, store, "man--cc--chan", map[string]string{"provider_name": "y"})
+
+	list, _, _ := svc.AdminList(context.Background(), "all", 20, 0)
+	byKey := map[string]*ChangeRequest{}
+	for _, cr := range list {
+		byKey[cr.TargetKey] = cr
+	}
+	if byKey["gone--cc--chan"].LiveCurrentSource != "deleted" {
+		t.Fatalf("已删通道 source 期望 deleted，实际 %s", byKey["gone--cc--chan"].LiveCurrentSource)
+	}
+	if byKey["man--cc--chan"].LiveCurrentSource != "manual" {
+		t.Fatalf("manual 通道 source 期望 manual，实际 %s", byKey["man--cc--chan"].LiveCurrentSource)
+	}
+	if len(byKey["gone--cc--chan"].LiveCurrent) != 0 {
+		t.Fatal("deleted 不应有 live_current")
+	}
+}
+
+// TestAdminList_ManualSourceWhenNoMonitorStore 锁定 fillLiveCurrent 的「先判 manual、再判
+// ms==nil」顺序：用 newTestService（故意不注入 MonitorStore，ms 为 nil）+ 一个 manual 通道，
+// 期望 source 仍为 manual 而非 error。若把 ms==nil→error 误置于 manual 判定之前，此用例变红。
+func TestAdminList_ManualSourceWhenNoMonitorStore(t *testing.T) {
+	svc, store := newTestService(t) // ms 未注入 → nil
+	seedManualChangeRequest(t, store, "man--cc--chan", map[string]string{"provider_name": "y"})
+
+	list, _, err := svc.AdminList(context.Background(), "all", 20, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := list[0].LiveCurrentSource; got != "manual" {
+		t.Fatalf("manual 通道在 ms 未注入时 source 应为 manual（非 error），实际 %s", got)
+	}
+}
+
 // TestAdminApply_ChildFirst_UpdatesRoot 验证 Monitors[0] 是子通道时，变更仍写入真正的父通道。
 func TestAdminApply_ChildFirst_UpdatesRoot(t *testing.T) {
 	svc, store, ms := newApplyTestService(t)
