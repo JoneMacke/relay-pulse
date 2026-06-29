@@ -2,6 +2,8 @@ import { useState, useCallback, useEffect, useMemo } from 'react';
 import { apiGet, apiPost, apiPut, apiDelete, ApiError } from '../utils/apiClient';
 import type { AdminChangeRequest, ChangeRequestStatus } from '../types/change';
 
+type ChangeAction = 'approve' | 'reject' | 'apply' | 'delete';
+
 export function useChangeAdmin(token: string) {
   const [changes, setChanges] = useState<AdminChangeRequest[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -9,6 +11,19 @@ export function useChangeAdmin(token: string) {
   const [featureDisabled, setFeatureDisabled] = useState(false);
   const [statusFilter, setStatusFilter] = useState<ChangeRequestStatus | 'all'>('all');
   const [selectedChange, setSelectedChange] = useState<AdminChangeRequest | null>(null);
+
+  // per-id 操作态：admin 可能并发对不同 change 操作，单值标志会互相覆盖（A 的 finally 清掉 B），故用 map
+  const [pendingActions, setPendingActions] = useState<Record<string, ChangeAction>>({});
+  const markPending = useCallback((id: string, action: ChangeAction) => {
+    setPendingActions(prev => ({ ...prev, [id]: action }));
+  }, []);
+  const clearPending = useCallback((id: string) => {
+    setPendingActions(prev => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }, []);
 
   const headers = useMemo(
     (): Record<string, string> => (token ? { Authorization: `Bearer ${token}` } : {}),
@@ -65,50 +80,62 @@ export function useChangeAdmin(token: string) {
   const approveChange = useCallback(async (id: string, note?: string) => {
     if (!token) return;
     setError(null);
+    markPending(id, 'approve');
     try {
       await apiPost(`/api/admin/changes/${id}/approve`, { note }, { headers });
       await fetchList();
       setSelectedChange(null);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Failed to approve');
+    } finally {
+      clearPending(id);
     }
-  }, [token, headers, fetchList]);
+  }, [token, headers, fetchList, markPending, clearPending]);
 
   const rejectChange = useCallback(async (id: string, note: string) => {
     if (!token) return;
     setError(null);
+    markPending(id, 'reject');
     try {
       await apiPost(`/api/admin/changes/${id}/reject`, { note }, { headers });
       await fetchList();
       setSelectedChange(null);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Failed to reject');
+    } finally {
+      clearPending(id);
     }
-  }, [token, headers, fetchList]);
+  }, [token, headers, fetchList, markPending, clearPending]);
 
   const applyChange = useCallback(async (id: string) => {
     if (!token) return;
     setError(null);
+    markPending(id, 'apply');
     try {
       await apiPost(`/api/admin/changes/${id}/apply`, {}, { headers });
       await fetchList();
       setSelectedChange(null);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Failed to apply');
+    } finally {
+      clearPending(id);
     }
-  }, [token, headers, fetchList]);
+  }, [token, headers, fetchList, markPending, clearPending]);
 
   const deleteChange = useCallback(async (id: string) => {
     if (!token) return;
     setError(null);
+    markPending(id, 'delete');
     try {
       await apiDelete(`/api/admin/changes/${id}`, { headers });
       await fetchList();
       setSelectedChange(null);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Failed to delete');
+    } finally {
+      clearPending(id);
     }
-  }, [token, headers, fetchList]);
+  }, [token, headers, fetchList, markPending, clearPending]);
 
   return {
     changes,
@@ -119,6 +146,7 @@ export function useChangeAdmin(token: string) {
     setStatusFilter,
     selectedChange,
     setSelectedChange,
+    pendingActions,
     fetchList,
     fetchDetail,
     updateChange,

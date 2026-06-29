@@ -221,6 +221,7 @@ export default function AdminPage() {
                   onReject={(id, note) => changeAdmin.rejectChange(id, note)}
                   onApply={(id) => changeAdmin.applyChange(id)}
                   onDelete={(id) => changeAdmin.deleteChange(id)}
+                  pendingActions={changeAdmin.pendingActions}
                   error={changeAdmin.error}
                   featureDisabled={changeAdmin.featureDisabled}
                 />

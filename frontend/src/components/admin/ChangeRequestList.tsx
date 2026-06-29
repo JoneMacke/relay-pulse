@@ -83,6 +83,7 @@ interface ChangeRequestListProps {
   onReject: (id: string, note: string) => void;
   onApply: (id: string) => void;
   onDelete: (id: string) => void;
+  pendingActions?: Record<string, string>;
   error: string | null;
   featureDisabled?: boolean;
 }
@@ -99,6 +100,7 @@ export function ChangeRequestList({
   onReject,
   onApply,
   onDelete,
+  pendingActions,
   error,
   featureDisabled,
 }: ChangeRequestListProps) {
@@ -355,11 +357,14 @@ export function ChangeRequestList({
                         <>
                           <button
                             onClick={() => onApprove(cr.public_id)}
-                            disabled={hasEdits && canEdit}
+                            disabled={(hasEdits && canEdit) || !!pendingActions?.[cr.public_id]}
                             title={hasEdits && canEdit ? '请先保存修改' : undefined}
                             className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-accent/10 text-accent hover:bg-accent/20 transition disabled:opacity-50 disabled:cursor-not-allowed"
                           >
-                            <Check size={12} />{t('admin.changes.approve')}
+                            {pendingActions?.[cr.public_id] === 'approve'
+                              ? <Loader2 size={12} className="animate-spin" />
+                              : <Check size={12} />}
+                            {t('admin.changes.approve')}
                           </button>
                           <div className="flex items-center gap-1">
                             <input
@@ -371,9 +376,13 @@ export function ChangeRequestList({
                             />
                             <button
                               onClick={() => { onReject(cr.public_id, rejectNote); setRejectNote(''); }}
-                              className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-danger/10 text-danger hover:bg-danger/20 transition"
+                              disabled={!!pendingActions?.[cr.public_id]}
+                              className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-danger/10 text-danger hover:bg-danger/20 transition disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                              <X size={12} />{t('admin.changes.reject')}
+                              {pendingActions?.[cr.public_id] === 'reject'
+                                ? <Loader2 size={12} className="animate-spin" />
+                                : <X size={12} />}
+                              {t('admin.changes.reject')}
                             </button>
                           </div>
                         </>
@@ -381,11 +390,14 @@ export function ChangeRequestList({
                       {cr.status === 'approved' && cr.apply_mode === 'auto' && (
                         <button
                           onClick={() => onApply(cr.public_id)}
-                          disabled={hasEdits && canEdit}
+                          disabled={(hasEdits && canEdit) || !!pendingActions?.[cr.public_id]}
                           title={hasEdits && canEdit ? '请先保存修改' : undefined}
                           className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-success/10 text-success hover:bg-success/20 transition disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                          <Play size={12} />{t('admin.changes.apply')}
+                          {pendingActions?.[cr.public_id] === 'apply'
+                            ? <Loader2 size={12} className="animate-spin" />
+                            : <Play size={12} />}
+                          {t('admin.changes.apply')}
                         </button>
                       )}
                       {confirmDeleteId === cr.public_id ? (
@@ -407,9 +419,13 @@ export function ChangeRequestList({
                       ) : (
                         <button
                           onClick={() => setConfirmDeleteId(cr.public_id)}
-                          className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg text-muted hover:text-danger transition ml-auto"
+                          disabled={!!pendingActions?.[cr.public_id]}
+                          className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg text-muted hover:text-danger transition ml-auto disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                          <Trash2 size={12} />{t('admin.changes.delete')}
+                          {pendingActions?.[cr.public_id] === 'delete'
+                            ? <Loader2 size={12} className="animate-spin" />
+                            : <Trash2 size={12} />}
+                          {t('admin.changes.delete')}
                         </button>
                       )}
                       </div>
