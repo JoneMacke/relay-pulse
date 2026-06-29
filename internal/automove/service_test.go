@@ -68,6 +68,9 @@ func (m *mockStorage) GetHistoryBatchByModelID(_ []storage.ProbeHistoryKey, _ ti
 	return nil, nil
 }
 func (m *mockStorage) MigrateChannelData(_ []storage.ChannelMigrationMapping) error { return nil }
+func (m *mockStorage) BackfillProbeHistoryModelIDs(_ []storage.ModelIDMigrationMapping) error {
+	return nil
+}
 func (m *mockStorage) GetServiceState(_, _, _, _ string) (*storage.ServiceState, error) {
 	return nil, nil
 }

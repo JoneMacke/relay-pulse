@@ -470,6 +470,59 @@ func (s *PostgresStorage) MigrateChannelData(mappings []ChannelMigrationMapping)
 	return nil
 }
 
+// BackfillProbeHistoryModelIDs 按映射把 model_id IS NULL 的历史行分批回填为对应 model_id（幂等）。
+// 歧义检查（同一 psc4 key 映射到多个不同 model_id）在任何写库操作前完成，发现歧义立即返回错误。
+func (s *PostgresStorage) BackfillProbeHistoryModelIDs(mappings []ModelIDMigrationMapping) error {
+	const backfillBatch = 5000
+
+	// 步骤一：歧义检查（Go 侧，写库前）
+	// 构建 psc4 -> model_id 的唯一映射，跳过 ModelID 为空的条目。
+	type psc4 struct{ provider, service, channel, model string }
+	seen := make(map[psc4]string, len(mappings))
+	for _, m := range mappings {
+		if m.ModelID == "" {
+			continue
+		}
+		k := psc4{m.Provider, m.Service, m.Channel, m.Model}
+		if existing, ok := seen[k]; ok && existing != m.ModelID {
+			return fmt.Errorf(
+				"model_id 回填歧义：(%s/%s/%s, model=%s) 映射到多个 model_id (%s vs %s)",
+				m.Provider, m.Service, m.Channel, m.Model, existing, m.ModelID,
+			)
+		}
+		seen[k] = m.ModelID
+	}
+
+	// 步骤二：对每个唯一映射执行分批 UPDATE（仅更新 model_id IS NULL 的行）
+	ctx := s.effectiveCtx()
+	var total int64
+	for k, modelID := range seen {
+		for {
+			tag, err := s.pool.Exec(ctx, `
+				WITH batch AS (
+					SELECT id FROM probe_history
+					WHERE model_id IS NULL AND provider = $1 AND service = $2 AND channel = $3 AND model = $4
+					LIMIT $5
+				)
+				UPDATE probe_history p SET model_id = $6
+				FROM batch WHERE p.id = batch.id`,
+				k.provider, k.service, k.channel, k.model, backfillBatch, modelID)
+			if err != nil {
+				return fmt.Errorf("回填 model_id 失败: %w", err)
+			}
+			n := tag.RowsAffected()
+			total += n
+			if n == 0 {
+				break
+			}
+		}
+	}
+	if total > 0 {
+		logger.Info("storage", "probe_history model_id 回填完成 (PostgreSQL)", "rows", total)
+	}
+	return nil
+}
+
 // Ping 检查数据库连通性
 func (s *PostgresStorage) Ping() error {
 	return s.pool.Ping(s.effectiveCtx())

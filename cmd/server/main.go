@@ -25,6 +25,24 @@ import (
 	"monitor/internal/storage"
 )
 
+// buildModelIDMappings 从配置构建 model_id 回填映射（含已禁用监测项——其历史也需重键；跳过未填 model_id 的行）
+func buildModelIDMappings(monitors []config.ServiceConfig) []storage.ModelIDMigrationMapping {
+	mappings := make([]storage.ModelIDMigrationMapping, 0, len(monitors))
+	for _, m := range monitors {
+		if m.ModelID == "" {
+			continue
+		}
+		mappings = append(mappings, storage.ModelIDMigrationMapping{
+			Provider: m.Provider,
+			Service:  m.Service,
+			Channel:  m.Channel,
+			Model:    m.Model,
+			ModelID:  m.ModelID,
+		})
+	}
+	return mappings
+}
+
 // buildChannelMigrationMappings 从配置构建 channel 迁移映射（同一 provider+service 取第一个非空 channel）
 func buildChannelMigrationMappings(monitors []config.ServiceConfig) []storage.ChannelMigrationMapping {
 	seen := make(map[string]bool)
@@ -147,6 +165,12 @@ func main() {
 	// 自动迁移旧数据的 channel
 	if err := store.MigrateChannelData(buildChannelMigrationMappings(cfg.Monitors)); err != nil {
 		logger.Warn("main", "channel 数据迁移失败", "error", err)
+	}
+
+	// 回填 legacy probe_history 行的 model_id（幂等；歧义或 DB 错误均中止启动）
+	if err := store.BackfillProbeHistoryModelIDs(buildModelIDMappings(cfg.Monitors)); err != nil {
+		logger.Error("main", "probe_history model_id 回填失败，启动中止", "error", err)
+		os.Exit(1)
 	}
 
 	storageType := cfg.Storage.Type

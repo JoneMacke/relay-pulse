@@ -45,6 +45,9 @@ func (panicStorage) GetHistoryBatchByModelID([]ProbeHistoryKey, time.Time) (map[
 	panic("not implemented")
 }
 func (panicStorage) MigrateChannelData([]ChannelMigrationMapping) error { panic("not implemented") }
+func (panicStorage) BackfillProbeHistoryModelIDs([]ModelIDMigrationMapping) error {
+	panic("not implemented")
+}
 func (panicStorage) GetServiceState(string, string, string, string) (*ServiceState, error) {
 	panic("not implemented")
 }

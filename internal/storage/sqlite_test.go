@@ -855,3 +855,40 @@ func TestWithContext(t *testing.T) {
 		t.Log("SaveRecord after cancel did not error (may be driver-specific)")
 	}
 }
+
+// --- BackfillProbeHistoryModelIDs ---
+
+func TestBackfillProbeHistoryModelIDs(t *testing.T) {
+	s := newTestStore(t)
+	// legacy row with no model_id (insert raw so model_id stays NULL)
+	if _, err := s.db.Exec(`INSERT INTO probe_history(provider,service,channel,model,status,latency,timestamp) VALUES('P','cc','c','Opus',1,0,1000)`); err != nil {
+		t.Fatal(err)
+	}
+	maps := []ModelIDMigrationMapping{{Provider: "P", Service: "cc", Channel: "c", Model: "Opus", ModelID: "md_x"}}
+	if err := s.BackfillProbeHistoryModelIDs(maps); err != nil {
+		t.Fatal(err)
+	}
+	var got sql.NullString
+	if err := s.db.QueryRow(`SELECT model_id FROM probe_history WHERE provider='P'`).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Valid || got.String != "md_x" {
+		t.Fatalf("legacy 行未回填，got %#v", got)
+	}
+	// idempotent rerun: no error, no change
+	if err := s.BackfillProbeHistoryModelIDs(maps); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBackfillRejectsAmbiguousMapping(t *testing.T) {
+	s := newTestStore(t)
+	maps := []ModelIDMigrationMapping{
+		{Provider: "P", Service: "cc", Channel: "c", Model: "Opus", ModelID: "md_x"},
+		{Provider: "P", Service: "cc", Channel: "c", Model: "Opus", ModelID: "md_y"},
+	}
+	if err := s.BackfillProbeHistoryModelIDs(maps); err == nil {
+		t.Fatal("同 (p,s,c,model) 映射到多 id 必须 fail-fast")
+	}
+	// and it must NOT have written anything
+}

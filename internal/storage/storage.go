@@ -81,6 +81,16 @@ type ChannelMigrationMapping struct {
 	Channel  string
 }
 
+// ModelIDMigrationMapping 把一个 (provider,service,channel,model) 业务键映射到稳定 model_id，
+// 供启动期回填 legacy probe_history 行。
+type ModelIDMigrationMapping struct {
+	Provider string
+	Service  string
+	Channel  string
+	Model    string
+	ModelID  string
+}
+
 // MonitorKey 监测项唯一键（provider/service/channel/model）
 // 用于批量查询时作为 map 的 key，避免字符串拼接的歧义和冲突
 type MonitorKey struct {
@@ -301,6 +311,10 @@ type RetentionStorage interface {
 type MigrationStorage interface {
 	// MigrateChannelData 将 channel 为空的历史记录迁移到最新配置
 	MigrateChannelData(mappings []ChannelMigrationMapping) error
+
+	// BackfillProbeHistoryModelIDs 按映射把 model_id IS NULL 的历史行回填为对应 model_id（分批、幂等）。
+	// 若同一 (provider,service,channel,model) 映射到多个不同 model_id（歧义），在写库前返回错误、不做任何写入。
+	BackfillProbeHistoryModelIDs(mappings []ModelIDMigrationMapping) error
 }
 
 // OverrideStorage 自动移板 runtime override 的持久化操作。
