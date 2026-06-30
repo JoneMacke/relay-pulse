@@ -72,8 +72,9 @@ type ServiceConfig struct {
 	Hidden       bool   `yaml:"hidden,omitempty" json:"hidden"`
 	HiddenReason string `yaml:"hidden_reason,omitempty" json:"hidden_reason"` // 下架原因（可选）
 
-	// 热板/冷板配置：冷板项停止探测，仅展示历史数据（需 boards.enabled=true）
-	// Board 可选值：空/"hot"（默认热板）、"cold"（冷板）
+	// 热板/备板/冷板配置：冷板项停止探测，仅展示历史数据（需 boards.enabled=true）
+	// Board 可选值：空/"hot"（默认主板）、"secondary"（备板）、"cold"（冷板）。
+	// 配置板位是自动移板的"锚点/天花板"：board=secondary 不会被自动升 hot（详见 BoardAutoMoveConfig）。
 	Board      string `yaml:"board,omitempty" json:"board"`
 	ColdReason string `yaml:"cold_reason" json:"cold_reason,omitempty"` // 冷板原因（可选）
 

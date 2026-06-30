@@ -141,11 +141,13 @@ func TestEvaluate_DualThreshold_DemoteHot(t *testing.T) {
 	}
 }
 
-func TestEvaluate_DualThreshold_PromoteSecondary(t *testing.T) {
+// 新语义：board 是"锚点/天花板"——自动移板只能在配置板位及以下浮动，绝不向上越板。
+// 手动配 board=secondary 的通道，无论可用率多高都不会被自动升到 hot。
+func TestEvaluate_SecondaryAnchor_DoesNotPromoteToHot(t *testing.T) {
 	store := newMockStorage()
 	key := storage.MonitorKey{Provider: "good", Service: "cc", Channel: "vip"}
 
-	// 100% green → availability=100% >= threshold_up=55%
+	// 100% green → availability=100% >= threshold_up=55%，旧语义会升 hot，新语义留 secondary。
 	store.history[key] = makeRecords(1, 20)
 
 	cfg := &config.AppConfig{
@@ -170,12 +172,187 @@ func TestEvaluate_DualThreshold_PromoteSecondary(t *testing.T) {
 	svc := NewService(store, cfg)
 	svc.Evaluate(context.Background())
 
+	if ov, ok := svc.GetBoardOverride(key); ok {
+		t.Errorf("expected no override (secondary anchor stays secondary), got board=%s", ov.Board)
+	}
+}
+
+// 存量回落：升级前被旧 promote 语义升到 hot 的 secondary 通道（持久化了 Board=hot override），
+// 升级后下一轮评估应自动落回配置的 secondary。
+// 可用率刻意取 20%（> threshold_cold 10% 且 < threshold_down 50%）以区分两种实现：
+//   - 正确（按 configBoard 分流）：secondary 通道不进 hot 分支 → 无 override；
+//   - 错误（仅删 promote、仍按 effectiveBoard 分流）：旧 hot override 使其走 case hot，
+//     在 avail<down 时写出一个冗余的 secondary 孤儿 override → 本测试失败。
+func TestEvaluate_SecondaryAnchor_DropsLegacyHotOverride(t *testing.T) {
+	store := newMockStorage()
+	key := storage.MonitorKey{Provider: "legacy", Service: "cc", Channel: "vip"}
+
+	// 20% availability：20 绿 + 80 红，同一时间戳落同一 bucket。
+	ts := time.Now().UTC().Unix()
+	records := make([]*storage.ProbeRecord, 100)
+	for i := 0; i < 20; i++ {
+		records[i] = &storage.ProbeRecord{Status: 1, Timestamp: ts}
+	}
+	for i := 20; i < 100; i++ {
+		records[i] = &storage.ProbeRecord{Status: 0, Timestamp: ts}
+	}
+	store.history[key] = records
+
+	cfg := &config.AppConfig{
+		Boards: config.BoardsConfig{
+			Enabled: true,
+			AutoMove: config.BoardAutoMoveConfig{
+				Enabled:               true,
+				ThresholdCold:         10.0,
+				ThresholdDown:         50.0,
+				ThresholdUp:           55.0,
+				CheckInterval:         "30m",
+				CheckIntervalDuration: 30 * time.Minute,
+				MinProbes:             10,
+			},
+		},
+		DegradedWeight:    0.7,
+		BatchQueryMaxKeys: 300,
+		Monitors: []config.ServiceConfig{
+			{Provider: "legacy", Service: "cc", Channel: "vip", Board: "secondary"},
+		},
+	}
+
+	svc := NewService(store, cfg)
+	// 模拟升级前遗留的 Board=hot override。
+	svc.SetOverrides(map[storage.MonitorKey]MonitorOverride{
+		key: {Board: "hot"},
+	})
+
+	svc.Evaluate(context.Background())
+
+	if ov, ok := svc.GetBoardOverride(key); ok {
+		t.Errorf("expected legacy hot override dropped (fall back to config secondary), got board=%s", ov.Board)
+	}
+}
+
+// secondary 通道可用率跌破 threshold_cold 仍应进冷板（停探省资源）——
+// 锚点语义只挡"向上越板"，不挡"向下冷板"。
+func TestEvaluate_SecondaryAnchor_MovesToColdBelowThreshold(t *testing.T) {
+	store := newMockStorage()
+	key := storage.MonitorKey{Provider: "dying", Service: "cc", Channel: "vip"}
+
+	// 0% availability < threshold_cold=10%。
+	store.history[key] = makeRecords(0, 20)
+
+	cfg := &config.AppConfig{
+		Boards: config.BoardsConfig{
+			Enabled: true,
+			AutoMove: config.BoardAutoMoveConfig{
+				Enabled:               true,
+				ThresholdCold:         10.0,
+				ThresholdDown:         50.0,
+				ThresholdUp:           55.0,
+				CheckInterval:         "30m",
+				CheckIntervalDuration: 30 * time.Minute,
+				MinProbes:             10,
+			},
+		},
+		DegradedWeight:    0.7,
+		BatchQueryMaxKeys: 300,
+		Monitors: []config.ServiceConfig{
+			{Provider: "dying", Service: "cc", Channel: "vip", Board: "secondary"},
+		},
+	}
+
+	svc := NewService(store, cfg)
+	svc.Evaluate(context.Background())
+
 	ov, ok := svc.GetBoardOverride(key)
 	if !ok {
-		t.Fatal("expected override for good/cc/vip")
+		t.Fatal("expected cold override for secondary monitor below threshold_cold")
 	}
-	if ov.Board != "hot" {
-		t.Errorf("expected board=hot, got %s", ov.Board)
+	if ov.Board != "cold" {
+		t.Errorf("expected board=cold, got %s", ov.Board)
+	}
+	if ov.ColdReason == "" {
+		t.Error("expected non-empty cold reason")
+	}
+}
+
+// 回归护栏：configBoard=hot 的通道，降级→恢复双向逻辑不受锚点改动影响。
+func TestEvaluate_HotAnchor_DemoteThenRecover(t *testing.T) {
+	store := newMockStorage()
+	key := storage.MonitorKey{Provider: "flaky", Service: "cc", Channel: "vip"}
+
+	cfg := &config.AppConfig{
+		Boards: config.BoardsConfig{
+			Enabled: true,
+			AutoMove: config.BoardAutoMoveConfig{
+				Enabled:               true,
+				ThresholdDown:         50.0,
+				ThresholdUp:           55.0,
+				CheckInterval:         "30m",
+				CheckIntervalDuration: 30 * time.Minute,
+				MinProbes:             10,
+			},
+		},
+		DegradedWeight:    0.7,
+		BatchQueryMaxKeys: 300,
+		Monitors: []config.ServiceConfig{
+			{Provider: "flaky", Service: "cc", Channel: "vip", Board: "hot"},
+		},
+	}
+
+	svc := NewService(store, cfg)
+
+	// Demote: 0% availability < threshold_down → secondary override。
+	store.history[key] = makeRecords(0, 20)
+	svc.Evaluate(context.Background())
+	ov, ok := svc.GetBoardOverride(key)
+	if !ok || ov.Board != "secondary" {
+		t.Fatalf("expected demote to secondary, got ok=%v board=%s", ok, ov.Board)
+	}
+
+	// Recover: 100% availability >= threshold_up → override 清除，回到配置 hot。
+	store.history[key] = makeRecords(1, 20)
+	svc.Evaluate(context.Background())
+	if ov, ok := svc.GetBoardOverride(key); ok {
+		t.Errorf("expected override cleared (config hot restored), got board=%s", ov.Board)
+	}
+}
+
+// 热更新快路径：configBoard=secondary 的遗留 Board=hot override 应在 purgeStaleOverrides
+// 立即清除，无需等下一轮定期评估（与 evaluate 锚点语义保持一致，避免短暂旧状态窗口）。
+func TestUpdateConfig_PurgesLegacyHotOverrideForSecondaryAnchor(t *testing.T) {
+	store := newMockStorage()
+	key := storage.MonitorKey{Provider: "legacy", Service: "cc", Channel: "vip"}
+
+	cfg := &config.AppConfig{
+		Boards: config.BoardsConfig{
+			Enabled: true,
+			AutoMove: config.BoardAutoMoveConfig{
+				Enabled:               true,
+				ThresholdDown:         50.0,
+				ThresholdUp:           55.0,
+				CheckInterval:         "30m",
+				CheckIntervalDuration: 30 * time.Minute,
+				MinProbes:             10,
+			},
+		},
+		DegradedWeight:    0.7,
+		BatchQueryMaxKeys: 300,
+		Monitors: []config.ServiceConfig{
+			{Provider: "legacy", Service: "cc", Channel: "vip", Board: "secondary"},
+		},
+	}
+
+	svc := NewService(store, cfg)
+	// 遗留 Board=hot override（旧 promote 语义残留）。
+	svc.SetOverrides(map[storage.MonitorKey]MonitorOverride{
+		key: {Board: "hot"},
+	})
+
+	// 热更新触发 purge：configBoard=secondary 的 hot override 应被立即清除。
+	svc.UpdateConfig(cfg)
+
+	if ov, ok := svc.GetBoardOverride(key); ok {
+		t.Errorf("expected legacy hot override purged on hot-reload, got board=%s", ov.Board)
 	}
 }
 
@@ -195,7 +372,8 @@ func TestEvaluate_DualThreshold_HysteresisBuffer(t *testing.T) {
 	}
 	store.history[key] = records
 
-	// As secondary with 52% (< threshold_up 55%): should NOT promote
+	// As secondary: board=secondary is the anchor/ceiling — never auto-promotes to hot
+	// regardless of availability (52% is just a representative non-cold value).
 	cfg := &config.AppConfig{
 		Boards: config.BoardsConfig{
 			Enabled: true,

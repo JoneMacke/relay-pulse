@@ -324,7 +324,7 @@ monitors:
 - **可选值**: `"hot"`, `"secondary"`, `"cold"`
 - **说明**: 监测项所属板块
   - `hot`: 主板，正常监测，实时更新数据（默认）
-  - `secondary`: 备板，正常监测，用于新上线或观察期通道
+  - `secondary`: 备板，正常监测，用于新上线或观察期通道；作为自动移板锚点时**不会被自动升到主板**（仅在可用率过低时自动冷板）
   - `cold`: 冷板，停止监测，仅展示历史数据。可手动配置，也可在启用 `boards.auto_move` 时因 7 天可用率低于 `threshold_cold` 被自动移入；自动冷板为 sticky，不会自动恢复
 
 #### 监测项 `cold_reason`
@@ -343,12 +343,17 @@ monitors:
 
 基于 7 天可用率自动移板。阈值关系：`threshold_cold < threshold_down < threshold_up`
 
+**锚点语义**：配置板位（`board` 字段）是自动移板的"天花板"，自动移板只在配置板位及以下浮动、绝不向上越板：
+- `board=hot`：可用率低于 `threshold_down` 降到 secondary，恢复到 `threshold_up` 升回 hot，过低则冷板；
+- `board=secondary`：**永不自动升 hot**（无论可用率多高），仅在可用率低于 `threshold_cold` 时自动冷板；
+- 要让通道完全钉死在配置板位（连冷板也不参与），用 `auto_move_exempt: true`。
+
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `enabled` | bool | `false` | 是否启用自动移板 |
 | `threshold_cold` | float64 | `10.0` | 低于该值自动移入冷板（sticky，不自动恢复） |
-| `threshold_down` | float64 | `50.0` | hot 板低于该值降到 secondary |
-| `threshold_up` | float64 | `55.0` | secondary 板达到该值升回 hot |
+| `threshold_down` | float64 | `50.0` | `board=hot` 通道低于该值降到 secondary |
+| `threshold_up` | float64 | `55.0` | 被降级的 `board=hot` 通道达到该值升回 hot（**不影响 `board=secondary` 通道**） |
 | `min_probes` | int | `10` | 7 天内最少探测次数，不足则跳过判断（保护新通道） |
 | `check_interval` | string | `"30m"` | 自动移板评估周期 |
 
@@ -359,7 +364,7 @@ monitors:
 | `disabled: true` | ❌ | ❌ | ❌ | 彻底禁用 |
 | `hidden: true` | ✅ | ✅ | ❌ | 临时隐藏但继续监测 |
 | `board: hot` | ✅ | ✅ | ✅ | **主板，正常监测** |
-| `board: secondary` | ✅ | ✅ | ✅ | **备板，观察期监测** |
+| `board: secondary` | ✅ | ✅ | ✅ | **备板，稳定停留不自动升主板** |
 | `board: cold` | ❌ | ❌ | ✅ | **冷板，展示历史但不探测** |
 
 #### 前端交互

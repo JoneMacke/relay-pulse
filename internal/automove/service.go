@@ -139,7 +139,8 @@ func (s *Service) UpdateConfig(cfg *config.AppConfig) {
 
 // purgeStaleOverrides 从当前 override map 中移除不再符合自动移板条件的 key。
 // 保留条件与 evaluate() 一致：非 disabled、非 hidden、无 parent、board != cold。
-// 当 auto_cold_exempt=true 时，会立即清除已有的 cold override。
+// 当 auto_cold_exempt=true 时，会立即清除已有的 cold override；
+// 当 configBoard=secondary 时，清除遗留的 Board=hot override（锚点上限，不向上越板）。
 func (s *Service) purgeStaleOverrides(cfg *config.AppConfig) {
 	ptr := s.overrides.Load()
 	if ptr == nil {
@@ -148,6 +149,7 @@ func (s *Service) purgeStaleOverrides(cfg *config.AppConfig) {
 
 	// 构建仍可参与自动移板的 key 集合及其 exempt 状态
 	type eligibleInfo struct {
+		configBoard    string
 		autoColdExempt bool
 		autoMoveExempt bool
 	}
@@ -173,6 +175,7 @@ func (s *Service) purgeStaleOverrides(cfg *config.AppConfig) {
 			Model:    m.Model,
 		}
 		eligible[key] = eligibleInfo{
+			configBoard:    board,
 			autoColdExempt: m.AutoColdExempt,
 			autoMoveExempt: m.AutoMoveExempt,
 		}
@@ -187,6 +190,11 @@ func (s *Service) purgeStaleOverrides(cfg *config.AppConfig) {
 		}
 		// auto_move_exempt 清除任意 availability-based override（人工完全接管移板决策）
 		if info.autoMoveExempt {
+			continue
+		}
+		// 锚点：configBoard=secondary 不允许遗留 Board=hot override（旧 promote 语义残留），
+		// 立即丢弃使热更新无需等下一轮评估即满足"不向上越板"上限（与 evaluate 锚点逻辑一致）。
+		if info.configBoard == "secondary" && isHotBoard(ov.Board) {
 			continue
 		}
 		// auto_cold_exempt 清除 cold override（人工恢复信号）
@@ -475,6 +483,10 @@ func isColdBoard(board string) bool {
 	return strings.EqualFold(strings.TrimSpace(board), "cold")
 }
 
+func isHotBoard(board string) bool {
+	return strings.EqualFold(strings.TrimSpace(board), "hot")
+}
+
 func makeAutoColdReason(availability, threshold float64) string {
 	return fmt.Sprintf("7天可用率 %.1f%% 低于自动冷板阈值 %.0f%%，已自动移入冷板",
 		availability, threshold)
@@ -720,7 +732,8 @@ func (s *Service) evaluate(ctx context.Context, snap *evalSnapshot) (map[storage
 		}
 	}
 
-	// 冷板/双阈值评估：以"有效板块"（config + 当前 override）为基准
+	// 冷板 + 锚点移板评估：configBoard（手动配置板位）决定自动移板上限，绝不向上越板；
+	// effectiveBoard 仅在 configBoard=hot 时用于 hot↔secondary 迟滞判定。
 	for _, c := range candidates {
 		stats.checked++
 		records := allHistory[c.key]
@@ -778,6 +791,15 @@ func (s *Service) evaluate(ctx context.Context, snap *evalSnapshot) (map[storage
 			continue
 		}
 
+		// board（configBoard）是自动移板的"锚点/天花板"：自动移板只能在配置板位及以下浮动，
+		// 绝不向上越板。cold（向下闸，对 hot/secondary 均适用）已在上方处理。
+		//   - configBoard=secondary：非 cold 状态一律保持配置 secondary，不写 override；
+		//     任何遗留的 Board=hot override 会因本轮不写、随 replaceOverrides 整图替换被丢弃，自动落回 secondary。
+		if c.configBoard == "secondary" {
+			continue
+		}
+
+		// configBoard=="hot"：effectiveBoard 反映当前是否已被降级，决定用 threshold_down 还是 threshold_up（迟滞防抖）。
 		switch effectiveBoard {
 		case "hot":
 			if availability < snap.autoMove.ThresholdDown {
@@ -790,18 +812,14 @@ func (s *Service) evaluate(ctx context.Context, snap *evalSnapshot) (map[storage
 			}
 		case "secondary":
 			if availability >= snap.autoMove.ThresholdUp {
-				// 仅当配置原始板也需要保持 override 时设置
-				if c.configBoard != "hot" {
-					overrides[c.key] = MonitorOverride{Board: "hot"}
-				}
-				// 若 configBoard 本就是 hot，不需要 override（清除即可）
+				// 恢复：可用率回到 threshold_up → 清除降级 override（不写即可，整图替换后回到配置 hot）。
 				stats.promoted++
 				logger.Info("AutoMover", "自动移板: secondary→hot",
 					"monitor", c.key.Provider+"/"+c.key.Service+"/"+c.key.Channel,
 					"availability", availability,
 					"threshold_up", snap.autoMove.ThresholdUp)
-			} else if c.configBoard == "hot" {
-				// 配置是 hot 但之前被降级，可用率还没达到 threshold_up → 保持降级
+			} else {
+				// 尚未恢复到 threshold_up → 保持降级 secondary。
 				overrides[c.key] = MonitorOverride{Board: "secondary"}
 			}
 		}

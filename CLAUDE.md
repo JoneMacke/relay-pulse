@@ -207,7 +207,7 @@ internal/
 │   ├── ssrf.go           → SSRF 防护
 │   ├── safe_client.go    → 沙箱化 HTTP 客户端
 │   └── limiter.go        → IP 限流
-├── automove/              → 自动移板（基于 7 天可用率在 hot/secondary/cold 间切换）
+├── automove/              → 自动移板（7 天可用率驱动，配置板位=锚点上限，不向上越板）
 │   ├── availability.go   → 可用率计算
 │   └── service.go        → 自动移板服务编排
 ├── announcements/         → GitHub Discussions 公告（3 文件）
@@ -274,7 +274,7 @@ notifier/                  → 独立通知子模块（独立 go.mod）
 8. **事件驱动通知**: `events.Detector` 基于阈值状态机生成 UP/DOWN 事件
 9. **指数退避重试**: `retry_*` + jitter 统一控制失败重试节奏
 10. **功能开关分层**: boards/annotations/events/announcements 可按需启用
-11. **自动移板**: `automove.Service` 基于 7 天可用率自动在 hot/secondary/cold 间切换通道（cold 为 sticky，需 `auto_cold_exempt` 手动解除）
+11. **自动移板**: `automove.Service` 基于 7 天可用率移板，配置板位（board）是"锚点/天花板"——只在配置板位及以下浮动、绝不向上越板（board=secondary 不会被自动升 hot；board=hot 可降 secondary 再恢复）。cold 为 sticky，需 `auto_cold_exempt` 手动解除
 12. **探测链路统一**: 三处 inline 测试端点（用户自助 `/api/onboarding/test`、管理员审核 `/api/admin/submissions/:id/test`、监测项管理 `/api/admin/monitors/:key/probe`）都走 `onboarding.BuildServiceConfigFromSubmission`（或 runtime resolved root） + `config.ResolveSingleMonitor`（模板填充 + Duration 派生） + `probe.InlineProber.ProbeConfig`，确保与 `scheduler` 调用的 `monitor.Prober` **字段级一致**（headers/body/method/success_contains/timeout/retry 全覆盖）。模板覆盖编辑不允许在 inline 测试时即时生效（返回 422 `TEMPLATE_CHANGE_REQUIRES_SAVE`），需先保存。每次 inline 探测打 `probe_id` 结构化日志便于跨端追踪。**管理员通道管理探测（v2.48.0+）扩展**：① 可逐个探测子通道——`AdminGetMonitor` 附带 `probe_targets`（runtime resolved 的父+子，`model` 为选择器，PSCM 唯一），探测请求带 `target_model` 即按 `(provider,service,channel,model)` 命中 runtime 已解析子通道直接探测、不套草稿覆盖（未生效则报错，不做 raw 半解析）；② **配了代理就自动走代理**（无开关，`AdminProbeMonitor` 显式传 `probe.WithProxy(cfg.Proxy)`，复用 `monitor.NewExplicitProxyTransport` 的 http/socks5 语义，结果带 `via_proxy`）——这是显式钉在调用方的 SSRF 硬边界：**只有** admin 通道管理探测传 `WithProxy`，公开 `onboarding`/`submission` 自测**永不传**、绝不走代理（即使其 cfg 将来出现 proxy 字段）。注意 inline 走代理后上游 IP 的 SSRF 校验天然失效（由代理解析连接），与 scheduler 一致、不额外加严。读响应体失败按真实原因分流（超大→`response_too_large`、读超时→`response_timeout`、其余→`network_error`，v2.48.1）。
 
 ### 日志系统
