@@ -186,6 +186,8 @@
     },
     "expandDetails": "詳細を表示",
     "collapseDetails": "詳細を閉じる",
+    "qualityPending": "測定待ち",
+    "qualityPendingTooltip": "監視中ですが、rpdiag はまだこのチャネルの品質をサンプリングしていません（順番が来次第測定します）。",
     "heatmapHint": "色のブロックをクリックすると詳細情報を表示します（{{from}} → {{to}} 個のデータポイントを集約）",
     "timeLabels": {
       "24h": "24h",

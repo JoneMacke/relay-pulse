@@ -147,6 +147,29 @@ interface StatusTableProps {
   hidePriceColumn?: boolean;
 }
 
+// rpdiag 覆盖的可执行 service（gm 暂不采样）。
+const RPDIAG_COVERED_SERVICES = new Set(['cc', 'cx']);
+
+/** 「待测」占位判定：有监测但 rpdiag 无 match 的 active 板 cc/cx 通道。
+ *  gm/cold 板/rpdiag 关闭一律不挂（否则永久假「待测」误导）。 */
+export function shouldShowQualityPending(args: {
+  rpdiagEnabled: boolean; hasScore: boolean; serviceType: string; board: string;
+}): boolean {
+  if (!args.rpdiagEnabled || args.hasScore) return false;
+  if (!RPDIAG_COVERED_SERVICES.has((args.serviceType || '').toLowerCase())) return false;
+  return (args.board || '').toLowerCase() !== 'cold';
+}
+
+// 灰=测不了/无质量数据，与 qualityScoreColor 的红=测到响应但质量真差区分开。
+// 中性灰跨 4 套主题都可辨，沿用本组件硬编码 HSL 的既有风格。
+export const UNAVAILABLE_COLOR = 'hsl(0 0% 55%)';
+
+/** 该 model 当前「不可测」：failed（硬失败清零灰）或 unavailable（v5.10 stale/aged 灰）。
+ *  代表点/最新槽位据此画灰、tooltip 近况读「不可测」。纯判定，供 sparkline 与测试复用。 */
+export function isModelQualityUnusable(m: RpdiagModelScore): boolean {
+  return m.failed === true || m.unavailable === true;
+}
+
 // rpdiag 质量分单元格：所有 model 的 5 点 sparkline (30d 均 / 7d 均 / 最近 3
 // 次单 sample 升序) 叠在同一个 SVG 画布上，**不分块**。每条折线颜色由
 // 该 model 自己的真实质量 sample 决定（100=绿/60=黄/0=红 平滑渐变），dot
@@ -164,7 +187,7 @@ interface StatusTableProps {
 //                无质量数据」，区别于 qualityScoreColor 的红=测到响应但质量真差。
 //                无任何历史的纯故障 model 画成 5 个灰点贴底的整条灰线；曾有真实分的
 //                则彩色折线在末段渐变落到灰点。tooltip 出 availability_warning
-function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; compact?: boolean }) {
+export function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; compact?: boolean }) {
   // Unique base for the per-series SVG gradient ids. SVG <defs> ids are
   // document-global, so every cell needs its own namespace; `useId` must run
   // before the early return to satisfy the rules of hooks. Strip the colons
@@ -191,9 +214,6 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
   // 圆点半径/线粗随 H 等比放大，desktop H=36 时圆点更醒目
   const DOT_R = compact ? 1.4 : 2.4;
   const STROKE_W = compact ? 1.2 : 1.6;
-  // 灰=测不了/无质量数据（硬失败故障态），与 qualityScoreColor 的红=测到响应且
-  // 质量真差区分开。中性灰跨 4 套主题都可辨，沿用本组件硬编码 HSL 的既有风格。
-  const UNAVAILABLE_COLOR = 'hsl(0 0% 55%)';
   // Y 轴参考线：80 / 100 两档，让点的高度有"刻度感"。score=80 对应 norm 0.4、
   // score=100 对应 norm 1.0；与折线/圆点共用 qualityScoreYNorm 保证一致。
   const referenceLines = [80, 100].map((markerScore) => ({
@@ -264,6 +284,21 @@ function QualityScoreCell({ score, compact = false }: { score?: RpdiagScore; com
         if (failed && points.length > 0) {
           const last = points[points.length - 1];
           points[points.length - 1] = { ...last, value: 0, unavailable: true };
+        }
+      }
+
+      // rpdiag quality_state="unavailable" 非硬失败（v5.10 stale/aged 行）：该 model
+      // 当前「不可测」。语义上要画一个中性灰的「代表点/最新槽位」，但**不能覆盖**
+      // recent_attempts / 30d·7d 的历史彩点（那些点仍按 qualityScoreColor 正常着色）——
+      // 这也避免「只有一个数字历史点被标灰 → every-unavailable 把整条压成灰线」误吞历史。
+      // 做法：仅当最右槽位（NUM_SLOTS-1）尚无点时，才追加一个贴底灰代表点；已被真实
+      // 近况占用则不动（历史彩点保留，不可测状态由 tooltip「不可测」传达）。纯空历史的
+      // unavailable model 也据此得到一个灰点 → 走下方 every-unavailable 整条灰线，绝不
+      // 回退成 `-`。
+      if (m.unavailable === true) {
+        const hasLatestSlot = points.some((p) => p.slot === NUM_SLOTS - 1);
+        if (!hasLatestSlot) {
+          points.push({ slot: NUM_SLOTS - 1, value: 0, unavailable: true });
         }
       }
 
@@ -496,10 +531,13 @@ interface ModelTooltipRow {
   warning?: string;
 }
 
-function buildModelTooltipRow(m: RpdiagModelScore): ModelTooltipRow {
+export function buildModelTooltipRow(m: RpdiagModelScore): ModelTooltipRow {
   const fmt = (v: number | null | undefined) => (typeof v === 'number' ? v.toFixed(1) : '—');
   const key = m.model_key || m.model || '?';
   const t = m.trend;
+  // failed=硬失败清零灰；unavailable=v5.10 stale/aged「不可测」灰。二者的近况都读作
+  // 「不可测」（沿用旧 wire 的整行降级逻辑，让代表分那一格显示不可测而非旧分数）。
+  const unusable = isModelQualityUnusable(m);
   // 近 3 次：与 sparkline 的 slot 2/3/4 同源，让 tooltip 把 5 个槽位读全
   // （30d / 7d / 近 3 次）。优先用 v5.4 的 recent_attempts（逐次 terminal attempt
   // 结局，null=hard-fail→"不可测"）；旧 wire 回退到 recent_scores + 整行 failed。
@@ -507,23 +545,33 @@ function buildModelTooltipRow(m: RpdiagModelScore): ModelTooltipRow {
   let recentStr: string;
   if (Array.isArray(t?.recent_attempts)) {
     const attempts = t.recent_attempts.slice(-3);
+    // 空 recent_attempts（近 7 天无探测）但整行 unusable → 读「不可测」而非「—」，
+    // 与 sparkline 的纯灰线一致（v5.10 stale/aged unavailable 行走此路）。
     recentStr = attempts.length > 0
       ? attempts.map((v) => (typeof v === 'number' ? fmt(v) : '不可测')).join(', ')
-      : '—';
+      : (unusable ? '不可测' : '—');
   } else {
     const recent = Array.isArray(t?.recent_scores) ? t.recent_scores.slice(-3) : [];
     if (recent.length > 0) {
       recentStr = recent
-        .map((v, i) => (m.failed && i === recent.length - 1 ? '不可测' : fmt(v)))
+        .map((v, i) => (unusable && i === recent.length - 1 ? '不可测' : fmt(v)))
         .join(', ');
     } else {
       // ranking-export.v5.1 wire 没有 recent_scores 时回退到单个 latest。
-      recentStr = m.failed ? '不可测' : fmt(t?.latest);
+      recentStr = unusable ? '不可测' : fmt(t?.latest);
     }
   }
+  // unavailable（v5.10 stale/aged）但近况仍有真实分时：不覆盖真实历史分（会误导），
+  // 而是补一个「当前不可测」后缀，确保"当前不可测"这一状态在 tooltip 里不会消失
+  // （sparkline 侧若最右槽位被真实点占用同样不另画灰点，此后缀是唯一的当前态信号）。
+  const detail = `30d=${fmt(t?.avg_30d)}  7d=${fmt(t?.avg_7d)}  近3次=${recentStr}`;
+  const detailWithState =
+    m.unavailable === true && !recentStr.includes('不可测')
+      ? `${detail}（当前不可测）`
+      : detail;
   return {
     key,
-    detail: `30d=${fmt(t?.avg_30d)}  7d=${fmt(t?.avg_7d)}  近3次=${recentStr}`,
+    detail: detailWithState,
     warning: m.availability_warning || undefined,
   };
 }
@@ -561,6 +609,7 @@ function MobileRow({ index, style, data, slowLatencyMs, enableAnnotations, showP
           onBlockHover={onBlockHover}
           onBlockLeave={onBlockLeave}
           rpdiagScore={rpdiagEnabled ? lookupRpdiagScore(rpdiagScores, [item.providerName, item.providerId], item.serviceType, item.channelName || item.channel, item.channelId) : undefined}
+          rpdiagEnabled={rpdiagEnabled}
         />
       </div>
     </div>
@@ -580,6 +629,7 @@ function MobileListItem({
   onBlockHover,
   onBlockLeave,
   rpdiagScore,
+  rpdiagEnabled = false,
 }: {
   item: ProcessedMonitorData;
   slowLatencyMs: number;
@@ -592,8 +642,9 @@ function MobileListItem({
   onBlockHover: (e: React.MouseEvent<HTMLDivElement>, point: HistoryPoint) => void;
   onBlockLeave: () => void;
   rpdiagScore?: RpdiagScore;
+  rpdiagEnabled?: boolean;
 }) {
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
   const ServiceIcon = getCachedServiceIcon(item.serviceType);
 
   // 聚合热力图数据
@@ -721,9 +772,14 @@ function MobileListItem({
           >
             {item.uptime >= 0 ? `${item.uptime}%` : '--'}
           </span>
-          {rpdiagScore && rpdiagScore.models && rpdiagScore.models.length > 0 && (
+          {rpdiagScore && rpdiagScore.models && rpdiagScore.models.length > 0 ? (
             <QualityScoreCell score={rpdiagScore} compact />
-          )}
+          ) : shouldShowQualityPending({ rpdiagEnabled, hasScore: !!rpdiagScore, serviceType: item.serviceType, board: item.board }) ? (
+            // 移动端：有分/待测两态显示；无分且非待测维持原「不渲染」以最小化视觉变化。
+            <span className="text-muted text-xs" title={t('table.qualityPendingTooltip')}>
+              {t('table.qualityPending')}
+            </span>
+          ) : null}
           {/* 时间和延迟（总是显示） */}
           <div className="flex items-center gap-2 text-[10px] text-muted font-mono">
             {item.lastCheckTimestamp && (
@@ -1253,7 +1309,20 @@ function StatusTableComponent({
               </td>
               {showQualityColumn && (
               <td className="px-1.5 py-1 whitespace-nowrap">
-                <QualityScoreCell score={lookupRpdiagScore(rpdiagScores, [item.providerName, item.providerId], item.serviceType, item.channelName || item.channel, item.channelId)} />
+                {(() => {
+                  const rpScore = lookupRpdiagScore(rpdiagScores, [item.providerName, item.providerId], item.serviceType, item.channelName || item.channel, item.channelId);
+                  if (rpScore && rpScore.models && rpScore.models.length > 0) {
+                    return <QualityScoreCell score={rpScore} />;
+                  }
+                  if (shouldShowQualityPending({ rpdiagEnabled: showQualityColumn, hasScore: !!rpScore, serviceType: item.serviceType, board: item.board })) {
+                    return (
+                      <span className="text-muted text-xs" title={t('table.qualityPendingTooltip')}>
+                        {t('table.qualityPending')}
+                      </span>
+                    );
+                  }
+                  return <span className="text-muted text-xs">-</span>;
+                })()}
               </td>
               )}
               <td className="pl-1.5 pr-2 py-1.5 align-middle">

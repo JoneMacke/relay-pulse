@@ -161,6 +161,9 @@ export interface RpdiagModelScore {
   failed?: boolean;
   /** 故障原因文案（rpdiag 后端动态生成），在质量列 tooltip 内 verbatim 展示。 */
   availability_warning?: string;
+  /** rpdiag quality_state="unavailable" 且非 hard-fail-active（v5.10 stale/aged 行）。
+   *  前端画中性灰「不可测」但保留 recent_attempts 历史彩点（区别于 failed 的清零灰）。 */
+  unavailable?: boolean;
 }
 
 /** rpdiag 一个 (provider, service, channel) 三元组的聚合质量分。

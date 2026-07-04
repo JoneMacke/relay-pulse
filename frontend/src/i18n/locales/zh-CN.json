@@ -186,6 +186,8 @@
     },
     "expandDetails": "查看详情",
     "collapseDetails": "收起详情",
+    "qualityPending": "待测",
+    "qualityPendingTooltip": "该通道已在监测，但 rpdiag 尚未对其发起质量采样——排到即测。",
     "heatmapHint": "点击色块查看详细信息（已聚合 {{from}} → {{to}} 个数据点）",
     "timeLabels": {
       "24h": "24h",

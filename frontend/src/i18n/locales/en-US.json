@@ -186,6 +186,8 @@
     },
     "expandDetails": "View details",
     "collapseDetails": "Hide details",
+    "qualityPending": "Pending",
+    "qualityPendingTooltip": "Monitored, but rpdiag hasn't sampled this channel's quality yet — it will once it comes up in rotation.",
     "heatmapHint": "Click a cell for details (aggregated {{from}} → {{to}} data points)",
     "timeLabels": {
       "24h": "24h",
