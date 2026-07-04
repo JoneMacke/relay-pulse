@@ -1254,3 +1254,87 @@ func TestBuildScoresMergesDriftedNamesUnderOneCID(t *testing.T) {
 		t.Fatalf("merged bucket models = %d, want 2", len(entry.Models))
 	}
 }
+
+// f is a package-level *float64 helper for constructing recent_attempts /
+// score fixtures (mirrors the per-test `mk` closures used elsewhere).
+func f(v float64) *float64 { return &v }
+
+// mustTime parses an RFC3339 timestamp for fixtures, failing the test on error.
+func mustTime(t *testing.T, s string) time.Time {
+	t.Helper()
+	ts, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		t.Fatalf("mustTime(%q): %v", s, err)
+	}
+	return ts
+}
+
+func TestBuildScores_UnavailableRowExcludedFromAverage(t *testing.T) {
+	now := mustTime(t, "2026-07-04T00:00:00Z")
+	fresh := func(v float64) ScoreTrend { // 一个新鲜代表分 + 当前时间戳
+		at := "2026-07-03T23:00:00Z"
+		return ScoreTrend{Latest: &v, LatestAt: &at, RecentScores: []float64{v}}
+	}
+	rows := []rankingRow{
+		{ProviderName: "acme", ServiceCLICommand: "claude", ChannelName: "O-Max",
+			ModelKey: "haiku", ScoreTrend: fresh(95)},
+		{ProviderName: "acme", ServiceCLICommand: "claude", ChannelName: "O-Max",
+			ModelKey: "opus", QualityState: "unavailable", HardFailActive: false,
+			ScoreTrend: ScoreTrend{RecentAttempts: []*float64{f(90), f(88)}}},
+		{ProviderName: "other", ServiceCLICommand: "claude", ChannelName: "O-Pro",
+			ModelKey: "opus", ScoreTrend: fresh(80)},
+	}
+	c := NewClient(nil, "", 0, true)
+	scores := c.buildScoresAt(rows, now)
+	got := scores[ScoreKey("acme", "cc", "O-Max")]
+	if got.MaxScore == nil || *got.MaxScore != 95 {
+		t.Fatalf("MaxScore = %v, want 95 (opus unavailable must be excluded, not averaged as 0)", got.MaxScore)
+	}
+	var opus *ModelScore
+	for i := range got.Models {
+		if got.Models[i].ModelKey == "opus" {
+			opus = &got.Models[i]
+		}
+	}
+	if opus == nil {
+		t.Fatal("opus unavailable row must be kept for display")
+	}
+	if !opus.Unavailable {
+		t.Error("opus.Unavailable = false, want true")
+	}
+}
+
+func TestBuildScores_HardFailUnavailableRowUnchanged(t *testing.T) {
+	now := mustTime(t, "2026-07-04T00:00:00Z")
+	rows := []rankingRow{
+		{ProviderName: "acme", ServiceCLICommand: "claude", ChannelName: "O-Max",
+			ModelKey: "opus", QualityState: "unavailable", HardFailActive: true,
+			AvailabilityWarning: "质量探测未取得可评分响应",
+			ScoreTrend:          ScoreTrend{RecentAttempts: []*float64{nil, nil}}},
+	}
+	c := NewClient(nil, "", 0, true)
+	got := c.buildScoresAt(rows, now)[ScoreKey("acme", "cc", "O-Max")]
+	if len(got.Models) != 1 || !got.Models[0].Failed {
+		t.Fatalf("hard-fail unavailable row must stay Failed grey-0, got %+v", got.Models)
+	}
+	if got.Models[0].Unavailable {
+		t.Error("hard-fail-active row must NOT be tagged Unavailable (Failed handles it)")
+	}
+}
+
+func TestBuildScores_AllUnavailableChannelHasNilMaxScore(t *testing.T) {
+	now := mustTime(t, "2026-07-04T00:00:00Z")
+	rows := []rankingRow{
+		{ProviderName: "acme", ServiceCLICommand: "claude", ChannelName: "O-Dark",
+			ModelKey: "opus", QualityState: "unavailable", HardFailActive: false,
+			ScoreTrend: ScoreTrend{RecentAttempts: []*float64{f(90)}}},
+	}
+	c := NewClient(nil, "", 0, true)
+	got := c.buildScoresAt(rows, now)[ScoreKey("acme", "cc", "O-Dark")]
+	if got.MaxScore != nil {
+		t.Fatalf("MaxScore = %v, want nil (all-unavailable channel sinks)", *got.MaxScore)
+	}
+	if len(got.Models) != 1 {
+		t.Fatalf("model must be kept for display, got %d models", len(got.Models))
+	}
+}

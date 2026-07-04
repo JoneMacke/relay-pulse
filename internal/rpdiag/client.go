@@ -112,6 +112,11 @@ type ModelScore struct {
 	DetailURL           string     `json:"detail_url,omitempty"`
 	Failed              bool       `json:"failed,omitempty"`
 	AvailabilityWarning string     `json:"availability_warning,omitempty"`
+	// Unavailable marks a row rpdiag reports as quality_state="unavailable" and
+	// NOT hard-fail-active (v5.10 stale-scored / never-scored aged rows). The
+	// front end renders it grey ("can't measure") while keeping its historical
+	// recent_attempts dots; unlike Failed it does NOT zero the display trend.
+	Unavailable bool `json:"unavailable,omitempty"`
 }
 
 // Score is the aggregated quality view for one (provider, service, channel)
@@ -341,6 +346,14 @@ type rankingRow struct {
 	// condition; we mirror that as a representative score of 0.
 	HardFailActive      bool   `json:"hard_fail_active"`
 	AvailabilityWarning string `json:"availability_warning"`
+	// QualityState is rpdiag export v5.3+'s row state: "scored" (has/had a real
+	// fingerprint sample) or "unavailable" (a registered model with no current
+	// scoreable data — never scored, or scored once then went dark >30d, v5.10).
+	// "" on pre-v5.3 wire → treated as "scored". An unavailable row that is NOT
+	// hard-fail-active is kept for display but excluded from the channel's
+	// active-model average, so a channel with no current signal sinks on a nil
+	// MaxScore rather than a misleading 0 (see buildScoreRowView / buildScoresAt).
+	QualityState string `json:"quality_state"`
 }
 
 func (c *Client) refresh(ctx context.Context) (map[string]Score, error) {
@@ -538,22 +551,27 @@ func (c *Client) buildScores(rows []rankingRow) map[string]Score {
 // row is a fresh current signal. Computing it once keeps the activeness pass and
 // the aggregation pass from drifting apart on the hard-fail/stale rules.
 type scoreRowView struct {
-	row           rankingRow
-	key           string // legacy triple at first; rewritten to the bucket key (cid: or legacy) in buildScoresAt
-	cid           string // raw relaypulse_channel_id ("" if none); opaque, trimmed, never lower-cased
-	service       string
-	modelKey      string
-	displayLatest *float64
-	rankLatest    *float64
-	trend         ScoreTrend
-	fresh         bool
+	row             rankingRow
+	key             string // legacy triple at first; rewritten to the bucket key (cid: or legacy) in buildScoresAt
+	cid             string // raw relaypulse_channel_id ("" if none); opaque, trimmed, never lower-cased
+	service         string
+	modelKey        string
+	displayLatest   *float64
+	rankLatest      *float64
+	trend           ScoreTrend
+	fresh           bool
+	excludeFromRank bool // quality_state=="unavailable" && !HardFailActive: kept for display, out of the average
 }
 
 // buildScoreRowView normalizes one row, returning ok=false for rows relaypulse
-// never consumes (public /submit entries, rows without a representative sample,
-// rows missing any part of the join triple or a model identity). The returned
-// rankLatest is always non-nil when ok is true: displayLatest is non-nil by
-// construction, and every branch sets rankLatest to a non-nil pointer.
+// never consumes (public /submit entries, non-unavailable rows without a
+// representative sample, rows missing any part of the join triple or a model
+// identity). quality_state="unavailable" rows are kept even without a sample so
+// they can render the grey "can't measure" cell. The returned
+// rankLatest is always non-nil when ok is true — EXCEPT on excludeFromRank rows
+// (a non-hard-fail unavailable row with no representative sample leaves
+// rankLatest nil), and those rows are `continue`d in buildScoresAt before any
+// rankLatest deref, so no nil ever reaches the average.
 func buildScoreRowView(row rankingRow, now time.Time) (scoreRowView, bool) {
 	// displayLatest drives the per-model Score/Trend (honest history);
 	// rankLatest drives the average ranking key (0 when unmeasurable now).
@@ -574,7 +592,15 @@ func buildScoreRowView(row rankingRow, now time.Time) (scoreRowView, bool) {
 	case displayLatest != nil:
 		fresh = true
 	}
-	if displayLatest == nil {
+	unavailable := strings.EqualFold(row.QualityState, "unavailable")
+	// An unavailable row that isn't hard-fail-active carries no current signal:
+	// keep it for the grey "can't measure" cell (bypass the displayLatest==nil
+	// drop below) but keep it OUT of the active-model average so it can't fold a
+	// 0 into MaxScore when its model is fresh elsewhere. Hard-fail-active
+	// unavailable rows are untouched — they already flow through the
+	// HardFailActive case above (grey 0, counted), so v5.9 wire stays no-op.
+	excludeFromRank := unavailable && !row.HardFailActive
+	if !unavailable && displayLatest == nil {
 		return scoreRowView{}, false
 	}
 	if strings.EqualFold(row.SubmissionSource, "user") {
@@ -605,15 +631,16 @@ func buildScoreRowView(row rankingRow, now time.Time) (scoreRowView, bool) {
 	}
 
 	return scoreRowView{
-		row:           row,
-		key:           ScoreKey(provider, service, channel),
-		cid:           strings.TrimSpace(row.RelaypulseChannelID),
-		service:       service,
-		modelKey:      modelKey,
-		displayLatest: displayLatest,
-		rankLatest:    rankLatest,
-		trend:         trend,
-		fresh:         fresh,
+		row:             row,
+		key:             ScoreKey(provider, service, channel),
+		cid:             strings.TrimSpace(row.RelaypulseChannelID),
+		service:         service,
+		modelKey:        modelKey,
+		displayLatest:   displayLatest,
+		rankLatest:      rankLatest,
+		trend:           trend,
+		fresh:           fresh,
+		excludeFromRank: excludeFromRank,
 	}, true
 }
 
@@ -760,6 +787,7 @@ func (c *Client) buildScoresAt(rows []rankingRow, now time.Time) map[string]Scor
 			DetailURL:           row.DetailURL,
 			Failed:              row.HardFailActive,
 			AvailabilityWarning: row.AvailabilityWarning,
+			Unavailable:         view.excludeFromRank,
 		})
 		if entry.ChannelURL == "" {
 			// 通道整体跳转 = 首条可解析 detail_url 去掉 model 参数 → 落到 rpdiag 的
@@ -770,7 +798,7 @@ func (c *Client) buildScoresAt(rows []rankingRow, now time.Time) map[string]Scor
 		}
 		out[view.key] = entry
 
-		if !activeModels[view.service][view.modelKey] {
+		if view.excludeFromRank || !activeModels[view.service][view.modelKey] {
 			continue
 		}
 		agg := aggs[view.key]
