@@ -229,7 +229,7 @@ sponsor_pin:
 
 #### `sponsor_pin.max_pinned`
 - **类型**: integer
-- **默认值**: `3`
+- **默认值**: `10`
 - **说明**: 最多置顶的通道数量（全局硬上限）
 
 #### `sponsor_pin.min_uptime`

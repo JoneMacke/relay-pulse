@@ -37,7 +37,7 @@ type SponsorPinConfig struct {
 	// 是否启用置顶功能（默认 true）
 	Enabled *bool `yaml:"enabled" json:"enabled"`
 
-	// 最多置顶数量（默认 3，0 表示禁用）
+	// 最多置顶数量（默认 10；0 或负数回退为默认值，禁用置顶用 enabled: false）
 	MaxPinned int `yaml:"max_pinned" json:"max_pinned"`
 
 	// 最低可用率要求（默认 95.0，百分比 0-100）
