@@ -28,6 +28,41 @@ import (
 //go:embed frontend/dist
 var frontendFS embed.FS
 
+// rpdiagSiteURL 是 rpdiag 质量盲评站点的根地址，旧 /detect 专题页 301 的目标。
+// 刻意硬编码而非从 MONITOR_RPDIAG_EXPORT_URL 派生：那是数据接口契约，不承载
+// 「站点首页在哪」的语义；前端 Footer/质量列浮层的外链同样硬编码此地址。
+const rpdiagSiteURL = "https://diag.relaypulse.top/"
+
+// legacyDetectPaths 是已下线的 /detect 专题页全部旧地址（四语言 × 有无尾斜杠；
+// 尾斜杠别名此前经 SSR 的 strings.Trim 也被当作同一页，须一并迁移）。
+var legacyDetectPaths = map[string]bool{
+	"/detect": true, "/detect/": true,
+	"/en/detect": true, "/en/detect/": true,
+	"/ru/detect": true, "/ru/detect/": true,
+	"/ja/detect": true, "/ja/detect/": true,
+}
+
+// redirectLegacyDetect 把旧 /detect 专题页的 GET/HEAD 请求 301 到 rpdiag 站点，
+// 保留 query string（UTM/诊断参数）。rpdiag 未启用（私有部署）时不跳转，
+// 请求继续走 NoRoute 的 SPA 兜底。
+func redirectLegacyDetect(handler *Handler) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !legacyDetectPaths[c.Request.URL.Path] ||
+			(c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead) ||
+			!handler.rpdiagEnabled() {
+			c.Next()
+			return
+		}
+
+		target := rpdiagSiteURL
+		if c.Request.URL.RawQuery != "" {
+			target += "?" + c.Request.URL.RawQuery
+		}
+		c.Redirect(http.StatusMovedPermanently, target)
+		c.Abort()
+	}
+}
+
 // Server HTTP服务器
 type Server struct {
 	handler    *Handler
@@ -153,6 +188,11 @@ func NewServer(store storage.Storage, cfg *config.AppConfig, port string, autoMo
 	// 创建处理器
 	handler := NewHandler(store, cfg, autoMover)
 	handler.SetRpdiagClient(rpdiag.NewClientFromEnv())
+
+	// 旧 /detect 专题页已下线，内容由 rpdiag 站点（diag.relaypulse.top）的 SSR 页面承接，
+	// 四语言路径统一 301 过去。仅对启用 rpdiag 的部署生效：私有部署不跳转，
+	// 落到 NoRoute 的 SPA noindex 兜底（detect 已不在 SSR 白名单）。
+	router.Use(redirectLegacyDetect(handler))
 
 	// 注册 API 路由
 	router.GET("/api/status", handler.GetStatus)
@@ -397,8 +437,7 @@ func setupStaticFiles(router *gin.Engine, handler *Handler) {
 		cfg := handler.config
 		handler.cfgMu.RUnlock()
 
-		// rpdiagEnabled 透传给 SSR：rpdiag 未启用时 /detect 专题页注入 noindex（不收录无意义页）
-		html, isNotFound := injectMetaTags(string(data), path, cfg, handler.rpdiagEnabled())
+		html, isNotFound := injectMetaTags(string(data), path, cfg)
 
 		// 如果是 404（provider 不存在），返回 404 状态码
 		if isNotFound {

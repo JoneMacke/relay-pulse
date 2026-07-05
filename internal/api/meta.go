@@ -49,7 +49,7 @@ func isValidProviderSlug(slug string) bool {
 var indexableStaticPaths = map[string]bool{
 	"":        true, // 首页
 	"contact": true,
-	"detect":  true, // 中转站检测专题页（可用性 + 质量盲测）
+	// 注：旧 /detect 专题页已下线，由 server.go 的 redirectLegacyDetect 301 到 rpdiag 站点。
 }
 
 // trimLanguagePrefix 去掉路径前后斜杠与语言前缀，返回剩余的路径段。
@@ -167,24 +167,6 @@ func getMetaContent(langCode string, slug string, providerName string, isProvide
 		case "ja-JP":
 			title = fmt.Sprintf("%s サービス可用性監視 - RelayPulse", escapedName)
 			description = fmt.Sprintf("%s の API 可用性、レイテンシ、サービス品質をリアルタイムで監視します。", escapedName)
-		}
-	} else if staticPath == "detect" {
-		// 中转站检测专题页：复用前端 detect.meta.* i18n 文案，保证服务端注入
-		// （爬虫初见）与客户端 Helmet 渲染一致。文案里禁用裸双引号（title/description
-		// 是 raw 插入 index.html，见 generatePageMeta）。
-		switch langCode {
-		case "zh-CN":
-			title = "中转站检测 - 实测 API 中转站是否掺水、掉包、偷偷降级 | RelayPulse"
-			description = "RelayPulse 中转站检测：实时监测中转站可用性，并用盲测指纹取证识别模型伪装、假流式、偷偷降级。一页看清每家中转站的真实质量分与可用性，证据逐条可溯源。"
-		case "en-US":
-			title = "Relay Station Detection - Test if an API relay is degraded or swapping models | RelayPulse"
-			description = "RelayPulse relay detection: monitor relay availability in real time and use blind fingerprint forensics to spot model masquerading, fake streaming, and silent downgrades. See each relay's real quality score with traceable evidence."
-		case "ru-RU":
-			title = "Проверка API-ретрансляторов - выявление подмены моделей и деградации | RelayPulse"
-			description = "RelayPulse: мониторинг доступности ретрансляторов в реальном времени и слепая дактилоскопическая экспертиза для выявления подмены моделей, поддельного стриминга и скрытого занижения качества. Реальная оценка качества каждого ретранслятора с прослеживаемыми доказательствами."
-		case "ja-JP":
-			title = "API中継ステーション検出 - モデル差し替えや品質低下を実測 | RelayPulse"
-			description = "RelayPulse 中継検出：中継の可用性をリアルタイムで監視し、ブラインド指紋フォレンジックでモデル偽装・偽ストリーミング・こっそりとした品質低下を検出します。各中継の本当の品質スコアを、追跡可能な証拠とともに確認できます。"
 		}
 	} else if staticPath == "contact" {
 		// 联系页：直接复用前端 ContactPage 的 contact.meta.* i18n 文案，
@@ -350,54 +332,6 @@ func generatePageMeta(meta MetaData, baseURL string) PageMeta {
     %s
     </script>`, string(jsonLDBytes))
 		}
-	} else if meta.StaticPath == "detect" {
-		// 中转站检测页：WebPage + 面包屑（首页 → 中转站检测），用 @graph 合并多 schema。
-		// 刻意不发 FAQPage：Google 的 FAQ 富摘要早已收窄到权威机构，普通站点发了也不展示，
-		// 反而要在 Go 侧复刻多语 FAQ 文案、与前端 i18n 双源易漂移——不弄虚作假，不发拿不到的 schema。
-		var homeURL, homeLabel, crumbLabel string
-		if meta.Language.PathPrefix == "" {
-			homeURL = fmt.Sprintf("%s/", baseURL)
-		} else {
-			homeURL = fmt.Sprintf("%s/%s/", baseURL, meta.Language.PathPrefix)
-		}
-		switch meta.Language.Code {
-		case "en-US":
-			homeLabel, crumbLabel = "Home", "Relay Detection"
-		case "ru-RU":
-			homeLabel, crumbLabel = "Главная", "Проверка ретрансляторов"
-		case "ja-JP":
-			homeLabel, crumbLabel = "ホーム", "中継検出"
-		default:
-			homeLabel, crumbLabel = "首页", "中转站检测"
-		}
-		jsonLDData := map[string]interface{}{
-			"@context": "https://schema.org",
-			"@graph": []interface{}{
-				map[string]interface{}{
-					"@type":       "WebPage",
-					"name":        meta.Title,
-					"url":         canonicalURL,
-					"description": meta.Description,
-					"inLanguage":  meta.Language.Code,
-				},
-				map[string]interface{}{
-					"@type": "BreadcrumbList",
-					"itemListElement": []interface{}{
-						map[string]interface{}{"@type": "ListItem", "position": 1, "name": homeLabel, "item": homeURL},
-						map[string]interface{}{"@type": "ListItem", "position": 2, "name": crumbLabel, "item": canonicalURL},
-					},
-				},
-			},
-		}
-		jsonLDBytes, err := json.MarshalIndent(jsonLDData, "    ", "  ")
-		if err != nil {
-			logger.Warn("seo", "JSON-LD 序列化失败", "staticPath", meta.StaticPath, "error", err)
-			jsonLD = ""
-		} else {
-			jsonLD = fmt.Sprintf(`    <script type="application/ld+json">
-    %s
-    </script>`, string(jsonLDBytes))
-		}
 	} else if meta.StaticPath == "contact" {
 		// 联系页：ContactPage 类型（首页才用 WebSite）
 		jsonLDData := map[string]interface{}{
@@ -450,7 +384,7 @@ func generatePageMeta(meta MetaData, baseURL string) PageMeta {
 
 // injectMetaTags 在 index.html 中注入 meta 标签
 // 返回 (html, isNotFound)，isNotFound 表示 provider 不存在
-func injectMetaTags(indexHTML string, path string, cfg *config.AppConfig, rpdiagEnabled bool) (string, bool) {
+func injectMetaTags(indexHTML string, path string, cfg *config.AppConfig) (string, bool) {
 	baseURL := cfg.PublicBaseURL
 
 	// 解析路径
@@ -499,13 +433,6 @@ func injectMetaTags(indexHTML string, path string, cfg *config.AppConfig, rpdiag
 	staticPath := ""
 	if !isProviderPage {
 		staticPath = parseStaticPath(path)
-	}
-
-	// /detect 专题页的索引价值完全依赖 rpdiag 质量数据；私有化部署未启用 rpdiag 时
-	// 直接 noindex，不注入 detect 专属 meta/canonical/JSON-LD——否则会变成首页语义的
-	// 可索引重复页，且是在给本地不存在的功能做 SEO。与 sitemap 收录条件一致。
-	if staticPath == "detect" && !rpdiagEnabled {
-		return injectNoindexMeta(indexHTML, langCode), false
 	}
 
 	// 获取 meta 内容（传入 slug、displayName 与静态页 key）

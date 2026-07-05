@@ -2,8 +2,6 @@ import { useState, useEffect, useMemo, useId, memo } from 'react';
 import { List, type RowComponentProps } from 'react-window';
 import { ArrowUpDown, ArrowUp, ArrowDown, Zap, Shield, Filter } from 'lucide-react';
 import { useTranslation, Trans } from 'react-i18next';
-import { Link } from 'react-router-dom';
-import { LANGUAGE_PATH_MAP, type SupportedLanguage } from '../i18n';
 import { StatusDot } from './StatusDot';
 import { HeatmapBlock } from './HeatmapBlock';
 import { LayeredHeatmapBlock } from './LayeredHeatmapBlock';
@@ -1111,8 +1109,7 @@ function StatusTableComponent({
               <div className="flex items-center gap-1">
                 {t('table.headers.quality', '质量')}
                 <HeaderInfoPopover align="right" widthClass="w-56">
-                  {/* 文案内 <diag> 占位 → diag.relaypulse.top 外链（新标签打开 rpdiag 站点本身，
-                      与下方指向本站 /detect 的内链目的地不同，二者并存）。 */}
+                  {/* 文案内 <diag> 占位 → diag.relaypulse.top 外链（新标签打开 rpdiag 站点本身）。 */}
                   <Trans
                     i18nKey="table.headers.qualityTooltip"
                     components={{
@@ -1127,14 +1124,16 @@ function StatusTableComponent({
                       ),
                     }}
                   />
-                  {/* 了解评分方法的上下文内链 → /detect（hover 可点；首页爬虫锚点由页脚承担） */}
-                  <Link
-                    to={LANGUAGE_PATH_MAP[i18n.language as SupportedLanguage] ? `/${LANGUAGE_PATH_MAP[i18n.language as SupportedLanguage]}/detect` : '/detect'}
+                  {/* 了解评分方法 → rpdiag 站点（本站旧 /detect 专题页已下线，内容由 diag 承载） */}
+                  <a
+                    href="https://diag.relaypulse.top"
+                    target="_blank"
+                    rel="noopener noreferrer"
                     onClick={(e) => e.stopPropagation()}
                     className="mt-1.5 block text-accent hover:underline font-medium"
                   >
                     {t('table.qualityHintLink')} →
-                  </Link>
+                  </a>
                 </HeaderInfoPopover>
                 {rpdiagScoresLoaded && <SortIcon columnKey="qualityScore" />}
               </div>

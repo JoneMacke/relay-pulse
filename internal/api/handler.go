@@ -278,8 +278,8 @@ func (h *Handler) SetRpdiagClient(client *rpdiag.Client) {
 }
 
 // rpdiagEnabled 报告 rpdiag 质量分功能是否启用（= 是否注入了客户端）。
-// 这是「质量列 / /detect 专题页 / sitemap / SSR 可索引性」共用的单一信号源：
-// 私有化部署未设 MONITOR_RPDIAG_ENABLED 时全部一致地消失。
+// 这是「质量列（含前端 rpdiag_enabled flag）/ 旧 /detect 路径 301」共用的单一信号源：
+// 私有化部署未设 MONITOR_RPDIAG_ENABLED 时质量入口全部一致地消失。
 // rpdiagClient 仅启动期一次性注入、不支持热替换，故读取无需加锁。
 func (h *Handler) rpdiagEnabled() bool {
 	return h.rpdiagClient != nil
@@ -711,24 +711,15 @@ func (h *Handler) buildSitemapXML(providerSlugs []string) string {
 		sb.WriteString("  </url>\n")
 	}
 
-	// 生成静态内容页 URL（detect 中转站检测专题页、contact 联系页）
+	// 生成静态内容页 URL（contact 联系页）
 	// 仅索引落地页；apply/change 是表单页，前端已设 noindex。
-	// 不发 lastmod：这些页的正文不随天滚动（detect 的 live 榜数据在客户端刷新，
-	// 但页面本体是静态编辑内容），避免“假新鲜度”被搜索引擎贬权。
+	// 不发 lastmod：这些页的正文不随天滚动，避免“假新鲜度”被搜索引擎贬权。
+	// 注：旧 /detect 专题页已下线（301 到 rpdiag 站点），不再收录。
 	staticPages := []struct {
 		path     string
 		priority string
 	}{
 		{"contact", "0.6"},
-	}
-	// /detect 专题页的全部价值都建立在 rpdiag 质量数据上；私有化部署未启用 rpdiag 时
-	// 不收录（与 meta.go 的 SSR noindex 对齐，避免给本地不存在的功能做 SEO）。
-	// sitemap 内顺序不影响排名（权重由 priority 表达），故直接前插以保留"专题页优先"语义。
-	if h.rpdiagEnabled() {
-		staticPages = append([]struct {
-			path     string
-			priority string
-		}{{"detect", "0.8"}}, staticPages...)
 	}
 	for _, page := range staticPages {
 		for _, lang := range languages {

@@ -73,7 +73,7 @@ export function useMonitorData({
   // /api/status 回来后用 meta.hide_price_column 覆盖（旧后端缺该字段时继续走 build-time 值）。
   const [hidePriceColumn, setHidePriceColumn] = useState<boolean>(HIDE_PRICE_COLUMN);
   // rpdiag 质量功能总开关。默认 true（fail-open）：滚动发布或旧后端缺 meta.rpdiag_enabled 时
-  // 行为零变化；仅当新后端明确返回 false（私有部署未接 rpdiag）才隐藏质量列 + /detect 入口。
+  // 行为零变化；仅当新后端明确返回 false（私有部署未接 rpdiag）才隐藏质量列 + diag 外链入口。
   const [rpdiagEnabled, setRpdiagEnabled] = useState<boolean>(true);
 
   // 统一的刷新触发器，供手动刷新与自动轮询复用

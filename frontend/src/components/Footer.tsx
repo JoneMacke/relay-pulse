@@ -1,20 +1,16 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
 import { Github, Tag, ChevronDown, ChevronUp, Bug, Zap, Handshake, ShieldCheck, AlertTriangle, ScanSearch } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useVersionInfo } from '../hooks/useVersionInfo';
 import { FEEDBACK_URLS } from '../constants';
-import { LANGUAGE_PATH_MAP, type SupportedLanguage } from '../i18n';
 
 interface FooterProps {
-  /** rpdiag 质量功能总开关。false（私有部署未接 rpdiag）时不渲染「中转站检测」专题页入口。默认 true。 */
+  /** rpdiag 质量功能总开关。false（私有部署未接 rpdiag）时不渲染「中转站检测」外链入口。默认 true。 */
   rpdiagEnabled?: boolean;
 }
 
 export function Footer({ rpdiagEnabled = true }: FooterProps) {
-  const { t, i18n } = useTranslation();
-  const langPrefix = LANGUAGE_PATH_MAP[i18n.language as SupportedLanguage];
-  const detectPath = langPrefix ? `/${langPrefix}/detect` : '/detect';
+  const { t } = useTranslation();
   const { versionInfo } = useVersionInfo();
   const [expanded, setExpanded] = useState(false);
 
@@ -76,16 +72,19 @@ export function Footer({ rpdiagEnabled = true }: FooterProps) {
       {/* GitHub 链接与版本信息 */}
       <div className={`${expanded ? 'mt-4 pt-4' : 'mt-2 pt-2 sm:mt-4 sm:pt-4'} border-t border-default/50 flex flex-col sm:flex-row items-center justify-center gap-2 text-xs`}>
         <div className="flex items-center gap-2 flex-wrap justify-center">
-          {/* 中转站检测专题页入口（首页爬虫锚点）。rpdiag 未启用时整体不渲染，避免链到无意义页。 */}
+          {/* 中转站检测入口 → rpdiag 站点（质量盲评专题内容由 diag 承载，本站旧 /detect 页已下线）。
+              rpdiag 未启用时整体不渲染，避免链到无意义站点。 */}
           {rpdiagEnabled && (
             <>
-              <Link
-                to={detectPath}
+              <a
+                href="https://diag.relaypulse.top"
+                target="_blank"
+                rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-elevated/50 text-secondary hover:text-accent hover:bg-muted/50 transition min-h-[36px]"
               >
                 <ScanSearch size={14} />
                 <span>{t('footer.detectLink')}</span>
-              </Link>
+              </a>
               <span className="hidden sm:inline text-muted">·</span>
             </>
           )}
