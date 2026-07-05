@@ -1419,6 +1419,35 @@ func TestEvaluate_ExpiredButHealthy_BoardPreservedLevelDowngraded(t *testing.T) 
 	}
 }
 
+// TestEvaluate_ExpiredSecondaryAnchor_HealthyStaysSecondaryLevelDowngraded 验证
+// 到期解耦 × 锚点语义的叠加：configBoard=secondary 的到期通道即使可用率 100%
+// 也不得被升入 hot（锚点=天花板），同时 SponsorLevel 正常降为 pulse。
+func TestEvaluate_ExpiredSecondaryAnchor_HealthyStaysSecondaryLevelDowngraded(t *testing.T) {
+	store := newMockStorage()
+	key := storage.MonitorKey{Provider: "expiredsecondary", Service: "cc", Channel: "vip"}
+	store.history[key] = makeRecords(1, 20) // 可用率 100%，旧逻辑会触发 promote
+
+	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	cfg := expiredAutoMoveCfg(config.ServiceConfig{
+		Provider: "expiredsecondary", Service: "cc", Channel: "vip", Board: "secondary",
+		SponsorLevel: config.SponsorLevelBeacon, ExpiresAt: yesterday,
+	})
+
+	svc := NewService(store, cfg)
+	svc.Evaluate(context.Background())
+
+	ov, ok := svc.GetBoardOverride(key)
+	if !ok {
+		t.Fatal("expected override with SponsorLevel=pulse for expired beacon channel")
+	}
+	if ov.Board != "" {
+		t.Errorf("configBoard=secondary 的到期通道不应写任何 board override（锚点语义），实际 board=%q", ov.Board)
+	}
+	if ov.SponsorLevel != config.SponsorLevelPulse {
+		t.Errorf("expected sponsor_level=pulse, got %s", ov.SponsorLevel)
+	}
+}
+
 // TestEvaluate_ExpiredAndDead_AutoColdExemptDemotesSecondary 验证解耦后语义：
 // auto_cold_exempt + 到期 + 可用率 0% → 走可用率降级路径（hot→secondary），同时降级 SponsorLevel。
 // auto_cold_exempt 阻止冷板，但不阻止 secondary。
