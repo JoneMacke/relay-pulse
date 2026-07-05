@@ -22,7 +22,7 @@ type MonitorOverride struct {
 }
 
 // Service 自动移板服务。
-// 定期基于 7 天可用率和赞助到期状态评估 hot/secondary/cold 归属，维护运行时 override map。
+// 定期基于 7 天可用率评估 hot/secondary/cold 板块归属；赞助到期仅将等级降为 pulse（不影响板块）。维护运行时 override map。
 // cold override 是 sticky 的：一旦生成，后续评估不再重新评估该项，仅可通过 auto_cold_exempt 手动解除。
 type Service struct {
 	storage storage.Storage
@@ -574,29 +574,31 @@ func (s *Service) evaluate(ctx context.Context, snap *evalSnapshot) (map[storage
 	endTime := alignToNextUTCDay(nowUTC)
 	currentOverrides := s.currentOverrides()
 
+	// sponsorDowngradeKeys 收集本次评估中需要降级 SponsorLevel 的 key（到期且当前等级 > pulse）。
+	// 板块移板完成后统一应用：只写入 SponsorLevel，不覆盖 Board/ColdReason。
+	sponsorDowngradeKeys := make(map[storage.MonitorKey]string) // key → expiresAt（仅用于日志）
+
+	// applySponsorDowngrades 将到期降级合并到 overrides 中。
+	// 必须在每个 return 路径前调用，以确保 sponsor 降级无论板块评估结果如何都生效。
+	applySponsorDowngrades := func() {
+		for key, expiresAt := range sponsorDowngradeKeys {
+			ov := overrides[key] // 可能已含 board override，或为零值
+			ov.SponsorLevel = config.SponsorLevelPulse
+			overrides[key] = ov
+			stats.expired++
+			logger.Info("AutoMover", "赞助到期，自动降级赞助等级",
+				"monitor", key.Provider+"/"+key.Service+"/"+key.Channel,
+				"expires_at", expiresAt)
+		}
+	}
+
 	// 收集 hot/secondary 的根监测项（排除 parent/disabled/hidden/cold）
 	type candidate struct {
 		key            storage.MonitorKey
 		configBoard    string
 		autoColdExempt bool
-		// expired 标记该项赞助已到期。到期项不再在收集阶段直接降级 secondary，
-		// 而是延后到可用率评估阶段：若 7 天可用率已低于 threshold_cold 则优先移入冷板
-		// （停止探测、节省资源），否则才回退为到期降级 secondary（expirySecondary）。
-		expired         bool
-		expiresAt       string
-		expirySecondary MonitorOverride
 	}
 	var candidates []candidate
-
-	// applyExpirySecondary 对到期项执行"降级到备板"语义（到期但未冷板时的回退），
-	// 用于 min_probes 不足、可用率仍达标、以及历史查询失败这三种回退场景。
-	applyExpirySecondary := func(c candidate) {
-		overrides[c.key] = c.expirySecondary
-		stats.expired++
-		logger.Info("AutoMover", "赞助到期，自动降级",
-			"monitor", c.key.Provider+"/"+c.key.Service+"/"+c.key.Channel,
-			"expires_at", c.expiresAt)
-	}
 
 	for _, m := range snap.monitors {
 		if m.Disabled || m.Hidden {
@@ -621,8 +623,22 @@ func (s *Service) evaluate(ctx context.Context, snap *evalSnapshot) (map[storage
 			Model:    m.Model,
 		}
 
-		// 已有 cold override 是 sticky 的：直接保留，不再重新评估
-		// 但 auto_cold_exempt 的项跳过 sticky 保留（人工恢复信号优先）
+		// 到期检查：到期日当天仍有效，次日起开始降级赞助等级。
+		// 必须在 sticky-cold 块之前执行，确保 sticky-cold 通道也能被记录（否则 continue 会跳过）。
+		// 本步骤只记录降级意图，不设置 Board——板块位置完全由后续可用率评估决定。
+		expiresAt := strings.TrimSpace(m.ExpiresAt)
+		if expiresAt != "" {
+			if expiresDate, err := time.Parse("2006-01-02", expiresAt); err == nil && today.After(expiresDate) {
+				// 仅当赞助等级高于 pulse 时才需降级（避免将低等级"升级"到 pulse）
+				if m.SponsorLevel.Weight() > config.SponsorLevelPulse.Weight() {
+					sponsorDowngradeKeys[key] = expiresAt
+				}
+			}
+		}
+
+		// 已有 cold override 是 sticky 的：直接保留，不再重新评估。
+		// 但 auto_cold_exempt 的项跳过 sticky 保留（人工恢复信号优先）。
+		// SponsorLevel 降级已在上方记录，applySponsorDowngrades 会在 return 前合并。
 		if ov, ok := currentOverrides[key]; ok && isColdBoard(ov.Board) {
 			if !m.AutoColdExempt {
 				overrides[key] = ov
@@ -631,51 +647,21 @@ func (s *Service) evaluate(ctx context.Context, snap *evalSnapshot) (map[storage
 			// exempt: 不保留 cold，继续进入正常评估流程
 		}
 
-		// 到期检查：到期日当天仍有效，次日起自动降级。
-		// 到期项默认进入候选集，由可用率评估阶段决定 cold（已死）还是 secondary（到期降级），
-		// 让"可用率冷板"优先于"到期降级"——已到期且长期不可用的通道直接停探。
-		expired := false
-		expiresAt := strings.TrimSpace(m.ExpiresAt)
-		var expirySecondary MonitorOverride
-		if expiresAt != "" {
-			if expiresDate, err := time.Parse("2006-01-02", expiresAt); err == nil && today.After(expiresDate) {
-				expired = true
-				expirySecondary = MonitorOverride{Board: "secondary"}
-				// 仅当赞助等级高于 pulse 时降级为 pulse（避免低等级被"升级"）
-				if m.SponsorLevel.Weight() > config.SponsorLevelPulse.Weight() {
-					expirySecondary.SponsorLevel = config.SponsorLevelPulse
-				}
-
-				// exempt 项不参与任何基于可用率的移板（含 cold）：到期后直接降级 secondary。
-				// 这保持了 auto_move_exempt / auto_cold_exempt 的"人工接管"语义。
-				if m.AutoMoveExempt || m.AutoColdExempt {
-					overrides[key] = expirySecondary
-					stats.expired++
-					logger.Info("AutoMover", "赞助到期，自动降级",
-						"monitor", key.Provider+"/"+key.Service+"/"+key.Channel,
-						"expires_at", expiresAt)
-					continue
-				}
-			}
-		}
-
-		// auto_move_exempt：跳过所有基于可用率的移板逻辑，也不保留已有 availability-based override。
-		// 到期项已在上方分流处理，此处仅拦截未到期的 auto_move_exempt 项。
+		// auto_move_exempt：跳过所有基于可用率的移板逻辑。
+		// 到期的 SponsorLevel 降级已在上方记录，不受此约束。
 		if m.AutoMoveExempt {
 			continue
 		}
 
 		candidates = append(candidates, candidate{
-			key:             key,
-			configBoard:     board,
-			autoColdExempt:  m.AutoColdExempt,
-			expired:         expired,
-			expiresAt:       expiresAt,
-			expirySecondary: expirySecondary,
+			key:            key,
+			configBoard:    board,
+			autoColdExempt: m.AutoColdExempt,
 		})
 	}
 
 	if len(candidates) == 0 {
+		applySponsorDowngrades()
 		if len(overrides) == 0 {
 			return nil, stats
 		}
@@ -718,13 +704,8 @@ func (s *Service) evaluate(ctx context.Context, snap *evalSnapshot) (map[storage
 			if ctx.Err() == nil {
 				logger.Warn("AutoMover", "批量查询历史记录失败", "error", err)
 			}
-			// 查询失败时无法判断可用率：到期项回退为到期降级 secondary，
-			// 避免它们因缺少 override 而被错误地恢复回热板。
-			for _, c := range candidates {
-				if c.expired {
-					applyExpirySecondary(c)
-				}
-			}
+			// 查询失败时无法判断可用率，跳过板块评估；赞助等级降级仍正常应用。
+			applySponsorDowngrades()
 			return overrides, stats
 		}
 		for k, v := range historyMap {
@@ -734,41 +715,20 @@ func (s *Service) evaluate(ctx context.Context, snap *evalSnapshot) (map[storage
 
 	// 冷板 + 锚点移板评估：configBoard（手动配置板位）决定自动移板上限，绝不向上越板；
 	// effectiveBoard 仅在 configBoard=hot 时用于 hot↔secondary 迟滞判定。
+	// 到期通道走与普通通道相同的路径：到期仅降赞助等级，板块位置完全由可用率决定。
 	for _, c := range candidates {
 		stats.checked++
 		records := allHistory[c.key]
 		availability, total := CalculateAvailability(records, endTime, snap.degradedWeight)
 
-		// 有效板块 = 当前 override 优先，否则取配置值（用于日志 from 字段）
+		// 有效板块 = 当前 override 优先，否则取配置值（用于日志 from 字段）。
+		// 特例：auto_cold_exempt 打破了 sticky cold，此时旧 cold override 无效，
+		// 应回到 configBoard 重新评估，而非沿用 cold 作为起点。
 		effectiveBoard := c.configBoard
 		if ov, ok := currentOverrides[c.key]; ok && ov.Board != "" {
-			effectiveBoard = ov.Board
-		}
-
-		// 到期项：可用率冷板优先于到期降级。
-		// 探测数充足且 7 天可用率低于 threshold_cold → 移入冷板（停探）；否则回退到期降级 secondary。
-		if c.expired {
-			if total < snap.autoMove.MinProbes {
-				stats.skippedMinProbes++
-				applyExpirySecondary(c)
-				continue
+			if !(c.autoColdExempt && isColdBoard(ov.Board)) {
+				effectiveBoard = ov.Board
 			}
-			if availability < snap.autoMove.ThresholdCold {
-				overrides[c.key] = MonitorOverride{
-					Board:      "cold",
-					ColdReason: makeAutoColdReason(availability, snap.autoMove.ThresholdCold),
-				}
-				stats.cooled++
-				logger.Info("AutoMover", "自动移板: 到期且可用率过低→cold",
-					"monitor", c.key.Provider+"/"+c.key.Service+"/"+c.key.Channel,
-					"from", effectiveBoard,
-					"availability", availability,
-					"threshold_cold", snap.autoMove.ThresholdCold,
-					"expires_at", c.expiresAt)
-				continue
-			}
-			applyExpirySecondary(c)
-			continue
 		}
 
 		if total < snap.autoMove.MinProbes {
@@ -825,6 +785,7 @@ func (s *Service) evaluate(ctx context.Context, snap *evalSnapshot) (map[storage
 		}
 	}
 
+	applySponsorDowngrades()
 	return overrides, stats
 }
 

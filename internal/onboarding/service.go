@@ -207,7 +207,7 @@ func (s *Service) Submit(ctx context.Context, req *SubmitRequest, clientIP strin
 		return nil, fmt.Errorf("赞助等级 %q 已停止自助受理，请选择 pulse 或联系运营（QQ:18058344）", req.SponsorLevel)
 	}
 
-	// 必须确认《入驻须知与确认》全部要点（含付费/赞助制、API Key 授权等）后方可受理
+	// 必须确认《入驻须知与确认》全部要点（含商务等级付费赞助、API Key 授权等）后方可受理
 	if !req.AgreementAccepted {
 		return nil, fmt.Errorf("请先阅读并确认《入驻须知与确认》全部要点后再提交")
 	}

@@ -28,7 +28,7 @@ type ServiceConfig struct {
 	Parent       string       `yaml:"parent" json:"parent,omitempty"`               // 父通道引用，格式 provider/service/channel
 	ChannelName  string       `yaml:"channel_name" json:"channel_name,omitempty"`   // Channel 显示名称（可选，未配置时回退到 channel）
 	ListedSince  string       `yaml:"listed_since,omitempty" json:"listed_since"`   // 收录日期（可选，格式 "2006-01-02"），用于计算收录天数
-	ExpiresAt    string       `yaml:"expires_at" json:"expires_at,omitempty"`       // 到期日期（可选，格式 "2006-01-02"），过期后自动降级并移入备板
+	ExpiresAt    string       `yaml:"expires_at" json:"expires_at,omitempty"`       // 到期日期（可选，格式 "2006-01-02"），过期后赞助等级降为 pulse（板块由可用率决定，不随到期变动）
 	// Template 引用 templates/<name>.json 模板，定义完整的请求方式（url/method/headers/body/response）
 	Template string `yaml:"template" json:"template,omitempty"`
 
@@ -59,7 +59,7 @@ type ServiceConfig struct {
 
 	// 自定义巡检间隔（可选，留空则使用全局 interval）
 	// 支持 Go duration 格式，例如 "30s"、"1m"、"5m"
-	// 付费高频监测可使用更短间隔
+	// 商务/赞助等级可按需配置更短间隔
 	Interval string `yaml:"interval,omitempty" json:"interval"`
 
 	// 彻底停用配置：不探测、不存储、不展示
