@@ -167,8 +167,9 @@ export interface RpdiagModelScore {
 }
 
 /** rpdiag 一个 (provider, service, channel) 三元组的聚合质量分。
- *  max_score 取该通道下所有 model 的最高分；列表用户更关心
- *  「该通道能达到的最佳状态」而不是平均，避免被低频/旧模型拖低。
+ *  max_score 是历史 wire 字段名，现为通道内「全站活跃 model」排名贡献的
+ *  均值：fresh 行贡献 30 天均值（avg_30d），hard-fail/stale 行计 0，
+ *  全站退役 model 从分子分母整体剔除；无活跃 model 时为 null（排序沉底）。
  */
 export interface RpdiagScore {
   max_score?: number | null;

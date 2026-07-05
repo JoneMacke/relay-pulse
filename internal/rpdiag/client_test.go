@@ -82,14 +82,14 @@ func TestBuildScoresAggregatesByTriple(t *testing.T) {
 			Model: "claude-haiku-4-5", ModelKey: "claude-haiku-4-5",
 			DetailURL:         "https://diag.relaypulse.top/channel/Anthropic?window=30d&provider=Anthropic&service=claude&model=claude-haiku-4-5",
 			FinalQualityScore: mk(100),
-			ScoreTrend:        ScoreTrend{Latest: mk(100), LatestAt: freshAt(), Avg7D: mk(100), Avg30D: mk(100), N7D: 3, N30D: 9},
+			ScoreTrend:        ScoreTrend{Latest: mk(100), LatestAt: freshAt(), Avg7D: mk(100), Avg30D: mk(96), N7D: 3, N30D: 9},
 		},
 		{ // baseline same channel, different model — should merge
 			ChannelName: "Anthropic", RelaypulseChannelKey: "anthropic",
 			ProviderName: "Anthropic", ServiceCLICommand: "claude",
 			Model: "claude-sonnet-4-6", ModelKey: "claude-sonnet-4-6",
 			FinalQualityScore: mk(98),
-			ScoreTrend:        ScoreTrend{Latest: mk(98), LatestAt: freshAt(), Avg7D: mk(98), Avg30D: mk(98), N7D: 3, N30D: 9},
+			ScoreTrend:        ScoreTrend{Latest: mk(98), LatestAt: freshAt(), Avg7D: mk(98), Avg30D: mk(94), N7D: 3, N30D: 9},
 		},
 		{ // user-submitted — dropped
 			ChannelName: "U-DawAPI-86a39a", RelaypulseChannelKey: "dawapi-86a39a",
@@ -114,9 +114,10 @@ func TestBuildScoresAggregatesByTriple(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected key %q, got %v", key, keysOf(out))
 	}
-	// Both models are fresh and active → MaxScore is their average (100+98)/2.
-	if entry.MaxScore == nil || *entry.MaxScore != 99 {
-		t.Errorf("MaxScore = %v, want 99 (avg of two fresh active models)", entry.MaxScore)
+	// Both models are fresh and active → MaxScore averages their avg_30d
+	// ranking contributions (96+94)/2, NOT their latest samples (100+98)/2.
+	if entry.MaxScore == nil || *entry.MaxScore != 95 {
+		t.Errorf("MaxScore = %v, want 95 (avg of two fresh models' avg_30d)", entry.MaxScore)
 	}
 	if len(entry.Models) != 2 {
 		t.Errorf("Models len = %d, want 2", len(entry.Models))
@@ -199,8 +200,9 @@ func TestBuildScoresKeepsRawPrefixedCodexChannelsSeparate(t *testing.T) {
 
 func TestScoresUpstreamRoundTrip(t *testing.T) {
 	mk := func(v float64) *float64 { return &v }
-	// 关键：FinalQualityScore=95.2 但 trend.Latest=98，MaxScore 应跟 latest (98)
-	// 而非 final（95.2）。验证从 composite quality 切到 fingerprint 表征分。
+	// 三个值全部错开：FinalQualityScore=95.2（含 latency 乘子，不用）、
+	// trend.Latest=98（展示样本）、Avg30D=97.5（排名键）。MaxScore 必须跟
+	// avg_30d，Models[0].Score 必须跟最新样本——三者可区分才防假绿。
 	payload := exportPayload{
 		SchemaVersion: "ranking-export.v5.1",
 		Items: []rankingRow{{
@@ -209,7 +211,7 @@ func TestScoresUpstreamRoundTrip(t *testing.T) {
 			Model: "claude-haiku-4-5", ModelKey: "claude-haiku-4-5",
 			DetailURL:         "https://diag.relaypulse.top/channel/cc?window=30d&provider=InfAI&service=claude&model=claude-haiku-4-5",
 			FinalQualityScore: mk(95.2),
-			ScoreTrend:        ScoreTrend{Latest: mk(98), LatestAt: freshAt(), Avg7D: mk(98), Avg30D: mk(98)},
+			ScoreTrend:        ScoreTrend{Latest: mk(98), LatestAt: freshAt(), Avg7D: mk(98), Avg30D: mk(97.5)},
 		}},
 	}
 	srv := singleBoardServer(func(w http.ResponseWriter, _ *http.Request) {
@@ -228,11 +230,11 @@ func TestScoresUpstreamRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing infai|cc|cc entry, got %v", keysOf(scores))
 	}
-	if entry.MaxScore == nil || *entry.MaxScore != 98 {
-		t.Errorf("MaxScore = %v, want 98 (trend.latest, NOT final_quality_score 95.2)", entry.MaxScore)
+	if entry.MaxScore == nil || *entry.MaxScore != 97.5 {
+		t.Errorf("MaxScore = %v, want 97.5 (avg_30d, NOT latest 98, NOT final_quality_score 95.2)", entry.MaxScore)
 	}
 	if entry.Models[0].Score == nil || *entry.Models[0].Score != 98 {
-		t.Errorf("Models[0].Score = %v, want 98 (per-model score must also be latest fingerprint sample)", entry.Models[0].Score)
+		t.Errorf("Models[0].Score = %v, want 98 (per-model display score stays the latest fingerprint sample)", entry.Models[0].Score)
 	}
 	wantChannelURL := "https://diag.relaypulse.top/channel/cc?provider=InfAI&service=claude&window=30d"
 	if entry.ChannelURL != wantChannelURL {
@@ -787,8 +789,9 @@ func TestBuildScoresAllRetiredChannelHasNilScore(t *testing.T) {
 func TestBuildScoresDedupesRepeatedModelInAverage(t *testing.T) {
 	// Guard against a duplicated upstream (channel, model) row inflating the
 	// divisor: two rows for the same model on the same channel count once. The
-	// dedup keeps the LARGEST rankLatest (deterministic, not export-order): the
-	// lower row (60) is first, the higher (80) second, and the average is 80.
+	// dedup keeps the LARGEST ranking contribution (deterministic, not
+	// export-order). Latest 与 Avg30D 刻意错开：max-wins 必须比较 avg_30d
+	// 排名值（55 vs 82 → 82），而不是最新样本（60 vs 80）。
 	c := newTestClient()
 	mk := func(v float64) *float64 { return &v }
 
@@ -797,19 +800,19 @@ func TestBuildScoresDedupesRepeatedModelInAverage(t *testing.T) {
 			ChannelName: "O-Max", RelaypulseChannelKey: "max",
 			ProviderName: "SaiAI", ServiceCLICommand: "claude",
 			Model: "claude-haiku-4-5", ModelKey: "claude-haiku-4-5",
-			ScoreTrend: ScoreTrend{Latest: mk(60), LatestAt: freshAt()},
+			ScoreTrend: ScoreTrend{Latest: mk(60), LatestAt: freshAt(), Avg30D: mk(55)},
 		},
 		{
 			ChannelName: "O-Max", RelaypulseChannelKey: "max",
 			ProviderName: "SaiAI", ServiceCLICommand: "claude",
 			Model: "claude-haiku-4-5", ModelKey: "claude-haiku-4-5",
-			ScoreTrend: ScoreTrend{Latest: mk(80), LatestAt: freshAt()},
+			ScoreTrend: ScoreTrend{Latest: mk(80), LatestAt: freshAt(), Avg30D: mk(82)},
 		},
 	}
 
 	entry := c.buildScores(rows)["saiai|cc|o-max"]
-	if entry.MaxScore == nil || *entry.MaxScore != 80 {
-		t.Fatalf("MaxScore = %v, want 80 (duplicate model counted once, max kept)", entry.MaxScore)
+	if entry.MaxScore == nil || *entry.MaxScore != 82 {
+		t.Fatalf("MaxScore = %v, want 82 (duplicate model counted once, max avg_30d kept)", entry.MaxScore)
 	}
 }
 

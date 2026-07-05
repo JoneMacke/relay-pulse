@@ -185,7 +185,7 @@ export interface ProcessedMonitorData {
   intervalMs?: number;                 // 监测间隔（毫秒，可选）
   slowLatencyMs?: number;              // 慢请求阈值（毫秒，per-monitor）
   pinned?: boolean;                    // 是否为置顶项（由排序逻辑标记）
-  qualityScore?: number | null;        // rpdiag 通道最高质量分（max_score），sort 前由 useMonitorData 注入；null 表示未上报或 rpdiag 未启用
+  qualityScore?: number | null;        // rpdiag 通道质量排名分（max_score=活跃 model 排名贡献均值，fresh 取 30d 均值），sort 前由 useMonitorData 注入；null 表示未上报或 rpdiag 未启用
   isMultiModel: boolean;               // 是否为多模型监测组
   layers?: MonitorLayer[];             // 原始分层数据（仅多模型组有值）
   modelEntries?: Array<{ model: string; requestModel: string }>; // 模型展示名与实际请求模型映射
