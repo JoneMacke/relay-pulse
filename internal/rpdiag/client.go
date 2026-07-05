@@ -122,8 +122,8 @@ type ModelScore struct {
 // Score is the aggregated quality view for one (provider, service, channel)
 // triple. MaxScore is a historical wire name (`max_score`); today it holds the
 // ranking key computed as the *average* current-signal score across this
-// channel's globally active models. Fresh models contribute their latest
-// fingerprint sample; active hard-fail/stale models contribute 0; globally
+// channel's globally active models. Fresh models contribute their 30-day mean
+// (`trend.avg_30d`); active hard-fail/stale models contribute 0; globally
 // retired models (no fresh row anywhere in the same service's snapshot) are
 // removed from every channel's numerator and denominator alike. A channel with
 // no active-model rows at all carries no current signal — MaxScore stays nil so
@@ -435,8 +435,9 @@ func (c *Client) fetchBoard(ctx context.Context, boardURL string) ([]rankingRow,
 // from a trend — the value the sparkline's rightmost dot already renders
 // (front-end uses recent_scores[-1] when present, falling back to trend.latest;
 // rpdiag fills both with the same value, so the tooltip's "latest=" row stays
-// aligned in practice). Using it as the channel representative score keeps
-// list ordering and per-row visualisation in lockstep.
+// aligned in practice). It drives the per-model display Score and the
+// fresh/stale activity gates; the channel ranking key ranks fresh rows on
+// trend.avg_30d instead (see buildScoreRowView).
 //
 // Prefers recent_scores[-1] when v5.2 wire carries it (one true sample,
 // strictly time-ascending), falling back to trend.latest on v5.1.
@@ -516,9 +517,11 @@ func isStaleScoreTrend(t ScoreTrend, now time.Time) bool {
 // Display vs ranking are deliberately decoupled. The per-model Trend (the
 // sparkline) and Score are shown exactly as rpdiag exported them — the line is
 // an honest history coloured by real quality, the only grey being a hard-fail
-// row that rpdiag couldn't score. The representative score is the latest single
-// fingerprint sample (not rpdiag's composite `final_quality_score`, which folds
-// in latency/availability — that belongs to rpdiag's own ranking page).
+// row that rpdiag couldn't score. The ranking contribution of a fresh row is
+// its 30-day mean (`trend.avg_30d`, falling back to the latest sample when the
+// wire lacks it) — not the newest single sample, which is too noisy to order
+// channels by, and not rpdiag's composite `final_quality_score`, which folds
+// in latency/availability — that belongs to rpdiag's own ranking page.
 //
 // The channel ranking key (historical wire name MaxScore/max_score) is the
 // average current-signal score over the channel's *globally active* models. A
@@ -586,11 +589,26 @@ func buildScoreRowView(row rankingRow, now time.Time) (scoreRowView, bool) {
 		rankLatest = trend.Latest
 	case displayLatest != nil && isStaleScoreTrend(row.ScoreTrend, now):
 		// Keep the historical trend exactly as exported; just don't let a
-		// frozen old sample rank the channel as currently good.
+		// frozen old sample rank the channel as currently good. This gate must
+		// stay ahead of the avg_30d ranking below: a stale row's avg_30d is a
+		// frozen mean (failed probes add no samples, so it never decays) and
+		// would otherwise keep ranking a dead channel for up to 30 days.
 		zero := 0.0
 		rankLatest = &zero
 	case displayLatest != nil:
 		fresh = true
+		// Rank fresh rows on the 30-day mean, not the newest single sample:
+		// one unlucky draw shouldn't swing the channel ranking, and once
+		// rpdiag starts folding channel-side hard-fails into avg_30d as zero
+		// samples the ranking inherits failure weighting with no change here.
+		// Display (Score/Trend) keeps showing the newest sample untouched.
+		// Fallback: a fresh row without avg_30d ranks on the sample itself —
+		// v5.7+ scopes both to the same 30d window so a fresh row always
+		// carries the mean, but older wire shapes may not.
+		if row.ScoreTrend.Avg30D != nil {
+			v := *row.ScoreTrend.Avg30D
+			rankLatest = &v
+		}
 	}
 	unavailable := strings.EqualFold(row.QualityState, "unavailable")
 	// An unavailable row that isn't hard-fail-active carries no current signal:

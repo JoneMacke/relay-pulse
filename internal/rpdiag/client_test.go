@@ -352,10 +352,11 @@ func TestLatestFingerprintSample(t *testing.T) {
 	}
 }
 
-func TestBuildScoresUsesRecentScoresTailWhenAvailable(t *testing.T) {
-	// 验证 buildScores 端到端：v5.2 wire 的 recent_scores 末位（76）
-	// 应被采纳为 ModelScore.Score 与通道 MaxScore，而不是 trend.latest（72）
-	// 或 final_quality_score（85.9）。覆盖 FastCode opus 在 prod 实际看到的形态。
+func TestBuildScoresDecouplesDisplaySampleFromRankingMean(t *testing.T) {
+	// 展示与排名解耦：ModelScore.Score（sparkline 最右点）取 recent_scores
+	// 末位（76）而不是 trend.latest（72）或 final_quality_score（85.9）；
+	// 通道 MaxScore（排名键）取 30d 均值 avg_30d（76.7）而不是最新单 sample。
+	// 覆盖 FastCode opus 在 prod 实际看到的形态。
 	c := newTestClient()
 	mk := func(v float64) *float64 { return &v }
 
@@ -368,7 +369,7 @@ func TestBuildScoresUsesRecentScoresTailWhenAvailable(t *testing.T) {
 			RecentScores: []float64{82, 72, 76},
 			Latest:       mk(72),
 			LatestAt:     freshAt(),
-			Avg7D:        mk(76.7),
+			Avg7D:        mk(76.5),
 			Avg30D:       mk(76.7),
 		},
 	}}
@@ -377,11 +378,66 @@ func TestBuildScoresUsesRecentScoresTailWhenAvailable(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected fastcode|cc|cc, got %v", keysOf(c.buildScores(rows)))
 	}
-	if entry.MaxScore == nil || *entry.MaxScore != 76 {
-		t.Errorf("MaxScore = %v, want 76 (recent_scores[-1])", entry.MaxScore)
+	if entry.MaxScore == nil || *entry.MaxScore != 76.7 {
+		t.Errorf("MaxScore = %v, want 76.7 (avg_30d ranking key)", entry.MaxScore)
 	}
 	if entry.Models[0].Score == nil || *entry.Models[0].Score != 76 {
-		t.Errorf("Models[0].Score = %v, want 76", entry.Models[0].Score)
+		t.Errorf("Models[0].Score = %v, want 76 (recent_scores[-1] display sample)", entry.Models[0].Score)
+	}
+}
+
+func TestBuildScoresFreshRowWithoutAvg30DRanksOnSample(t *testing.T) {
+	// 回退路径：v5.7+ wire 上 fresh 行必带 avg_30d（窗口对齐），但旧 wire /
+	// 异常形态可能缺失——此时排名键回退到最新单 sample，而不是把行丢掉或计 0。
+	c := newTestClient()
+	mk := func(v float64) *float64 { return &v }
+
+	rows := []rankingRow{{
+		ChannelName: "cc", RelaypulseChannelKey: "cc",
+		ProviderName: "OldWire", ServiceCLICommand: "claude",
+		Model: "claude-sonnet-4-6", ModelKey: "claude-sonnet-4-6",
+		ScoreTrend: ScoreTrend{Latest: mk(91), LatestAt: freshAt()},
+	}}
+
+	entry, ok := c.buildScores(rows)["oldwire|cc|cc"]
+	if !ok {
+		t.Fatalf("expected oldwire|cc|cc, got %v", keysOf(c.buildScores(rows)))
+	}
+	if entry.MaxScore == nil || *entry.MaxScore != 91 {
+		t.Errorf("MaxScore = %v, want 91 (fallback to latest sample when avg_30d missing)", entry.MaxScore)
+	}
+}
+
+func TestBuildScoresStaleRowIgnoresAvg30D(t *testing.T) {
+	// stale 行的 avg_30d 是冻结均值（失败探测不产生样本、均值不衰减）——
+	// 即便 wire 带着高分 avg_30d，排名贡献也必须是 0，防止"测过几次高分后
+	// 再也测不到"的通道靠冻结均值重新浮起（v2.47.2 修过的老坑在新键上复发）。
+	c := newTestClient()
+	mk := func(v float64) *float64 { return &v }
+
+	rows := []rankingRow{{
+		ChannelName: "cc", RelaypulseChannelKey: "cc",
+		ProviderName: "Ghost", ServiceCLICommand: "claude",
+		Model: "claude-sonnet-4-6", ModelKey: "claude-sonnet-4-6",
+		ScoreTrend: ScoreTrend{
+			RecentScores: []float64{94, 95},
+			Latest:       mk(95),
+			LatestAt:     staleAt(),
+			Avg30D:       mk(94.5),
+		},
+	}, { // fresh sibling elsewhere keeps the model globally active
+		ChannelName: "Anthropic", RelaypulseChannelKey: "anthropic",
+		ProviderName: "Anthropic", ServiceCLICommand: "claude",
+		Model: "claude-sonnet-4-6", ModelKey: "claude-sonnet-4-6",
+		ScoreTrend: ScoreTrend{Latest: mk(96), LatestAt: freshAt(), Avg30D: mk(96)},
+	}}
+
+	entry, ok := c.buildScores(rows)["ghost|cc|cc"]
+	if !ok {
+		t.Fatalf("expected ghost|cc|cc, got %v", keysOf(c.buildScores(rows)))
+	}
+	if entry.MaxScore == nil || *entry.MaxScore != 0 {
+		t.Errorf("MaxScore = %v, want 0 (stale row must not rank on its frozen avg_30d)", entry.MaxScore)
 	}
 }
 
