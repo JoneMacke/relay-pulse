@@ -2,7 +2,7 @@
 #
 # 完整字段与调优项（interval / slow_latency / retry / boards / events /
 # annotations / storage.postgres / onboarding 等）见 docs/user/config.md
-# 可用模板见 templates/ 目录（cc-haiku-arith / cx-codex-arith / gm-flash-arith ...）
+# 可用模板见 templates/ 目录（cc-haiku-arith / cx-gpt-arith / gm-flash-arith ...）
 
 monitors:
   - provider: "88code"

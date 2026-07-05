@@ -1304,7 +1304,7 @@ WHERE timestamp < strftime('%s', 'now', '-30 days');
 ##### `template`（模板模式必填）
 - **类型**: string
 - **说明**: 引用 `templates/` 目录下的 JSON 模板文件（不含扩展名），定义完整的请求方式（url/method/headers/body/success_contains）
-- **示例**: `"cx-codex-arith"`、`"cc-haiku-arith"`、`"gm-flash-arith"`
+- **示例**: `"cx-gpt-arith"`、`"cc-haiku-arith"`、`"gm-flash-arith"`
 
 ##### `method`（传统模式必填，模板模式可选）
 - **类型**: string
@@ -1582,15 +1582,16 @@ WHERE timestamp < strftime('%s', 'now', '-30 days');
 - **使用场景**:
   - **高频监测**：商务/赞助等级通道可按需配置更短的监测间隔（如 `"1m"`）
   - **低频监测**：成本敏感或稳定服务使用更长间隔（如 `"15m"`）
+- **未配置时的兜底与赞助等级相关**：商务等级（beacon/backbone/core）直接使用全局 `interval`；免费档（pulse 及以下）取 `max(全局 interval, 5m)`（免费收录保底 5 分钟一测）。显式配置的 `interval` 始终最高优先，不受等级影响；子通道未配置时继承父通道已解析的间隔
 - **配置示例**:
   ```yaml
-  interval: "5m"  # 全局默认 5 分钟
+  interval: "5m"  # 本例的全局 interval：5 分钟
   monitors:
     - provider: "高优先级服务商"
       interval: "1m"   # 覆盖：每 1 分钟监测一次
       # ...
     - provider: "普通服务商"
-      # 不配置 interval，使用全局 5 分钟
+      # 不配置 interval，本例中回退到全局的 5 分钟
       # ...
   ```
 
@@ -2396,7 +2397,7 @@ monitors:
     category: "commercial"
     sponsor: "团队"
     base_url: "https://api.openai.com"
-    template: "cx-codex-arith"      # 模板预设 url/method/headers/body/model/request_model
+    template: "cx-gpt-arith"        # 模板预设 url/method/headers/body/model/request_model
 ```
 
 ### 示例2：Anthropic Claude
