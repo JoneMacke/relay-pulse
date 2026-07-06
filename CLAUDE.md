@@ -832,6 +832,8 @@ vim config.yaml
 }
 ```
 
+`data` 与 `groups` 按监测项有无 `model` 分流（`query.go::queryAndSerialize`）：**model 为空 → `data`**（无 model 监测项 + 旧前端兼容），**model 非空 → `groups`**。前端 `useMonitorData` 合并消费两者（`[...legacy, ...groups]`）。生产所有监测项均已配 model，故 **prod 实际返回 `data=[]`、`meta.count=0`，属预期非回归**（2026-07-06 查证，item 57b）；上方 `data` 示例仅演示无 model 时的形状。
+
 ## 测试
 
 ### 后端测试
