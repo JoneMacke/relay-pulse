@@ -569,8 +569,8 @@ func (s *Service) evaluate(ctx context.Context, snap *evalSnapshot) (map[storage
 	var stats evalStats
 	overrides := make(map[storage.MonitorKey]MonitorOverride)
 	nowUTC := time.Now().UTC()
-	today := nowUTC.Truncate(24 * time.Hour)
 	// 与 WebUI 的 7d day 对齐保持一致：endTime 为下一天 00:00 UTC
+	// 注意：这个 UTC 对齐只服务于 7d 可用率窗口，与下方赞助到期判断（isSponsorExpired，按 CST 业务日解释）是两套独立时间基准，不要混用。
 	endTime := alignToNextUTCDay(nowUTC)
 	currentOverrides := s.currentOverrides()
 
@@ -628,7 +628,7 @@ func (s *Service) evaluate(ctx context.Context, snap *evalSnapshot) (map[storage
 		// 本步骤只记录降级意图，不设置 Board——板块位置完全由后续可用率评估决定。
 		expiresAt := strings.TrimSpace(m.ExpiresAt)
 		if expiresAt != "" {
-			if expiresDate, err := time.Parse("2006-01-02", expiresAt); err == nil && today.After(expiresDate) {
+			if isSponsorExpired(expiresAt, nowUTC) {
 				// 仅当赞助等级高于 pulse 时才需降级（避免将低等级"升级"到 pulse）
 				if m.SponsorLevel.Weight() > config.SponsorLevelPulse.Weight() {
 					sponsorDowngradeKeys[key] = expiresAt

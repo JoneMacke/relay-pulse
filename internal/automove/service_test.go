@@ -888,7 +888,9 @@ func TestEvaluate_ExpiresToday_StillValid(t *testing.T) {
 
 	store.history[key] = makeRecords(1, 20)
 
-	today := time.Now().UTC().Format("2006-01-02")
+	// "今天"按 isSponsorExpired 的业务时区（CST）计算，而非 UTC——
+	// 用 UTC 计算会在 UTC 16:00-23:59（CST 已跨入次日）这个每天固定窗口内让本测试假失败。
+	today := time.Now().In(sponsorExpiryTZ).Format("2006-01-02")
 	cfg := &config.AppConfig{
 		Boards: config.BoardsConfig{
 			Enabled: true,
