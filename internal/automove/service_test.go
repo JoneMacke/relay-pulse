@@ -1719,6 +1719,66 @@ func TestIsCold_PSCPropagation(t *testing.T) {
 	}
 }
 
+func TestApplyOverrides_SponsorLevelDowngradeRefreshesAnnotations(t *testing.T) {
+	overrides := map[storage.MonitorKey]MonitorOverride{
+		{Provider: "p", Service: "s", Channel: "c"}: {SponsorLevel: config.SponsorLevelPulse},
+	}
+
+	// 生产实况同款：一条 annotation_rules 配置的、与 sponsor 无关的规则注解（如风险提示）。
+	// 用真实规则驱动、而不是把它写死进 fixture 的 Annotations 字段——
+	// 因为 ApplyOverrides 走的是完整 resolveAnnotations 重算，规则注解必须靠规则本身重新命中，
+	// 而不是"沿用旧数组里的值"，这正是选完整重算而非手术式局部替换的关键行为。
+	rules := []config.AnnotationRule{
+		{
+			Match: config.AnnotationMatch{Provider: "p"},
+			Add: []config.Annotation{
+				{ID: "risk_warning", Family: config.AnnotationFamilyNegative, Label: "无关注解", Priority: 100},
+			},
+		},
+	}
+
+	monitors := []config.ServiceConfig{
+		{
+			Provider:     "p",
+			Service:      "s",
+			Channel:      "c",
+			SponsorLevel: config.SponsorLevelBeacon,
+			// 模拟配置热加载时算好、存死在字段里的旧注解（与生产 worldbase 实况一致）。
+			Annotations: []config.Annotation{
+				{ID: "sponsor_beacon", Family: config.AnnotationFamilyPositive, Icon: "beacon", Label: "信标链路", Priority: 60, Origin: "system"},
+				{ID: "risk_warning", Family: config.AnnotationFamilyNegative, Label: "无关注解", Priority: 100, Origin: "rule"},
+			},
+		},
+	}
+
+	result := ApplyOverrides(monitors, overrides, rules, 0)
+
+	if result[0].SponsorLevel != config.SponsorLevelPulse {
+		t.Fatalf("sponsor_level=%s, want pulse", result[0].SponsorLevel)
+	}
+
+	var sawStaleBeacon, sawPulse, sawUnrelated bool
+	for _, ann := range result[0].Annotations {
+		switch ann.ID {
+		case "sponsor_beacon":
+			sawStaleBeacon = true
+		case "sponsor_pulse":
+			sawPulse = true
+		case "risk_warning":
+			sawUnrelated = true
+		}
+	}
+	if sawStaleBeacon {
+		t.Errorf("stale sponsor_beacon annotation still present: %+v", result[0].Annotations)
+	}
+	if !sawPulse {
+		t.Errorf("expected sponsor_pulse annotation after downgrade, got %+v", result[0].Annotations)
+	}
+	if !sawUnrelated {
+		t.Errorf("rule-driven annotation should survive the refresh (rule re-applied), got %+v", result[0].Annotations)
+	}
+}
+
 func TestApplyOverrides_ColdReasonPropagation(t *testing.T) {
 	overrides := map[storage.MonitorKey]MonitorOverride{
 		{Provider: "p", Service: "s", Channel: "c"}: {Board: "cold", ColdReason: "auto cold test"},
@@ -1729,7 +1789,7 @@ func TestApplyOverrides_ColdReasonPropagation(t *testing.T) {
 		{Provider: "p", Service: "s", Channel: "c", Model: "gpt-4o", Parent: "p/s/c", Board: "hot"},
 	}
 
-	result := ApplyOverrides(monitors, overrides)
+	result := ApplyOverrides(monitors, overrides, nil, 0)
 
 	if result[0].Board != "cold" || result[0].ColdReason != "auto cold test" {
 		t.Fatalf("root: board=%s cold_reason=%q", result[0].Board, result[0].ColdReason)
@@ -1748,7 +1808,7 @@ func TestApplyOverrides_ClearsColdReasonOnNonCold(t *testing.T) {
 		{Provider: "p", Service: "s", Channel: "c", Board: "cold", ColdReason: "旧原因"},
 	}
 
-	result := ApplyOverrides(monitors, overrides)
+	result := ApplyOverrides(monitors, overrides, nil, 0)
 
 	if result[0].Board != "secondary" {
 		t.Fatalf("board=%s, want secondary", result[0].Board)

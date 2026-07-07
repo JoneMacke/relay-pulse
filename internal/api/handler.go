@@ -474,12 +474,13 @@ func (h *Handler) GetStatus(c *gin.Context) {
 }
 
 // applyBoardOverrides 将自动移板 override 应用到监测项列表。
-// 覆盖 Board/ColdReason/SponsorLevel 字段，并将父通道 override 传播给同 PSC 的子模型。
-func (h *Handler) applyBoardOverrides(monitors []config.ServiceConfig) []config.ServiceConfig {
+// 覆盖 Board/ColdReason/SponsorLevel 字段，并将父通道 override 传播给同 PSC 的子模型；
+// annotationRules/globalInterval 用于 SponsorLevel 覆盖后重算 annotations。
+func (h *Handler) applyBoardOverrides(monitors []config.ServiceConfig, annotationRules []config.AnnotationRule, globalInterval time.Duration) []config.ServiceConfig {
 	if h.autoMover == nil {
 		return monitors
 	}
-	return automove.ApplyOverrides(monitors, h.autoMover.Overrides())
+	return automove.ApplyOverrides(monitors, h.autoMover.Overrides(), annotationRules, globalInterval)
 }
 
 // filterMonitors 过滤并去重监测项

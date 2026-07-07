@@ -274,8 +274,9 @@ func (s *Service) IsCold(key storage.MonitorKey) bool {
 
 // ApplyOverrides 将 override map 应用到监测项列表（静态函数，不依赖 Service 实例）。
 // exact match 作用于 root 监测项；PSC 回退仅作用于有 parent 的子模型。
-// Board/ColdReason/SponsorLevel 字段会被覆盖。
-func ApplyOverrides(monitors []config.ServiceConfig, overrides map[storage.MonitorKey]MonitorOverride) []config.ServiceConfig {
+// Board/ColdReason/SponsorLevel 字段会被覆盖；SponsorLevel 覆盖后会用 annotationRules/globalInterval
+// 重算 annotations（否则 sponsor_* 徽标会停留在 config 热加载时算好的旧等级，与覆盖后的事实字段不一致）。
+func ApplyOverrides(monitors []config.ServiceConfig, overrides map[storage.MonitorKey]MonitorOverride, annotationRules []config.AnnotationRule, globalInterval time.Duration) []config.ServiceConfig {
 	if len(overrides) == 0 {
 		return monitors
 	}
@@ -299,7 +300,7 @@ func ApplyOverrides(monitors []config.ServiceConfig, overrides map[storage.Monit
 
 		// 精确匹配：root 监测项直接命中 override
 		if ov, ok := overrides[key]; ok {
-			applyOverrideToMonitor(&copied[i], ov)
+			applyOverrideToMonitor(&copied[i], ov, annotationRules, globalInterval)
 			continue
 		}
 
@@ -307,14 +308,14 @@ func ApplyOverrides(monitors []config.ServiceConfig, overrides map[storage.Monit
 		if strings.TrimSpace(copied[i].Parent) != "" {
 			pscKey := copied[i].Provider + "|" + copied[i].Service + "|" + copied[i].Channel
 			if ov, ok := pscOverrides[pscKey]; ok {
-				applyOverrideToMonitor(&copied[i], ov)
+				applyOverrideToMonitor(&copied[i], ov, annotationRules, globalInterval)
 			}
 		}
 	}
 	return copied
 }
 
-func applyOverrideToMonitor(m *config.ServiceConfig, ov MonitorOverride) {
+func applyOverrideToMonitor(m *config.ServiceConfig, ov MonitorOverride, annotationRules []config.AnnotationRule, globalInterval time.Duration) {
 	if ov.Board != "" {
 		m.Board = ov.Board
 		if isColdBoard(ov.Board) {
@@ -325,6 +326,9 @@ func applyOverrideToMonitor(m *config.ServiceConfig, ov MonitorOverride) {
 	}
 	if ov.SponsorLevel != "" {
 		m.SponsorLevel = ov.SponsorLevel
+		// 必须在 SponsorLevel 覆盖后（同一个 if 块内）重算，确保用的是覆盖后的有效等级，
+		// 否则 sponsor_* 徽标会用降级前的旧等级重算出同样错误的结果。
+		m.Annotations = config.ResolveAnnotations(*m, annotationRules, globalInterval)
 	}
 }
 

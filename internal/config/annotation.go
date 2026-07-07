@@ -147,6 +147,14 @@ func resolveAnnotations(task ServiceConfig, rules []AnnotationRule, globalInterv
 	return result
 }
 
+// ResolveAnnotations 是 resolveAnnotations 的导出包装。
+// 供运行时覆盖场景（如 automove 到期降级 SponsorLevel 后）重算完整注解集——
+// 直接复用 config 热加载时的同一套派生+规则逻辑，而非只替换单条注解，
+// 这样 annotation_rules 里针对 sponsor_level 的匹配规则依然生效。
+func ResolveAnnotations(task ServiceConfig, rules []AnnotationRule, globalInterval time.Duration) []Annotation {
+	return resolveAnnotations(task, rules, globalInterval)
+}
+
 // deriveSystemAnnotations 从监测项事实属性自动派生系统级注解
 // key_type 为空时按官方 API 处理；annotation_rules 可用相同 ID 覆盖
 func deriveSystemAnnotations(task ServiceConfig, _ time.Duration) []Annotation {

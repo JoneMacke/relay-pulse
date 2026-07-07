@@ -572,7 +572,7 @@ func TestApplyBoardOverrides_PSCPropagation(t *testing.T) {
 		{Provider: "other", Service: "cc", Channel: "free", Board: "hot"},
 	}
 
-	result := h.applyBoardOverrides(monitors)
+	result := h.applyBoardOverrides(monitors, nil, 0)
 
 	// root 被降级
 	if result[0].Board != "secondary" {
@@ -626,7 +626,7 @@ func TestApplyBoardOverrides_ColdReasonPropagation(t *testing.T) {
 		{Provider: "acme", Service: "cc", Channel: "vip", Model: "gpt-4o", Parent: "acme/cc/vip", Board: "hot"},
 	}
 
-	result := h.applyBoardOverrides(monitors)
+	result := h.applyBoardOverrides(monitors, nil, 0)
 
 	if result[0].Board != "cold" || result[0].ColdReason == "" {
 		t.Fatalf("root: board=%s cold_reason=%q", result[0].Board, result[0].ColdReason)
@@ -652,7 +652,7 @@ func TestApplyBoardOverrides_ClearsColdReasonOnNonCold(t *testing.T) {
 		{Provider: "acme", Service: "cc", Channel: "vip", Board: "cold", ColdReason: "历史原因"},
 	}
 
-	result := h.applyBoardOverrides(monitors)
+	result := h.applyBoardOverrides(monitors, nil, 0)
 	if result[0].Board != "secondary" {
 		t.Fatalf("board=%s, want secondary", result[0].Board)
 	}
@@ -680,7 +680,7 @@ func TestApplyBoardOverrides_RootWithModel(t *testing.T) {
 		{Provider: "acme", Service: "cc", Channel: "vip", Model: "special", Board: "hot"},
 	}
 
-	result := h.applyBoardOverrides(monitors)
+	result := h.applyBoardOverrides(monitors, nil, 0)
 
 	if result[0].Board != "secondary" {
 		t.Errorf("root without model: want secondary, got %s", result[0].Board)
@@ -705,7 +705,7 @@ func TestApplyBoardOverrides_NoOverrides(t *testing.T) {
 		{Provider: "acme", Service: "cc", Channel: "vip", Board: "hot"},
 	}
 
-	result := h.applyBoardOverrides(monitors)
+	result := h.applyBoardOverrides(monitors, nil, 0)
 
 	// 无 override 时应返回原始 slice（不拷贝）
 	if &result[0] != &monitors[0] {
@@ -723,7 +723,7 @@ func TestApplyBoardOverrides_NilAutoMover(t *testing.T) {
 		{Provider: "acme", Service: "cc", Channel: "vip", Board: "hot"},
 	}
 
-	result := h.applyBoardOverrides(monitors)
+	result := h.applyBoardOverrides(monitors, nil, 0)
 	if &result[0] != &monitors[0] {
 		t.Errorf("should return original slice when autoMover is nil")
 	}

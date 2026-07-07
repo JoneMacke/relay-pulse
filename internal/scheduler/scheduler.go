@@ -162,7 +162,7 @@ func (s *Scheduler) updateActiveModels(cfg *config.AppConfig) {
 	monitors := cfg.Monitors
 	if autoMover != nil {
 		if overrides := autoMover.Overrides(); len(overrides) > 0 {
-			monitors = automove.ApplyOverrides(monitors, overrides)
+			monitors = automove.ApplyOverrides(monitors, overrides, cfg.AnnotationRules, cfg.IntervalDuration)
 		}
 	}
 	eventSvc.UpdateActiveModels(monitors, cfg.Boards.Enabled)

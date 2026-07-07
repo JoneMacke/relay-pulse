@@ -150,17 +150,8 @@ func buildMonitorGroupFromParent(parent config.ServiceConfig, enableAnnotations 
 		slug = strings.ToLower(strings.TrimSpace(parent.Provider))
 	}
 
-	// 计算收录天数（从 listed_since 到今天）
-	var listedDays *int
-	if parent.ListedSince != "" {
-		if listedDate, err := time.Parse("2006-01-02", parent.ListedSince); err == nil {
-			days := int(time.Since(listedDate).Hours() / 24)
-			if days < 0 {
-				days = 0 // 防止未来日期导致负数
-			}
-			listedDays = &days
-		}
-	}
+	// 计算收录天数（从 listed_since 到今天，按 CST 业务日历日计算，见 listed_days.go）
+	listedDays := listedDaysSince(parent.ListedSince, time.Now().UTC())
 
 	// enable_annotations 仅控制 annotations[] 是否输出（与 buildMonitorResult 一致）
 	annotations := parent.Annotations

@@ -34,11 +34,14 @@ func (h *Handler) queryAndSerialize(ctx context.Context, period, align string, t
 	sponsorPin := h.config.SponsorPin
 	enableAnnotations := h.config.EnableAnnotations
 	boardsEnabled := h.config.Boards.Enabled
+	annotationRules := h.config.AnnotationRules
+	globalInterval := h.config.IntervalDuration
 	hidePriceColumn := h.config.HidePriceColumn
 	h.cfgMu.RUnlock()
 
-	// 应用自动移板 override（运行时覆盖 board 字段，不修改配置）
-	monitors = h.applyBoardOverrides(monitors)
+	// 应用自动移板 override（运行时覆盖 board/sponsor_level 字段，不修改配置；
+	// sponsor_level 覆盖会连带重算 annotations，见 automove.ApplyOverrides 注释）
+	monitors = h.applyBoardOverrides(monitors, annotationRules, globalInterval)
 
 	// 构建 slug -> provider 映射（slug作为provider的路由别名）
 	slugToProvider := make(map[string]string)
@@ -331,17 +334,8 @@ func (h *Handler) buildMonitorResult(task config.ServiceConfig, latest *storage.
 		slug = strings.ToLower(strings.TrimSpace(task.Provider))
 	}
 
-	// 计算收录天数（从 listed_since 到今天）
-	var listedDays *int
-	if task.ListedSince != "" {
-		if listedDate, err := time.Parse("2006-01-02", task.ListedSince); err == nil {
-			days := int(time.Since(listedDate).Hours() / 24)
-			if days < 0 {
-				days = 0 // 防止未来日期导致负数
-			}
-			listedDays = &days
-		}
-	}
+	// 计算收录天数（从 listed_since 到今天，按 CST 业务日历日计算，见 listed_days.go）
+	listedDays := listedDaysSince(task.ListedSince, time.Now().UTC())
 
 	// enable_annotations 仅控制 annotations[] 是否输出
 	// 事实字段（category, sponsor_level, interval_ms）始终返回
