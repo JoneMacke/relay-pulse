@@ -219,6 +219,12 @@ export function ConfirmStep({ formData, updateField, submitResult, isSubmitting,
              附等级代码（与来源下拉「名称（code）」惯例及《赞助权益体系》表格「脉冲链路 pulse」一致） */
           value={`${t(`onboarding.providerInfo.sponsorLevels.${formData.sponsorLevel || 'pulse'}`, { defaultValue: formData.sponsorLevel || 'pulse' })}（${formData.sponsorLevel || 'pulse'}）`}
         />
+        {formData.channelName.trim() !== '' && (
+          <SummaryRow
+            label={t('onboarding.providerInfo.channelName', { defaultValue: '通道显示名称' })}
+            value={formData.channelName.trim()}
+          />
+        )}
         <SummaryRow
           label={t('onboarding.providerInfo.channelCodePreview')}
           value={

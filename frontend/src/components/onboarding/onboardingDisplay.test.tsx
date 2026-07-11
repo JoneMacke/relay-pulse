@@ -17,6 +17,7 @@ import type { ReactNode } from 'react';
 import i18n from '../../i18n';
 import { ConfirmStep } from './ConfirmStep';
 import { ConnectionTestStep } from './ConnectionTestStep';
+import { ProviderInfoStep } from './ProviderInfoStep';
 import type { OnboardingFormData, OnboardingMeta, OnboardingTestResult } from '../../types/onboarding';
 
 // React 19 的 act 需要此全局标记，否则会告警（无 testing-library 自动设置）
@@ -55,6 +56,7 @@ const baseFormData: OnboardingFormData = {
   channelType: 'O',
   channelSource: 'max',
   channelGroup: 'main',
+  channelName: '',
   agreementAccepted: false,
   baseUrl: 'https://api.example.com',
   apiKey: 'sk-test-1234567890abcd',
@@ -116,6 +118,26 @@ describe('ConfirmStep 摘要显示（step3）', () => {
     expect(out).toContain('cc-haiku-arith');
   });
 
+  it('填了通道显示名称时摘要出一行，留空不渲染该行', () => {
+    const withName = renderHTML(
+      <ConfirmStep
+        formData={{ ...baseFormData, channelName: ' Max 高速线路 ' }}
+        updateField={updateField}
+        submitResult={null}
+        isSubmitting={false}
+        testPassedAt={null}
+        checkedClauses={{}}
+        onToggleClause={noop}
+        onSubmit={noop}
+        onBack={noop}
+        onReset={noop}
+      />,
+    );
+    expect(withName).toContain('通道显示名称');
+    expect(withName).toContain('Max 高速线路');
+    expect(html()).not.toContain('通道显示名称');
+  });
+
   it('#2 赞助等级附等级代码「脉冲链路（pulse）」', () => {
     expect(html()).toContain('脉冲链路（pulse）');
   });
@@ -173,5 +195,33 @@ describe('ConnectionTestStep 探测结果显示（step2）', () => {
     // error_message 块仍在，但「响应详情」块因去重不出现
     expect(out).toContain('dial tcp: connection refused');
     expect(out).not.toContain('响应详情');
+  });
+});
+
+describe('ProviderInfoStep 通道命名字段（step1）', () => {
+  const html = (overrides: Partial<OnboardingFormData> = {}) =>
+    renderHTML(
+      <ProviderInfoStep
+        formData={{ ...baseFormData, ...overrides }}
+        updateField={updateField}
+        meta={meta}
+        onNext={noop}
+      />,
+    );
+
+  it('渲染可选的「通道显示名称」输入框，且分组字段文案为「通道分组代号」', () => {
+    const out = html();
+    expect(out).toContain('id="ob-channel-name"');
+    expect(out).toContain('通道显示名称');
+    expect(out).toContain('通道分组代号');
+    expect(out).toContain('不作为展示名称');
+  });
+
+  it('中文显示名合法不出错误提示；含零宽字符时给出 alert 错误', () => {
+    const ok = html({ channelName: 'Max 高速线路' });
+    expect(ok).not.toContain('不能包含控制字符');
+    const bad = html({ channelName: 'a\u200bb' });
+    expect(bad).toContain('不能包含控制字符或零宽字符');
+    expect(bad).toContain('role="alert"');
   });
 });

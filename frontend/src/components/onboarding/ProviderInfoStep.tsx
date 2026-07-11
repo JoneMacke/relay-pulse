@@ -13,8 +13,12 @@ interface ProviderInfoStepProps {
 
 /** 服务商名称仅允许 ASCII 可打印字符（与后端 providerNamePattern 一致）。 */
 const ASCII_PRINTABLE = /^[\x20-\x7E]+$/;
-/** 通道分组：1-8 位小写字母或数字。 */
+/** 通道分组代号：1-8 位小写字母或数字。 */
 const GROUP_PATTERN = /^[a-z0-9]{1,8}$/;
+/** 通道显示名称长度上限，与后端 channelNameMaxRunes 一致（Array.from 按 Unicode code point 计数）。 */
+const CHANNEL_NAME_MAX = 40;
+/** 与后端 validateChannelName 的拒绝策略对应：控制字符(Cc)、格式字符(Cf)、行/段分隔符(Zl/Zp)。 */
+const CHANNEL_NAME_DISALLOWED = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
 
 /** Step 1: Provider information and channel configuration. */
 export function ProviderInfoStep({ formData, updateField, meta, onNext }: ProviderInfoStepProps) {
@@ -64,6 +68,12 @@ export function ProviderInfoStep({ formData, updateField, meta, onNext }: Provid
 
   const groupValid = formData.channelGroup === '' || GROUP_PATTERN.test(formData.channelGroup);
 
+  // 通道显示名称可选；校验剪除首尾空白后的值（粘贴带入的尾部换行不误判）
+  const channelNameTrimmed = formData.channelName.trim();
+  const channelNameValid =
+    Array.from(channelNameTrimmed).length <= CHANNEL_NAME_MAX &&
+    !CHANNEL_NAME_DISALLOWED.test(channelNameTrimmed);
+
   // 通道标识预览：显示层大写（type-source），分组原样；存储层由后端统一小写
   const channelCode = useMemo(() => {
     if (!formData.channelType || !formData.channelSource) return '';
@@ -78,11 +88,12 @@ export function ProviderInfoStep({ formData, updateField, meta, onNext }: Provid
       formData.serviceType.length > 0 &&
       formData.channelType.length > 0 &&
       formData.channelSource.length > 0 &&
+      channelNameValid &&
       groupValid
     );
   }, [
     providerNameValid, formData.websiteUrl,
-    formData.serviceType, formData.channelType, formData.channelSource, groupValid,
+    formData.serviceType, formData.channelType, formData.channelSource, channelNameValid, groupValid,
   ]);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -234,10 +245,45 @@ export function ProviderInfoStep({ formData, updateField, meta, onNext }: Provid
         </p>
       </div>
 
-      {/* Channel group — relay's own grouping tag */}
+      {/* Channel display name — free-form Unicode label, independent from the PSC identifier */}
+      <div>
+        <label htmlFor="ob-channel-name" className={labelClass}>
+          {t('onboarding.providerInfo.channelName', { defaultValue: '通道显示名称' })}
+          <span className="ml-1 text-xs font-normal text-secondary">
+            {t('onboarding.providerInfo.optional', { defaultValue: '（可选）' })}
+          </span>
+        </label>
+        <input
+          id="ob-channel-name"
+          type="text"
+          value={formData.channelName}
+          onChange={(e) => updateField('channelName', e.target.value)}
+          placeholder={t('onboarding.providerInfo.channelNamePlaceholder', { defaultValue: '例如：Max 高速线路' })}
+          aria-invalid={!channelNameValid || undefined}
+          aria-describedby="ob-channel-name-hint"
+          className={inputClass(!channelNameValid)}
+        />
+        <p
+          id="ob-channel-name-hint"
+          className={`mt-1 text-xs ${channelNameValid ? 'text-secondary' : 'text-danger'}`}
+          role={channelNameValid ? undefined : 'alert'}
+        >
+          {channelNameValid
+            ? t('onboarding.providerInfo.channelNameHint', {
+                defaultValue: '显示在状态页通道列，可用中文；留空则显示通道标识；最多 {{max}} 个字符',
+                max: CHANNEL_NAME_MAX,
+              })
+            : t('onboarding.providerInfo.channelNameInvalid', {
+                defaultValue: '最多 {{max}} 个字符，且不能包含控制字符或零宽字符',
+                max: CHANNEL_NAME_MAX,
+              })}
+        </p>
+      </div>
+
+      {/* Channel group code — relay's own grouping code, feeds the channel identifier */}
       <div>
         <label htmlFor="ob-channel-group" className={labelClass}>
-          {t('onboarding.providerInfo.channelGroup', { defaultValue: '通道分组' })}
+          {t('onboarding.providerInfo.channelGroup', { defaultValue: '通道分组代号' })}
         </label>
         <input
           id="ob-channel-group"
@@ -250,7 +296,7 @@ export function ProviderInfoStep({ formData, updateField, meta, onNext }: Provid
         />
         <p className={hintClass}>
           {t('onboarding.providerInfo.channelGroupHint', {
-            defaultValue: '用于区分同一来源的多条通道（如 us、eu、v2），留空默认 main',
+            defaultValue: '1-8 位小写字母或数字，仅用于生成通道标识（如 us、eu、v2），不作为展示名称；留空默认 main',
           })}
         </p>
       </div>

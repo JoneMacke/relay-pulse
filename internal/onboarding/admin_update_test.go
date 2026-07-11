@@ -158,4 +158,24 @@ func TestAdminUpdate_RederiveGuard(t *testing.T) {
 			t.Errorf("R+kiro 应重派生为 r-kiro-main（空 group 回退 main），实际 %q", got.ChannelCode)
 		}
 	})
+
+	t.Run("channel_name 过校验：中文放行、不可见字符拒绝", func(t *testing.T) {
+		svc, store := newTestService(t)
+		saveSubmission(t, store, "chname-1", "pending", 100)
+
+		got, err := svc.AdminUpdate(ctx, "chname-1", map[string]any{
+			"channel_name": "  华东线路 ",
+		})
+		if err != nil {
+			t.Fatalf("AdminUpdate: %v", err)
+		}
+		if got.ChannelName != "华东线路" {
+			t.Errorf("channel_name 应剪除首尾空白后写入，实际 %q", got.ChannelName)
+		}
+		if _, err := svc.AdminUpdate(ctx, "chname-1", map[string]any{
+			"channel_name": "a\u202eb", // bidi 方向控制符
+		}); err == nil {
+			t.Errorf("含 bidi 控制符的 channel_name 应被拒绝")
+		}
+	})
 }

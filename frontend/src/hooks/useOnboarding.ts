@@ -55,6 +55,8 @@ const defaultForm: OnboardingFormData = {
   channelType: 'O',
   channelSource: '',
   channelGroup: 'main',
+  // 旧版 localStorage 草稿无此字段时由 defaultForm 铺底为空串，合并草稿即自然兼容
+  channelName: '',
   agreementAccepted: false,
   baseUrl: '',
   apiKey: '',
@@ -204,6 +206,7 @@ export function useOnboarding() {
         channel_type: formData.channelType,
         channel_source: formData.channelSource,
         channel_group: formData.channelGroup.trim() || 'main',
+        channel_name: formData.channelName.trim(),
         base_url: ensureUrl(formData.baseUrl),
         api_key: formData.apiKey,
         test_proof: testProof,

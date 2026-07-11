@@ -983,7 +983,8 @@ Closes #42
 - **provider_name** 仅允许 ASCII 可打印字符（`^[\x20-\x7E]+$`，禁中文）；
 - **channel_source** 必须是 `ChannelSourceCatalog`（per-service 受控词表，单一真相源，同时供 `/api/onboarding/meta` 下发前端）中的 2-5 位小写代码；如需新增来源改这一处 map；
 - **channel_type ↔ channel_source 须自洽**：`channelTypeAllowedCategories`（service.go 另一单一真相源，同样经 `/api/onboarding/meta` 下发）规定 O→{subscription,official,cloud}、R→{reverse}、M→{mixed}；`validateChannelTypeSource` 在 Submit 与 AdminUpdate 四元组重派生前校验所选来源的 Category 落在该类型允许集合内，否则拒绝（官方通道不可选 kiro 等逆向来源）。前端来源下拉据此 map 同步过滤；
-- **channel_group** 为 1-8 位小写字母/数字（中转商自定义分组），留空默认 `main`。
+- **channel_group** 为 1-8 位小写字母/数字（中转商自定义分组代号，仅用于派生 channel_code，不作展示），留空默认 `main`；
+- **channel_name** 为可选的通道展示名（`validateChannelName`：允许中文等常规可见 Unicode 文本，≤40 rune，拒绝控制字符 Cc/格式字符 Cf 含 bidi·零宽/行段分隔符 Zl·Zp），仅用于 UI 显示、不参与 channel_code/PSC 派生；用户提交与 AdminUpdate 均过同一校验，留空时前端回退显示 channel code。注意 `AdminConfigJSON` 整份覆盖发布与 admin monitors CRUD 不经此字段级校验——与 `target_channel` 同属故意保留的管理员逃生口。
 
 PSC 各段仍只允许小写字母、数字、短横线（`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`）。`AdminUpdate` 仅当 service/type/source/group 四元组真正变化时才重派生 channel_code（保护 legacy 两段记录），并对 channel_type(O/R/M)、service_type(cc/cx/gm) 做枚举校验。管理员可在发布前通过 `target_channel` 覆盖派生值（**故意保留的逃生口，不受三段约束**，用于 legacy 与特殊命名）。前端 `ChannelTypeIcon` 通过首字母（大小写不敏感）识别通道类型图标（o→官方、r→逆向、m→混合）。
 

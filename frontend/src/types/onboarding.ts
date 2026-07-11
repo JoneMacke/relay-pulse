@@ -63,6 +63,7 @@ export interface OnboardingFormData {
   channelType: string;
   channelSource: string;
   channelGroup: string;
+  channelName: string;
   agreementAccepted: boolean;
 
   // Step 2: 连通性测试
@@ -99,6 +100,7 @@ export interface SubmitOnboardingRequest {
   channel_type: string;
   channel_source: string;
   channel_group: string;
+  channel_name: string;
   base_url: string;
   api_key: string;
   test_proof: string;

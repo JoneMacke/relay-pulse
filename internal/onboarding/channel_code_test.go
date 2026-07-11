@@ -1,6 +1,9 @@
 package onboarding
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDeriveChannelCode(t *testing.T) {
 	cases := []struct {
@@ -31,6 +34,36 @@ func TestValidateProviderName(t *testing.T) {
 	for _, bad := range []string{"", "   ", "中转商", "Acmé", "rocket🚀"} {
 		if _, err := validateProviderName(bad); err == nil {
 			t.Fatalf("provider name %q should be rejected", bad)
+		}
+	}
+}
+
+func TestValidateChannelName(t *testing.T) {
+	// 展示名允许中文/日文/emoji 等任意语言的普通文本
+	for _, good := range []string{"Claude Max 华东线路", "东京リレー", "US-East ⚡", "main"} {
+		if got, err := validateChannelName(good); err != nil || got != good {
+			t.Fatalf("channel name %q should pass as-is, got %q err=%v", good, got, err)
+		}
+	}
+	// 留空/纯空白视为未填写；首尾空白（含粘贴带入的换行）剪除后取规范值
+	if got, err := validateChannelName("   "); err != nil || got != "" {
+		t.Fatalf("blank name should normalize to empty, got %q err=%v", got, err)
+	}
+	if got, err := validateChannelName("  华东线路\n"); err != nil || got != "华东线路" {
+		t.Fatalf("expected trimmed %q, got %q err=%v", "华东线路", got, err)
+	}
+	// 40 rune 上限：40 个汉字放行，41 个拒绝
+	long := strings.Repeat("名", channelNameMaxRunes)
+	if _, err := validateChannelName(long); err != nil {
+		t.Fatalf("%d-rune name should pass, got %v", channelNameMaxRunes, err)
+	}
+	if _, err := validateChannelName(long + "超"); err == nil {
+		t.Fatalf("%d-rune name should be rejected", channelNameMaxRunes+1)
+	}
+	// 内部控制字符 / bidi 控制符 / 零宽字符 / BOM / 非法 UTF-8 一律拒绝
+	for _, bad := range []string{"a\tb", "a\x00b", "a\u202eb", "a\u200bb", "a\ufeffb", "a\u2028b", "\xff\xfe"} {
+		if _, err := validateChannelName(bad); err == nil {
+			t.Fatalf("channel name %q should be rejected", bad)
 		}
 	}
 }

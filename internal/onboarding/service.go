@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -25,8 +27,13 @@ var pscSegmentPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`)
 // 自助收录字段规范（提交即强制）：
 //   - provider_name 仅允许 ASCII 可打印字符（禁中文/日文/emoji 等），与下游 PSC provider slug 的小写约束保持一致
 //   - channel_source 必须是受控词表 ChannelSourceCatalog 中、对应 service 下的 2-5 位小写代码
-//   - channel_group 为用户自定义 1-8 位小写分组（中转商自己的分组），留空回退 channelGroupDefault
+//   - channel_group 为用户自定义 1-8 位小写分组代号（中转商自己的分组），留空回退 channelGroupDefault
+//   - channel_name 为可选的通道展示名（允许中文等任意语言），仅用于 UI 显示，不参与 channel_code/PSC 派生
 const channelGroupDefault = "main"
+
+// channelNameMaxRunes 限制通道展示名长度（按 rune 计，非字节）：
+// 状态页通道列空间有限，40 个字符足以容纳中英文混排的线路名。
+const channelNameMaxRunes = 40
 
 var (
 	providerNamePattern  = regexp.MustCompile(`^[\x20-\x7E]+$`)
@@ -175,7 +182,8 @@ type SubmitRequest struct {
 	SponsorLevel  string `json:"sponsor_level" binding:"max=50"`
 	ChannelType   string `json:"channel_type" binding:"required,oneof=O R M"`
 	ChannelSource string `json:"channel_source" binding:"required,max=5"`
-	ChannelGroup  string `json:"channel_group" binding:"max=8"` // 留空回退 main
+	ChannelGroup  string `json:"channel_group" binding:"max=8"`  // 留空回退 main
+	ChannelName   string `json:"channel_name" binding:"max=100"` // 可选展示名（可中文），精校验在 validateChannelName
 	BaseURL       string `json:"base_url" binding:"required,url,max=500"`
 	APIKey        string `json:"api_key" binding:"required,min=10,max=500"`
 	TestProof     string `json:"test_proof" binding:"required"`
@@ -212,8 +220,12 @@ func (s *Service) Submit(ctx context.Context, req *SubmitRequest, clientIP strin
 		return nil, fmt.Errorf("请先阅读并确认《入驻须知与确认》全部要点后再提交")
 	}
 
-	// 规范化并校验提交字段（服务商名禁中文、来源受控词表、分组格式）
+	// 规范化并校验提交字段（服务商名禁中文、展示名禁不可见字符、来源受控词表、分组格式）
 	providerName, err := validateProviderName(req.ProviderName)
+	if err != nil {
+		return nil, err
+	}
+	channelName, err := validateChannelName(req.ChannelName)
 	if err != nil {
 		return nil, err
 	}
@@ -288,6 +300,7 @@ func (s *Service) Submit(ctx context.Context, req *SubmitRequest, clientIP strin
 		ChannelSource:     channelSource,
 		ChannelGroup:      channelGroup,
 		ChannelCode:       channelCode,
+		ChannelName:       channelName,
 		BaseURL:           req.BaseURL,
 		APIKeyEncrypted:   encrypted,
 		APIKeyFingerprint: fingerprint,
@@ -423,7 +436,11 @@ func (s *Service) AdminUpdate(ctx context.Context, publicID string, updates map[
 		sub.BaseURL = v
 	}
 	if v, ok := updates["channel_name"].(string); ok {
-		sub.ChannelName = v
+		name, err := validateChannelName(v)
+		if err != nil {
+			return nil, err
+		}
+		sub.ChannelName = name
 	}
 	if v, ok := updates["listed_since"].(string); ok {
 		sub.ListedSince = v
@@ -766,6 +783,30 @@ func validateProviderName(value string) (string, error) {
 	}
 	if !providerNamePattern.MatchString(value) {
 		return "", fmt.Errorf("provider_name 仅允许 ASCII 可打印字符，不能包含中文或其他非 ASCII 字符")
+	}
+	return value, nil
+}
+
+// validateChannelName 校验可选的通道展示名（channel_name）：允许中文等常规可见 Unicode 文本，
+// 但拒绝控制字符（Cc）、格式字符（Cf，覆盖 bidi 方向控制符和 ZWSP/ZWJ/BOM 等零宽字符）与
+// 行/段分隔符（Zl/Zp），防止不可见字符欺骗、显示方向劫持与状态页通道列折行。
+// 注意 Cf 全禁意味着 ZWJ 组合 emoji（如家庭 emoji）也会被拒——展示名场景可接受的安全取舍。
+// 首尾空白剪除，剪除后为空视为未填写（返回空串）。长度按 rune 计（一个汉字算一个字符），返回规范值。
+func validateChannelName(value string) (string, error) {
+	if !utf8.ValidString(value) {
+		return "", fmt.Errorf("channel_name 包含无效的 UTF-8 编码")
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
+			return "", fmt.Errorf("channel_name 格式无效（%q），不能包含控制字符、双向文本控制符、零宽字符或行分隔符", value)
+		}
+	}
+	if n := utf8.RuneCountInString(value); n > channelNameMaxRunes {
+		return "", fmt.Errorf("channel_name 过长（%d 个字符），应不超过 %d 个字符", n, channelNameMaxRunes)
 	}
 	return value, nil
 }
