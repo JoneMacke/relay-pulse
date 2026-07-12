@@ -164,6 +164,10 @@ export interface RpdiagModelScore {
   /** rpdiag quality_state="unavailable" 且非 hard-fail-active（v5.10 stale/aged 行）。
    *  前端画中性灰「不可测」但保留 recent_attempts 历史彩点（区别于 failed 的清零灰）。 */
   unavailable?: boolean;
+  /** rpdiag attempts_7d==0（近 7 天无终态评测记录）且非 hard-fail。展示层把该 model
+   *  的真实历史 sparkline 降饱和 + tooltip 注「近7天无评测记录」，与 failed/unavailable
+   *  的清零灰不同——这里保留真实历史颜色、只是"发暗"。 */
+  no_recent_attempts?: boolean;
 }
 
 /** rpdiag 一个 (provider, service, channel) 三元组的聚合质量分。

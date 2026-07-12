@@ -86,3 +86,43 @@ describe('unavailable model 质量列渲染', () => {
     expect(row.detail).toContain('当前不可测');
   });
 });
+
+// no_recent_attempts（rpdiag attempts_7d==0 且非 hard-fail）：展示层降饱和 + tooltip
+// 注「近7天无评测记录」，但 KEEP 历史分可见——区别于 failed/unavailable 的「不可测」。
+describe('NoRecentAttempts tooltip', () => {
+  // 纯 no_recent（非 unavailable）：真实历史分必须原样保留、绝不抹「不可测」。
+  const staleHealthy: RpdiagModelScore = {
+    model: 'sonnet',
+    model_key: 'sonnet',
+    no_recent_attempts: true,
+    trend: { avg_30d: 91, avg_7d: 90, recent_scores: [85, 88], n_7d: 0, n_30d: 8 },
+  };
+
+  it('marks 近7天无评测记录 while keeping historical scores', () => {
+    const row = buildModelTooltipRow(staleHealthy);
+    expect(row.detail).toContain('近7天无评测记录');
+    // 88 是真实近况分，走 unavailable 路径本会被抹成「不可测」——它仍在，才真正证明历史保真。
+    expect(row.detail).toContain('88');
+    // 纯 no_recent 不是「不可测」态：整串不得出现「不可测」。
+    expect(row.detail).not.toContain('不可测');
+  });
+
+  it('does NOT treat no_recent_attempts as unusable', () => {
+    expect(isModelQualityUnusable(staleHealthy)).toBe(false);
+  });
+
+  // 回归护栏（spec §② 优先级）：同一行同时 unavailable + no_recent 时 no_recent 展示优先——
+  // 保留真实历史分（不被 unavailable 抹成「不可测」），主注「近7天无评测记录」。
+  it('no_recent takes display precedence over unavailable (keeps real history)', () => {
+    const bothFlags: RpdiagModelScore = {
+      model: 'sonnet',
+      model_key: 'sonnet',
+      unavailable: true,
+      no_recent_attempts: true,
+      trend: { avg_30d: 91, avg_7d: 90, recent_scores: [85, 88], n_7d: 0, n_30d: 8 },
+    };
+    const row = buildModelTooltipRow(bothFlags);
+    expect(row.detail).toContain('近7天无评测记录');
+    expect(row.detail).toContain('88'); // unavailable 未抹掉历史
+  });
+});
