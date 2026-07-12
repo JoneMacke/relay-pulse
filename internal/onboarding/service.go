@@ -136,6 +136,19 @@ func (e *PSCConflictError) Error() string {
 		e.Provider, e.Service, e.Channel, e.SuggestedChannel)
 }
 
+// InvalidProviderSlugError 表示发布时从服务商展示名派生的 provider slug 非法（通常因展示名含非
+// 英文字符）、且管理员未经 target_provider 覆盖英文代号。区别于 PSCConflictError（唯一性冲突），
+// 供 handler 特判为 4xx + 可操作指引，避免呈现为服务端 500。
+type InvalidProviderSlugError struct {
+	ProviderName string // 原始展示名（可能含中文）
+	DerivedSlug  string // 派生出的非法 slug
+}
+
+func (e *InvalidProviderSlugError) Error() string {
+	return fmt.Sprintf("服务商名 %q 无法自动生成合法的网址代号（派生值 %q 含中文或其它无法用于网址的字符）；请在「Provider 覆盖」(target_provider) 填写英文代号（小写字母、数字、短横线）后再上架。",
+		e.ProviderName, e.DerivedSlug)
+}
+
 // Service 提供自助收录的核心业务逻辑。
 type Service struct {
 	store               Store
@@ -556,6 +569,17 @@ func (s *Service) AdminPublish(ctx context.Context, publicID, board string) erro
 
 	// 构建 ServiceConfig
 	monitorCfg := s.buildServiceConfig(sub, apiKey)
+
+	// 派生路径下（无 AdminConfigJSON 整份覆盖）：若展示名派生出的 provider slug 非法且未覆盖
+	// target_provider，返回可操作指引（区别于下方通用 PSC 校验的难懂错误 + 500）。
+	// AdminConfigJSON 覆盖路径自带 Provider，仍走下方 validateMonitorConfig 通用校验；
+	// 管理员填了非法 target_provider/target_service/target_channel 覆盖值属另一类（预存、对称）
+	// 问题，本轮不在此处理，仍走通用校验。
+	if sub.AdminConfigJSON == "" &&
+		strings.TrimSpace(sub.TargetProvider) == "" &&
+		!pscSegmentPattern.MatchString(monitorCfg.Provider) {
+		return &InvalidProviderSlugError{ProviderName: sub.ProviderName, DerivedSlug: monitorCfg.Provider}
+	}
 
 	// 如果管理员有自定义配置，覆盖
 	if sub.AdminConfigJSON != "" {

@@ -255,6 +255,13 @@ func (h *Handler) AdminPublishSubmission(c *gin.Context) {
 			})
 			return
 		}
+		var invalidSlug *onboarding.InvalidProviderSlugError
+		if errors.As(err, &invalidSlug) {
+			logger.Warn("admin", "上架失败：provider slug 需覆盖", "public_id", publicID,
+				"provider_name", invalidSlug.ProviderName, "derived_slug", invalidSlug.DerivedSlug)
+			apiError(c, http.StatusBadRequest, ErrCodeInvalidParam, invalidSlug.Error())
+			return
+		}
 		logger.Error("admin", "上架失败", "public_id", publicID, "error", err)
 		apiError(c, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
 		return
