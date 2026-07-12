@@ -980,7 +980,7 @@ Closes #42
 ### Onboarding 通道标识派生
 
 收录申请提交时，channel code 由 `deriveChannelCode(channelType, channelSource, channelGroup)` 派生为三段 `{type}-{source}-{group}`（全小写；group 为空时回退两段，仅用于兼容旧数据）。例如 type="O" + source="max" + group="us" → `o-max-us`。提交即强制校验（见 `internal/onboarding/service.go`）：
-- **provider_name** 仅允许 ASCII 可打印字符（`^[\x20-\x7E]+$`，禁中文）；
+- **provider_name** 为服务商展示名（`validateProviderName`：允许中文等常规可见 Unicode 文本，≤100 rune，拒控制字符 Cc/格式字符 Cf 含 bidi·零宽/行段分隔符 Zl·Zp，**必填**），用户提交与 AdminUpdate 均过同一校验；发布时 provider PSC slug 由 `BuildServiceConfigFromSubmission` 从它派生（`lower(空格转-)`，仅 ASCII 名可得合法 slug）或由管理员 `target_provider` 覆盖——非 ASCII 展示名派生出非法 slug 且未填 `target_provider` 时，`AdminPublish` 返 `InvalidProviderSlugError`（handler 特判为 4xx 可操作指引、不落文件），提示管理员填英文代号；`AdminConfigJSON` 整份覆盖发布不经此字段级校验（管理员逃生口）。（⚠️ `change-request` apply 目前对 provider_name/channel_name 未过 Unicode 校验＝已登记的分离 follow-up，见 memory pending register item -16。）
 - **channel_source** 必须是 `ChannelSourceCatalog`（per-service 受控词表，单一真相源，同时供 `/api/onboarding/meta` 下发前端）中的 2-5 位小写代码；如需新增来源改这一处 map；
 - **channel_type ↔ channel_source 须自洽**：`channelTypeAllowedCategories`（service.go 另一单一真相源，同样经 `/api/onboarding/meta` 下发）规定 O→{subscription,official,cloud}、R→{reverse}、M→{mixed}；`validateChannelTypeSource` 在 Submit 与 AdminUpdate 四元组重派生前校验所选来源的 Category 落在该类型允许集合内，否则拒绝（官方通道不可选 kiro 等逆向来源）。前端来源下拉据此 map 同步过滤；
 - **channel_group** 为 1-8 位小写字母/数字（中转商自定义分组代号，仅用于派生 channel_code，不作展示），留空默认 `main`；
