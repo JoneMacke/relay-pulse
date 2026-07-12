@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { apiPost, ApiError } from '../utils/apiClient';
+import { normalizeDisplayName } from '../utils/displayName';
 import type {
   AuthCandidate,
   AuthResponse,
@@ -157,10 +158,22 @@ export function useChangeRequest() {
 
   // 进入测试/提交步骤
   const proceedFromEdit = useCallback(() => {
-    if (Object.keys(changes).length === 0 && newApiKey === '') {
+    // 规范化展示名（与后端 displayname 对齐；剥首尾不可见字符）——保证 Review 展示、提交 payload、
+    // 后端落盘看到同一字符串；规范化后为空的展示名视为「未改动」丢弃。非法值已被 EditStep 禁用「下一步」挡下。
+    const normalized: Record<string, string> = {};
+    for (const [k, v] of Object.entries(changes)) {
+      if (k === 'provider_name' || k === 'channel_name') {
+        const norm = normalizeDisplayName(v);
+        if (norm !== '') normalized[k] = norm;
+      } else {
+        normalized[k] = v;
+      }
+    }
+    if (Object.keys(normalized).length === 0 && newApiKey === '') {
       setError(t('changeRequest.edit.noChanges'));
       return;
     }
+    setChanges(normalized);
     setError(null);
     if (requiresTest) {
       setStep('test');

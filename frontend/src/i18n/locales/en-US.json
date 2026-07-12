@@ -528,7 +528,8 @@
       "current": "Current",
       "noChange": "No change",
       "newApiKeyPlaceholder": "Enter new API Key if you want to replace it",
-      "noChanges": "Please modify at least one field"
+      "noChanges": "Please modify at least one field",
+      "invalidDisplayName": "The display name contains invisible characters or is too long. Please revise it."
     },
     "fields": {
       "providerName": "Provider Name",

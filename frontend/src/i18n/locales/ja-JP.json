@@ -495,7 +495,8 @@
       "current": "現在の値",
       "noChange": "変更なし",
       "newApiKeyPlaceholder": "APIキーを変更する場合は新しいキーを入力",
-      "noChanges": "少なくとも1つのフィールドを変更してください"
+      "noChanges": "少なくとも1つのフィールドを変更してください",
+      "invalidDisplayName": "表示名に不可視文字が含まれているか、文字数が上限を超えています。修正してください。"
     },
     "fields": {
       "providerName": "プロバイダー名",

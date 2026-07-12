@@ -7,6 +7,7 @@ import { LANGUAGE_PATH_MAP, type SupportedLanguage } from '../i18n';
 import { useChangeRequest, type ChangeStep } from '../hooks/useChangeRequest';
 import type { AuthCandidate } from '../types/change';
 import { inputClass, selectClass, labelClass, primaryButtonClass, secondaryButtonClass } from '../components/onboarding/controls';
+import { isProviderNameValid, isChannelNameValid } from '../utils/displayName';
 
 /** 步骤指示器 */
 function StepIndicator({ current, requiresTest }: { current: ChangeStep; requiresTest: boolean }) {
@@ -166,6 +167,14 @@ function EditStep({
     { key: 'base_url', label: t('changeRequest.fields.baseUrl'), current: selectedCandidate.base_url },
   ];
 
+  // 展示名前端校验（与后端 displayname 对齐）：内部不可见字符 / 超长 → 禁用「下一步」+ 内联错误。
+  // 权威校验在后端；这里只做 fail-fast UX。仅对已改动（出现在 changes 中）的字段判定。
+  const providerNameInvalid =
+    changes['provider_name'] !== undefined && !isProviderNameValid(changes['provider_name']);
+  const channelNameInvalid =
+    changes['channel_name'] !== undefined && !isChannelNameValid(changes['channel_name']);
+  const displayNameInvalid = providerNameInvalid || channelNameInvalid;
+
   return (
     <div className="max-w-lg mx-auto">
       <h2 className="text-xl font-semibold text-primary mb-2">{t('changeRequest.edit.title')}</h2>
@@ -174,21 +183,32 @@ function EditStep({
       </p>
 
       <div className="space-y-4">
-        {fields.map(f => (
-          <div key={f.key}>
-            <label className={labelClass}>
-              {f.label}
-              <span className="text-muted ml-2 font-normal">({t('changeRequest.edit.current')}: {f.current || '—'})</span>
-            </label>
-            <input
-              type="text"
-              value={changes[f.key] ?? ''}
-              onChange={e => updateChange(f.key, e.target.value)}
-              placeholder={t('changeRequest.edit.noChange')}
-              className={inputClass()}
-            />
-          </div>
-        ))}
+        {fields.map(f => {
+          const invalid =
+            (f.key === 'provider_name' && providerNameInvalid) ||
+            (f.key === 'channel_name' && channelNameInvalid);
+          return (
+            <div key={f.key}>
+              <label className={labelClass}>
+                {f.label}
+                <span className="text-muted ml-2 font-normal">({t('changeRequest.edit.current')}: {f.current || '—'})</span>
+              </label>
+              <input
+                type="text"
+                value={changes[f.key] ?? ''}
+                onChange={e => updateChange(f.key, e.target.value)}
+                placeholder={t('changeRequest.edit.noChange')}
+                aria-invalid={invalid || undefined}
+                className={inputClass(invalid)}
+              />
+              {invalid && (
+                <p className="text-danger text-xs mt-1" role="alert">
+                  {t('changeRequest.edit.invalidDisplayName')}
+                </p>
+              )}
+            </div>
+          );
+        })}
 
         {/* 新 API Key */}
         <div>
@@ -218,6 +238,7 @@ function EditStep({
           </button>
           <button
             onClick={proceedFromEdit}
+            disabled={displayNameInvalid}
             className={`flex-1 justify-center ${primaryButtonClass}`}
           >
             {t('changeRequest.next')}<ArrowRight size={14} />

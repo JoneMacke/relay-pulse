@@ -531,7 +531,8 @@
       "current": "当前值",
       "noChange": "不修改",
       "newApiKeyPlaceholder": "如需更换 API Key，请在此输入新的",
-      "noChanges": "请至少修改一个字段"
+      "noChanges": "请至少修改一个字段",
+      "invalidDisplayName": "展示名称含不可见字符或过长，请检查后重填。"
     },
     "fields": {
       "providerName": "服务商名称",
