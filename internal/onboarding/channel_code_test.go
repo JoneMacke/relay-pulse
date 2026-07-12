@@ -25,16 +25,43 @@ func TestDeriveChannelCode(t *testing.T) {
 }
 
 func TestValidateProviderName(t *testing.T) {
-	if _, err := validateProviderName("Acme Relay 2"); err != nil {
-		t.Fatalf("ASCII name should pass, got %v", err)
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{"ascii unchanged", "SaiAI", "SaiAI", false},
+		{"ascii with spaces", "Sai AI Cloud", "Sai AI Cloud", false},
+		{"ascii punctuation", "WorldBase.ai", "WorldBase.ai", false},
+		{"chinese", "赛博AI", "赛博AI", false},
+		{"japanese", "さくらクラウド", "さくらクラウド", false},
+		{"russian", "Яндекс", "Яндекс", false},
+		{"arabic", "سحابة", "سحابة", false},
+		{"mixed cjk+ascii", "赛博AI Cloud", "赛博AI Cloud", false},
+		{"trims surrounding space", "  赛博AI  ", "赛博AI", false},
+		{"empty", "", "", true},
+		{"all whitespace", "   ", "", true},
+		{"invalid utf-8", "\xff\xfe", "", true},
+		{"control char tab", "Sai\tAI", "", true},
+		{"newline", "Sai\nAI", "", true},
+		{"zero width space (Cf)", "Sai​AI", "", true},
+		{"bidi override (Cf)", "Sai‮AI", "", true},
+		{"line separator (Zl)", "Sai AI", "", true},
+		{"paragraph separator (Zp)", "Sai AI", "", true},
+		{"over 100 runes", strings.Repeat("赛", providerNameMaxRunes+1), "", true},
+		{"exactly 100 runes ok", strings.Repeat("赛", providerNameMaxRunes), strings.Repeat("赛", providerNameMaxRunes), false},
 	}
-	if got, _ := validateProviderName("  Trim Me  "); got != "Trim Me" {
-		t.Fatalf("expected trimmed %q, got %q", "Trim Me", got)
-	}
-	for _, bad := range []string{"", "   ", "中转商", "Acmé", "rocket🚀"} {
-		if _, err := validateProviderName(bad); err == nil {
-			t.Fatalf("provider name %q should be rejected", bad)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := validateProviderName(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("validateProviderName(%q) err=%v, wantErr=%v", tt.input, err, tt.wantErr)
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Fatalf("validateProviderName(%q)=%q, want %q", tt.input, got, tt.want)
+			}
+		})
 	}
 }
 

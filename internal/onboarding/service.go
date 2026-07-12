@@ -25,7 +25,7 @@ import (
 var pscSegmentPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`)
 
 // 自助收录字段规范（提交即强制）：
-//   - provider_name 仅允许 ASCII 可打印字符（禁中文/日文/emoji 等），与下游 PSC provider slug 的小写约束保持一致
+//   - provider_name 为服务商展示名（允许中文等任意可见文本，拒不可见字符，≤100 rune）；发布时机器 slug 从它派生或由 target_provider 覆盖
 //   - channel_source 必须是受控词表 ChannelSourceCatalog 中、对应 service 下的 2-5 位小写代码
 //   - channel_group 为用户自定义 1-8 位小写分组代号（中转商自己的分组），留空回退 channelGroupDefault
 //   - channel_name 为可选的通道展示名（允许中文等任意语言），仅用于 UI 显示，不参与 channel_code/PSC 派生
@@ -35,8 +35,12 @@ const channelGroupDefault = "main"
 // 状态页通道列空间有限，40 个字符足以容纳中英文混排的线路名。
 const channelNameMaxRunes = 40
 
+// providerNameMaxRunes 限制服务商展示名长度（按 rune 计，非字节）。与 SubmitRequest.ProviderName
+// 的 binding:"max=100"（validator.v10 对 string 的 max 亦按 rune 计）对齐；放开 Unicode 后
+// 100 rune 对中英文名均宽裕，且不收紧既有 ASCII 契约。
+const providerNameMaxRunes = 100
+
 var (
-	providerNamePattern  = regexp.MustCompile(`^[\x20-\x7E]+$`)
 	channelSourcePattern = regexp.MustCompile(`^[a-z0-9]{2,5}$`)
 	channelGroupPattern  = regexp.MustCompile(`^[a-z0-9]{1,8}$`)
 )
@@ -174,7 +178,7 @@ func (s *Service) SetConfigMonitorCheck(fn func(string, string, string) bool) {
 
 // SubmitRequest 用户提交申请的请求参数
 type SubmitRequest struct {
-	ProviderName  string `json:"provider_name" binding:"max=100"` // 仅 ASCII，非空校验在 validateProviderName
+	ProviderName  string `json:"provider_name" binding:"max=100"` // 服务商展示名（可中文），精校验在 validateProviderName
 	WebsiteURL    string `json:"website_url" binding:"required,url,max=500"`
 	Category      string `json:"category" binding:"required,oneof=commercial public"`
 	ServiceType   string `json:"service_type" binding:"required,oneof=cc cx gm"`
@@ -220,7 +224,7 @@ func (s *Service) Submit(ctx context.Context, req *SubmitRequest, clientIP strin
 		return nil, fmt.Errorf("请先阅读并确认《入驻须知与确认》全部要点后再提交")
 	}
 
-	// 规范化并校验提交字段（服务商名禁中文、展示名禁不可见字符、来源受控词表、分组格式）
+	// 规范化并校验提交字段（服务商名/通道展示名允许中文但禁不可见字符、来源受控词表、分组格式）
 	providerName, err := validateProviderName(req.ProviderName)
 	if err != nil {
 		return nil, err
@@ -771,18 +775,27 @@ func (s *Service) suggestUniqueChannel(provider, service, channel string) string
 	return channel + "-new"
 }
 
-// validateProviderName 校验服务商名称：非空、长度内、仅 ASCII 可打印字符。
-// 返回 TrimSpace 后的规范值。
+// validateProviderName 校验服务商展示名（provider_name，必填）：允许中文等常规可见 Unicode 文本，
+// 拒控制字符(Cc)、格式字符(Cf，含 bidi 方向控制符与 ZWSP/ZWJ/BOM 等零宽字符)、行/段分隔符(Zl/Zp)，
+// 防不可见字符欺骗、显示方向劫持与状态页折行。首尾空白剪除。长度按 rune 计。
+// 与 validateChannelName 同族；区别：provider 展示名必填（channel 展示名可选）。
+// 注意：本字段仅为展示名——机器 slug 由 BuildServiceConfigFromSubmission 从它派生（ASCII 名）或
+// 由管理员 target_provider 覆盖（非 ASCII 名）；故此处不再要求 ASCII。
 func validateProviderName(value string) (string, error) {
+	if !utf8.ValidString(value) {
+		return "", fmt.Errorf("服务商展示名（provider_name）包含无效的 UTF-8 编码")
+	}
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return "", fmt.Errorf("provider_name 不能为空")
+		return "", fmt.Errorf("服务商展示名（provider_name）不能为空")
 	}
-	if len(value) > 100 {
-		return "", fmt.Errorf("provider_name 长度超过限制（最大 100）")
+	for _, r := range value {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
+			return "", fmt.Errorf("服务商展示名（provider_name）格式无效（%q），不能包含控制字符、双向文本控制符、零宽字符或行分隔符", value)
+		}
 	}
-	if !providerNamePattern.MatchString(value) {
-		return "", fmt.Errorf("provider_name 仅允许 ASCII 可打印字符，不能包含中文或其他非 ASCII 字符")
+	if n := utf8.RuneCountInString(value); n > providerNameMaxRunes {
+		return "", fmt.Errorf("服务商展示名（provider_name）过长（%d 个字符），应不超过 %d 个字符", n, providerNameMaxRunes)
 	}
 	return value, nil
 }
