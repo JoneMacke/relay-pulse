@@ -1182,6 +1182,9 @@ func keysOf(m map[string]Score) []string {
 	return out
 }
 
+// intPtr is a package-level *int helper for constructing attempts_7d fixtures.
+func intPtr(v int) *int { return &v }
+
 // cidRow builds a minimal fresh, scorable rpdiag row for buildScoresAt unit
 // tests. latest_at is left to the caller (freshAt()/staleAt()).
 func cidRow(provider, service, channel, model, cid string, latest float64, at *string) rankingRow {
@@ -1395,5 +1398,123 @@ func TestBuildScores_AllUnavailableChannelHasNilMaxScore(t *testing.T) {
 	}
 	if len(got.Models) != 1 {
 		t.Fatalf("model must be kept for display, got %d models", len(got.Models))
+	}
+}
+
+func TestBuildScoresNoRecentAttemptsFlag(t *testing.T) {
+	c := newTestClient()
+	mk := func(v float64) *float64 { return &v }
+
+	// 基础 scored 行工厂：不同 channel 隔开，避免同通道聚合互相干扰。
+	base := func(channel string, attempts7d *int, hardFail bool) rankingRow {
+		return rankingRow{
+			ChannelName: channel, ProviderName: "prov", ServiceCLICommand: "claude",
+			Model: "claude-sonnet-4-5", ModelKey: "claude-sonnet-4-5",
+			HardFailActive: hardFail,
+			Attempts7D:     attempts7d,
+			ScoreTrend: ScoreTrend{
+				Latest: mk(88), LatestAt: staleAt(), // stale：近7天无出分，与 attempts==0 一致
+				Avg7D: mk(90), Avg30D: mk(91),
+				RecentScores: []float64{85, 88}, RecentAttempts: []*float64{},
+			},
+		}
+	}
+
+	cases := []struct {
+		name              string
+		row               rankingRow
+		wantNoRecent      bool
+		wantFailed        bool
+		wantScorePreserve bool // Score/Avg30D 是否原样保留
+	}{
+		{"zero_attempts_stale", base("c-zero", intPtr(0), false), true, false, true},
+		{"has_attempts", base("c-has", intPtr(3), false), false, false, true},
+		{"absent_attempts_old_wire", base("c-nil", nil, false), false, false, true},
+		{"zero_attempts_but_hardfail", base("c-hf", intPtr(0), true), false, true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			scores := c.buildScoresAt([]rankingRow{tc.row}, testNow)
+			key := ScoreKey("prov", "cc", tc.row.ChannelName)
+			s, ok := scores[key]
+			if !ok || len(s.Models) != 1 {
+				t.Fatalf("expected 1 model for %s, got %+v", key, scores)
+			}
+			m := s.Models[0]
+			if m.NoRecentAttempts != tc.wantNoRecent {
+				t.Errorf("NoRecentAttempts = %v, want %v", m.NoRecentAttempts, tc.wantNoRecent)
+			}
+			if m.Failed != tc.wantFailed {
+				t.Errorf("Failed = %v, want %v", m.Failed, tc.wantFailed)
+			}
+			if tc.wantScorePreserve {
+				if m.Score == nil || *m.Score != 88 {
+					t.Errorf("Score = %v, want 88 preserved", m.Score)
+				}
+				if m.Trend.Avg30D == nil || *m.Trend.Avg30D != 91 {
+					t.Errorf("Avg30D = %v, want 91 preserved", m.Trend.Avg30D)
+				}
+			}
+		})
+	}
+}
+
+func TestRankingRowAttempts7DJSONDecode(t *testing.T) {
+	cases := []struct {
+		name string
+		json string
+		want *int
+	}{
+		{"absent", `{"channel_name":"c"}`, nil},
+		{"null", `{"channel_name":"c","attempts_7d":null}`, nil},
+		{"zero", `{"channel_name":"c","attempts_7d":0}`, intPtr(0)},
+		{"positive", `{"channel_name":"c","attempts_7d":5}`, intPtr(5)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var row rankingRow
+			if err := json.Unmarshal([]byte(tc.json), &row); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			switch {
+			case tc.want == nil && row.Attempts7D != nil:
+				t.Errorf("Attempts7D = %v, want nil", *row.Attempts7D)
+			case tc.want != nil && (row.Attempts7D == nil || *row.Attempts7D != *tc.want):
+				t.Errorf("Attempts7D = %v, want %v", row.Attempts7D, *tc.want)
+			}
+		})
+	}
+}
+
+func TestCloneScoresPreservesNoRecentAttempts(t *testing.T) {
+	src := map[string]Score{
+		"k": {Models: []ModelScore{{Model: "m", NoRecentAttempts: true}}},
+	}
+	got := cloneScores(src)
+	if !got["k"].Models[0].NoRecentAttempts {
+		t.Error("clone dropped NoRecentAttempts")
+	}
+}
+
+func TestNoRecentAttemptsDoesNotAffectRanking(t *testing.T) {
+	c := newTestClient()
+	mk := func(v float64) *float64 { return &v }
+	fresh := ScoreTrend{Latest: mk(80), LatestAt: freshAt(), Avg7D: mk(80), Avg30D: mk(80)}
+	staleTrend := ScoreTrend{Latest: mk(88), LatestAt: staleAt(), Avg7D: mk(90), Avg30D: mk(91)}
+	rows := []rankingRow{
+		// 目标通道：stale + attempts_7d==0
+		{ChannelName: "target", ProviderName: "p", ServiceCLICommand: "claude",
+			Model: "sonnet", ModelKey: "sonnet", Attempts7D: intPtr(0), ScoreTrend: staleTrend},
+		// 别处 fresh sibling → sonnet 全站 active，故 target 的 stale 行 rankLatest=0（非剔除）
+		{ChannelName: "other", ProviderName: "p", ServiceCLICommand: "claude",
+			Model: "sonnet", ModelKey: "sonnet", Attempts7D: intPtr(9), ScoreTrend: fresh},
+	}
+	scores := c.buildScoresAt(rows, testNow)
+	target := scores[ScoreKey("p", "cc", "target")]
+	if !target.Models[0].NoRecentAttempts {
+		t.Fatal("target should be NoRecentAttempts")
+	}
+	if target.MaxScore == nil || *target.MaxScore != 0 {
+		t.Errorf("MaxScore = %v, want 0 (stale contributes 0, unchanged by display flag)", target.MaxScore)
 	}
 }

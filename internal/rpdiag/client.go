@@ -117,6 +117,11 @@ type ModelScore struct {
 	// front end renders it grey ("can't measure") while keeping its historical
 	// recent_attempts dots; unlike Failed it does NOT zero the display trend.
 	Unavailable bool `json:"unavailable,omitempty"`
+	// NoRecentAttempts 标记 rpdiag attempts_7d==0（近 7 天无终态评测记录）且非
+	// hard-fail-active 的行。纯展示新鲜度信号：前端把该 model 的真实历史 sparkline
+	// 降饱和并注「近7天无评测记录」，而不是让一周前的健康点读成当前状态。与排名正交
+	// （排名另按 latest_at 沉 stale 行）。gate 在 !hard_fail_active 故与 Failed 互斥。
+	NoRecentAttempts bool `json:"no_recent_attempts,omitempty"`
 }
 
 // Score is the aggregated quality view for one (provider, service, channel)
@@ -354,6 +359,11 @@ type rankingRow struct {
 	// active-model average, so a channel with no current signal sinks on a nil
 	// MaxScore rather than a misleading 0 (see buildScoreRowView / buildScoresAt).
 	QualityState string `json:"quality_state"`
+	// Attempts7D 是 rpdiag export 每 descriptor 近 7 天 REVEALED 终态（DONE/FAILED）
+	// task 计数（statement.py 的 cutoff_short）。它计入**我方侧 measurement 失败**——
+	// 表示「近 7 天有没有终态评测记录」，不表示「探测真正打到了通道」。用 *int：旧 wire
+	// 缺字段 → nil → 语义「未知」→ 绝不误判为 0。
+	Attempts7D *int `json:"attempts_7d"`
 }
 
 func (c *Client) refresh(ctx context.Context) (map[string]Score, error) {
@@ -554,16 +564,17 @@ func (c *Client) buildScores(rows []rankingRow) map[string]Score {
 // row is a fresh current signal. Computing it once keeps the activeness pass and
 // the aggregation pass from drifting apart on the hard-fail/stale rules.
 type scoreRowView struct {
-	row             rankingRow
-	key             string // legacy triple at first; rewritten to the bucket key (cid: or legacy) in buildScoresAt
-	cid             string // raw relaypulse_channel_id ("" if none); opaque, trimmed, never lower-cased
-	service         string
-	modelKey        string
-	displayLatest   *float64
-	rankLatest      *float64
-	trend           ScoreTrend
-	fresh           bool
-	excludeFromRank bool // quality_state=="unavailable" && !HardFailActive: kept for display, out of the average
+	row              rankingRow
+	key              string // legacy triple at first; rewritten to the bucket key (cid: or legacy) in buildScoresAt
+	cid              string // raw relaypulse_channel_id ("" if none); opaque, trimmed, never lower-cased
+	service          string
+	modelKey         string
+	displayLatest    *float64
+	rankLatest       *float64
+	trend            ScoreTrend
+	fresh            bool
+	excludeFromRank  bool // quality_state=="unavailable" && !HardFailActive: kept for display, out of the average
+	noRecentAttempts bool // attempts_7d==0 && !HardFailActive：展示层降饱和标志
 }
 
 // buildScoreRowView normalizes one row, returning ok=false for rows relaypulse
@@ -618,6 +629,9 @@ func buildScoreRowView(row rankingRow, now time.Time) (scoreRowView, bool) {
 	// unavailable rows are untouched — they already flow through the
 	// HardFailActive case above (grey 0, counted), so v5.9 wire stays no-op.
 	excludeFromRank := unavailable && !row.HardFailActive
+	// 近 7 天零终态评测记录。gate 在 !HardFailActive → 与 Failed 数据层互斥（一次
+	// hard-fail 本身就是一次终态 attempt，一致快照下二者不会同真）。nil（旧 wire）→ false。
+	noRecentAttempts := row.Attempts7D != nil && *row.Attempts7D == 0 && !row.HardFailActive
 	if !unavailable && displayLatest == nil {
 		return scoreRowView{}, false
 	}
@@ -649,16 +663,17 @@ func buildScoreRowView(row rankingRow, now time.Time) (scoreRowView, bool) {
 	}
 
 	return scoreRowView{
-		row:             row,
-		key:             ScoreKey(provider, service, channel),
-		cid:             strings.TrimSpace(row.RelaypulseChannelID),
-		service:         service,
-		modelKey:        modelKey,
-		displayLatest:   displayLatest,
-		rankLatest:      rankLatest,
-		trend:           trend,
-		fresh:           fresh,
-		excludeFromRank: excludeFromRank,
+		row:              row,
+		key:              ScoreKey(provider, service, channel),
+		cid:              strings.TrimSpace(row.RelaypulseChannelID),
+		service:          service,
+		modelKey:         modelKey,
+		displayLatest:    displayLatest,
+		rankLatest:       rankLatest,
+		trend:            trend,
+		fresh:            fresh,
+		excludeFromRank:  excludeFromRank,
+		noRecentAttempts: noRecentAttempts,
 	}, true
 }
 
@@ -806,6 +821,7 @@ func (c *Client) buildScoresAt(rows []rankingRow, now time.Time) map[string]Scor
 			Failed:              row.HardFailActive,
 			AvailabilityWarning: row.AvailabilityWarning,
 			Unavailable:         view.excludeFromRank,
+			NoRecentAttempts:    view.noRecentAttempts,
 		})
 		if entry.ChannelURL == "" {
 			// 通道整体跳转 = 首条可解析 detail_url 去掉 model 参数 → 落到 rpdiag 的
