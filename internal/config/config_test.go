@@ -29,12 +29,12 @@ func TestConsecutiveHyphensSlug(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateProviderSlug(tt.slug)
+			err := ValidateProviderSlug(tt.slug)
 			if tt.shouldErr && err == nil {
-				t.Errorf("validateProviderSlug(%q) should return error", tt.slug)
+				t.Errorf("ValidateProviderSlug(%q) should return error", tt.slug)
 			}
 			if !tt.shouldErr && err != nil {
-				t.Errorf("validateProviderSlug(%q) should not return error, got: %v", tt.slug, err)
+				t.Errorf("ValidateProviderSlug(%q) should not return error, got: %v", tt.slug, err)
 			}
 		})
 	}

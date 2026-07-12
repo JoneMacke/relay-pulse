@@ -247,4 +247,33 @@ func TestAdminPublish_InvalidProviderSlug(t *testing.T) {
 			t.Errorf("申请状态应变为 published，实际 %q", sub.Status)
 		}
 	})
+
+	// -17b 回归锁定：ASCII 展示名派生出**非法 slug**（连续短横线，如「Sai  AI」双空格 → sai--ai）时，
+	// 未覆盖 target_provider 也应被守卫在写盘前拦下。此前守卫用宽松的 pscSegmentPattern（允许连续 --），
+	// sai--ai 会过发布校验写盘、却在 loader 的 ValidateProviderSlug（禁连续 --）热加载时被拒
+	// （「写盘成功、热加载失败」）。守卫改用 config.ValidateProviderSlug（与 loader 同一函数）后 fail-closed。
+	t.Run("ASCII双空格名派生连续短横线slug未覆盖应返回InvalidProviderSlugError且不写盘", func(t *testing.T) {
+		svc, store, monitorStore := newPublishTestService(t)
+		savePublishableSubmission(t, svc, store, "pub-ascii-double-space", "Sai  AI", "")
+
+		err := svc.AdminPublish(ctx, "pub-ascii-double-space", "hot")
+		if err == nil {
+			t.Fatal("期望 AdminPublish 返回错误，实际 nil")
+		}
+		var slugErr *InvalidProviderSlugError
+		if !errors.As(err, &slugErr) {
+			t.Fatalf("期望 *InvalidProviderSlugError（sai--ai 连续短横线非法），实际 %T: %v", err, err)
+		}
+		if slugErr.DerivedSlug != "sai--ai" {
+			t.Errorf("DerivedSlug = %q，期望 sai--ai", slugErr.DerivedSlug)
+		}
+
+		summaries, err := monitorStore.List()
+		if err != nil {
+			t.Fatalf("monitorStore.List: %v", err)
+		}
+		if len(summaries) != 0 {
+			t.Errorf("monitors.d/ 应为空，实际写入 %d 个文件: %+v", len(summaries), summaries)
+		}
+	})
 }

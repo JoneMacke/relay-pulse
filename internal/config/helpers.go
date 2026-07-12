@@ -85,9 +85,11 @@ func isPrivateOrSpecialIP(ip net.IP) bool {
 	return false
 }
 
-// validateProviderSlug 验证 provider_slug 格式
-// 规则：仅允许小写字母(a-z)、数字(0-9)、连字符(-)，且不允许连续连字符，长度不超过 100 字符
-func validateProviderSlug(slug string) error {
+// ValidateProviderSlug 验证已规范化的 provider slug（URL/机器键 slug）格式：仅 [a-z0-9-]、
+// 不允许连续连字符、不以连字符开头或结尾、长度 ≤100。**不**负责 TrimSpace/小写化（调用方保证）。
+// 作为 loader 归一化的权威 slug 规则，同时供 onboarding 发布门复用以在写盘前 fail-closed
+// （否则派生出 a--b/超长的 slug 会「写盘成功、热加载被拒」）。
+func ValidateProviderSlug(slug string) error {
 	if slug == "" {
 		return fmt.Errorf("slug 不能为空")
 	}

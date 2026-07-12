@@ -12,12 +12,11 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 
 	"monitor/internal/config"
+	"monitor/internal/displayname"
 	"monitor/internal/logger"
 )
 
@@ -30,15 +29,6 @@ var pscSegmentPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`)
 //   - channel_group 为用户自定义 1-8 位小写分组代号（中转商自己的分组），留空回退 channelGroupDefault
 //   - channel_name 为可选的通道展示名（允许中文等任意语言），仅用于 UI 显示，不参与 channel_code/PSC 派生
 const channelGroupDefault = "main"
-
-// channelNameMaxRunes 限制通道展示名长度（按 rune 计，非字节）：
-// 状态页通道列空间有限，40 个字符足以容纳中英文混排的线路名。
-const channelNameMaxRunes = 40
-
-// providerNameMaxRunes 限制服务商展示名长度（按 rune 计，非字节）。与 SubmitRequest.ProviderName
-// 的 binding:"max=100"（validator.v10 对 string 的 max 亦按 rune 计）对齐；放开 Unicode 后
-// 100 rune 对中英文名均宽裕，且不收紧既有 ASCII 契约。
-const providerNameMaxRunes = 100
 
 var (
 	channelSourcePattern = regexp.MustCompile(`^[a-z0-9]{2,5}$`)
@@ -238,11 +228,11 @@ func (s *Service) Submit(ctx context.Context, req *SubmitRequest, clientIP strin
 	}
 
 	// 规范化并校验提交字段（服务商名/通道展示名允许中文但禁不可见字符、来源受控词表、分组格式）
-	providerName, err := validateProviderName(req.ProviderName)
+	providerName, err := displayname.ValidateProviderName(req.ProviderName)
 	if err != nil {
 		return nil, err
 	}
-	channelName, err := validateChannelName(req.ChannelName)
+	channelName, err := displayname.ValidateChannelName(req.ChannelName)
 	if err != nil {
 		return nil, err
 	}
@@ -342,7 +332,7 @@ func (s *Service) Submit(ctx context.Context, req *SubmitRequest, clientIP strin
 
 	logger.Info("onboarding", "新申请已提交",
 		"public_id", sub.PublicID,
-		"provider", req.ProviderName,
+		"provider", providerName,
 		"service_type", req.ServiceType,
 		"channel", channelCode)
 
@@ -402,7 +392,7 @@ func (s *Service) AdminUpdate(ctx context.Context, publicID string, updates map[
 
 	// 应用允许的更新字段
 	if v, ok := updates["provider_name"].(string); ok && v != "" {
-		name, err := validateProviderName(v)
+		name, err := displayname.ValidateProviderName(v)
 		if err != nil {
 			return nil, err
 		}
@@ -453,7 +443,7 @@ func (s *Service) AdminUpdate(ctx context.Context, publicID string, updates map[
 		sub.BaseURL = v
 	}
 	if v, ok := updates["channel_name"].(string); ok {
-		name, err := validateChannelName(v)
+		name, err := displayname.ValidateChannelName(v)
 		if err != nil {
 			return nil, err
 		}
@@ -577,7 +567,7 @@ func (s *Service) AdminPublish(ctx context.Context, publicID, board string) erro
 	// 问题，本轮不在此处理，仍走通用校验。
 	if sub.AdminConfigJSON == "" &&
 		strings.TrimSpace(sub.TargetProvider) == "" &&
-		!pscSegmentPattern.MatchString(monitorCfg.Provider) {
+		config.ValidateProviderSlug(monitorCfg.Provider) != nil {
 		return &InvalidProviderSlugError{ProviderName: sub.ProviderName, DerivedSlug: monitorCfg.Provider}
 	}
 
@@ -797,55 +787,6 @@ func (s *Service) suggestUniqueChannel(provider, service, channel string) string
 		}
 	}
 	return channel + "-new"
-}
-
-// validateProviderName 校验服务商展示名（provider_name，必填）：允许中文等常规可见 Unicode 文本，
-// 拒控制字符(Cc)、格式字符(Cf，含 bidi 方向控制符与 ZWSP/ZWJ/BOM 等零宽字符)、行/段分隔符(Zl/Zp)，
-// 防不可见字符欺骗、显示方向劫持与状态页折行。首尾空白剪除。长度按 rune 计。
-// 与 validateChannelName 同族；区别：provider 展示名必填（channel 展示名可选）。
-// 注意：本字段仅为展示名——机器 slug 由 BuildServiceConfigFromSubmission 从它派生（ASCII 名）或
-// 由管理员 target_provider 覆盖（非 ASCII 名）；故此处不再要求 ASCII。
-func validateProviderName(value string) (string, error) {
-	if !utf8.ValidString(value) {
-		return "", fmt.Errorf("服务商展示名（provider_name）包含无效的 UTF-8 编码")
-	}
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "", fmt.Errorf("服务商展示名（provider_name）不能为空")
-	}
-	for _, r := range value {
-		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
-			return "", fmt.Errorf("服务商展示名（provider_name）格式无效（%q），不能包含控制字符、双向文本控制符、零宽字符或行分隔符", value)
-		}
-	}
-	if n := utf8.RuneCountInString(value); n > providerNameMaxRunes {
-		return "", fmt.Errorf("服务商展示名（provider_name）过长（%d 个字符），应不超过 %d 个字符", n, providerNameMaxRunes)
-	}
-	return value, nil
-}
-
-// validateChannelName 校验可选的通道展示名（channel_name）：允许中文等常规可见 Unicode 文本，
-// 但拒绝控制字符（Cc）、格式字符（Cf，覆盖 bidi 方向控制符和 ZWSP/ZWJ/BOM 等零宽字符）与
-// 行/段分隔符（Zl/Zp），防止不可见字符欺骗、显示方向劫持与状态页通道列折行。
-// 注意 Cf 全禁意味着 ZWJ 组合 emoji（如家庭 emoji）也会被拒——展示名场景可接受的安全取舍。
-// 首尾空白剪除，剪除后为空视为未填写（返回空串）。长度按 rune 计（一个汉字算一个字符），返回规范值。
-func validateChannelName(value string) (string, error) {
-	if !utf8.ValidString(value) {
-		return "", fmt.Errorf("channel_name 包含无效的 UTF-8 编码")
-	}
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "", nil
-	}
-	for _, r := range value {
-		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
-			return "", fmt.Errorf("channel_name 格式无效（%q），不能包含控制字符、双向文本控制符、零宽字符或行分隔符", value)
-		}
-	}
-	if n := utf8.RuneCountInString(value); n > channelNameMaxRunes {
-		return "", fmt.Errorf("channel_name 过长（%d 个字符），应不超过 %d 个字符", n, channelNameMaxRunes)
-	}
-	return value, nil
 }
 
 // lookupChannelSource 在对应 service 受控词表中查找 channel_source，返回完整 option。

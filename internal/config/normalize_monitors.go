@@ -352,7 +352,7 @@ func (c *AppConfig) normalizeMonitorsPostInheritance(ctx *normalizeContext) erro
 
 		// 无论自动生成还是手动配置/继承，都进行格式验证
 		// 确保配置期即可发现 slug 格式问题，避免运行时 404
-		if err := validateProviderSlug(slug); err != nil {
+		if err := ValidateProviderSlug(slug); err != nil {
 			return fmt.Errorf("monitor[%d]: provider_slug '%s' 无效 (来源: %s): %w",
 				i, slug,
 				map[bool]string{true: "自动生成", false: "手动配置或继承"}[c.Monitors[i].ProviderSlug == ""],

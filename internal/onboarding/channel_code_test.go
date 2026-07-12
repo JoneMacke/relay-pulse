@@ -1,7 +1,6 @@
 package onboarding
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -21,77 +20,6 @@ func TestDeriveChannelCode(t *testing.T) {
 				t.Fatalf("deriveChannelCode(%q,%q,%q) = %q, want %q", c.cType, c.source, c.group, got, c.want)
 			}
 		})
-	}
-}
-
-func TestValidateProviderName(t *testing.T) {
-	tests := []struct {
-		name    string
-		input   string
-		want    string
-		wantErr bool
-	}{
-		{"ascii unchanged", "SaiAI", "SaiAI", false},
-		{"ascii with spaces", "Sai AI Cloud", "Sai AI Cloud", false},
-		{"ascii punctuation", "WorldBase.ai", "WorldBase.ai", false},
-		{"chinese", "赛博AI", "赛博AI", false},
-		{"japanese", "さくらクラウド", "さくらクラウド", false},
-		{"russian", "Яндекс", "Яндекс", false},
-		{"arabic", "سحابة", "سحابة", false},
-		{"mixed cjk+ascii", "赛博AI Cloud", "赛博AI Cloud", false},
-		{"trims surrounding space", "  赛博AI  ", "赛博AI", false},
-		{"empty", "", "", true},
-		{"all whitespace", "   ", "", true},
-		{"invalid utf-8", "\xff\xfe", "", true},
-		{"control char tab", "Sai\tAI", "", true},
-		{"newline", "Sai\nAI", "", true},
-		{"zero width space (Cf)", "Sai​AI", "", true},
-		{"bidi override (Cf)", "Sai‮AI", "", true},
-		{"line separator (Zl)", "Sai AI", "", true},
-		{"paragraph separator (Zp)", "Sai AI", "", true},
-		{"over 100 runes", strings.Repeat("赛", providerNameMaxRunes+1), "", true},
-		{"exactly 100 runes ok", strings.Repeat("赛", providerNameMaxRunes), strings.Repeat("赛", providerNameMaxRunes), false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := validateProviderName(tt.input)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("validateProviderName(%q) err=%v, wantErr=%v", tt.input, err, tt.wantErr)
-			}
-			if !tt.wantErr && got != tt.want {
-				t.Fatalf("validateProviderName(%q)=%q, want %q", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestValidateChannelName(t *testing.T) {
-	// 展示名允许中文/日文/emoji 等任意语言的普通文本
-	for _, good := range []string{"Claude Max 华东线路", "东京リレー", "US-East ⚡", "main"} {
-		if got, err := validateChannelName(good); err != nil || got != good {
-			t.Fatalf("channel name %q should pass as-is, got %q err=%v", good, got, err)
-		}
-	}
-	// 留空/纯空白视为未填写；首尾空白（含粘贴带入的换行）剪除后取规范值
-	if got, err := validateChannelName("   "); err != nil || got != "" {
-		t.Fatalf("blank name should normalize to empty, got %q err=%v", got, err)
-	}
-	if got, err := validateChannelName("  华东线路\n"); err != nil || got != "华东线路" {
-		t.Fatalf("expected trimmed %q, got %q err=%v", "华东线路", got, err)
-	}
-	// 40 rune 上限：40 个汉字放行，41 个拒绝
-	long := strings.Repeat("名", channelNameMaxRunes)
-	if _, err := validateChannelName(long); err != nil {
-		t.Fatalf("%d-rune name should pass, got %v", channelNameMaxRunes, err)
-	}
-	if _, err := validateChannelName(long + "超"); err == nil {
-		t.Fatalf("%d-rune name should be rejected", channelNameMaxRunes+1)
-	}
-	// 内部控制字符 / bidi 控制符 / 零宽字符 / BOM / 非法 UTF-8 一律拒绝
-	for _, bad := range []string{"a\tb", "a\x00b", "a\u202eb", "a\u200bb", "a\ufeffb", "a\u2028b", "\xff\xfe"} {
-		if _, err := validateChannelName(bad); err == nil {
-			t.Fatalf("channel name %q should be rejected", bad)
-		}
 	}
 }
 
