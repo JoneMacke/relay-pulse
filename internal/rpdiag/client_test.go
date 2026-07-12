@@ -1518,3 +1518,30 @@ func TestNoRecentAttemptsDoesNotAffectRanking(t *testing.T) {
 		t.Errorf("MaxScore = %v, want 0 (stale contributes 0, unchanged by display flag)", target.MaxScore)
 	}
 }
+
+func TestExportWireCarriesAttempts7D(t *testing.T) {
+	// 摘自 ranking-export.v5.12 真实一行（保留本消费方关心的字段）。若 rpdiag 未来在
+	// v5.x 内改动 attempts_7d 语义/形状，本测试与 docs/contract-ranking-export.md 一起
+	// 迫使双方重新对齐。
+	const wire = `{
+	  "schema_version": "ranking-export.v5.12",
+	  "items": [{
+	    "channel_name": "O-Max", "provider_name": "SaiAI",
+	    "service_cli_command": "claude", "model": "claude-sonnet-4-5",
+	    "model_key": "claude-sonnet-4-5", "quality_state": "scored",
+	    "attempts_7d": 12, "attempts_30d": 40,
+	    "score_trend": {"latest": 88, "latest_at": "2026-07-12T00:00:00Z", "avg_30d": 90}
+	  }]
+	}`
+	var payload exportPayload
+	if err := json.Unmarshal([]byte(wire), &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(payload.Items) != 1 {
+		t.Fatalf("want 1 item, got %d", len(payload.Items))
+	}
+	got := payload.Items[0].Attempts7D
+	if got == nil || *got != 12 {
+		t.Errorf("Attempts7D = %v, want 12 (wire contract regression?)", got)
+	}
+}
