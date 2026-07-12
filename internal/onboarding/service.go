@@ -181,7 +181,7 @@ func (s *Service) SetConfigMonitorCheck(fn func(string, string, string) bool) {
 
 // SubmitRequest 用户提交申请的请求参数
 type SubmitRequest struct {
-	ProviderName  string `json:"provider_name" binding:"max=100"` // 服务商展示名（可中文），精校验在 validateProviderName
+	ProviderName  string `json:"provider_name" binding:"max=100"` // 服务商展示名（可中文）；binding:max 仅粗略上限，精校验/规范化在 displayname.ValidateProviderName
 	WebsiteURL    string `json:"website_url" binding:"required,url,max=500"`
 	Category      string `json:"category" binding:"required,oneof=commercial public"`
 	ServiceType   string `json:"service_type" binding:"required,oneof=cc cx gm"`
@@ -190,7 +190,7 @@ type SubmitRequest struct {
 	ChannelType   string `json:"channel_type" binding:"required,oneof=O R M"`
 	ChannelSource string `json:"channel_source" binding:"required,max=5"`
 	ChannelGroup  string `json:"channel_group" binding:"max=8"`  // 留空回退 main
-	ChannelName   string `json:"channel_name" binding:"max=100"` // 可选展示名（可中文），精校验在 validateChannelName
+	ChannelName   string `json:"channel_name" binding:"max=100"` // 可选展示名（可中文）；精校验在 displayname.ValidateChannelName（业务上限 40 rune）
 	BaseURL       string `json:"base_url" binding:"required,url,max=500"`
 	APIKey        string `json:"api_key" binding:"required,min=10,max=500"`
 	TestProof     string `json:"test_proof" binding:"required"`

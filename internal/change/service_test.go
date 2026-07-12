@@ -1275,9 +1275,9 @@ func TestApply_HistoricalDirtyDisplayName_FailsClosed(t *testing.T) {
 	if got := config.RootMonitor(mf).ProviderName; got != "原名" {
 		t.Fatalf("monitor provider_name=%q，期望未变更的 原名", got)
 	}
-	// CR 状态仍为 pending（未 applied）
+	// CR 状态仍为 pending（未 applied）——精确断言，而非仅「非 applied」
 	saved, _ := store.GetByPublicID(context.Background(), cr.PublicID)
-	if saved.Status == StatusApplied {
-		t.Fatal("fail-closed 后 CR 状态不应变为 applied")
+	if saved.Status != StatusPending {
+		t.Fatalf("fail-closed 后 CR 状态应仍为 pending，实际 %q", saved.Status)
 	}
 }
