@@ -126,3 +126,97 @@ describe('NoRecentAttempts tooltip', () => {
     expect(row.detail).toContain('88'); // unavailable 未抹掉历史
   });
 });
+
+// no_recent_attempts 的视觉部分：series <g> 降饱和（filter:saturate + opacity），保留真实
+// 历史色相只发暗；failed/正常 model 不降饱和；同时 no_recent+unavailable 共存有历史时不追加
+// 灰代表点覆盖降饱和历史（spec §③）。
+describe('NoRecentAttempts sparkline desaturation', () => {
+  // 降饱和 <g>：React 只在 s.dim 时挂 style，故 svg g[style] 恰为被降饱和的 series。
+  const dimmedGroups = (container: HTMLElement): SVGGElement[] =>
+    Array.from(container.querySelectorAll<SVGGElement>('svg g[style]')).filter((g) =>
+      (g.getAttribute('style') ?? '').includes('saturate'),
+    );
+
+  it('dims the no_recent series（保留彩色历史，只发暗）', () => {
+    // 真实历史（30d/7d 均值 + 近3次打分）→ 彩色 series，非灰。
+    const staleColored: RpdiagModelScore = {
+      model: 'sonnet',
+      model_key: 'sonnet',
+      no_recent_attempts: true,
+      trend: { avg_30d: 91, avg_7d: 90, recent_scores: [85, 88], n_7d: 0, n_30d: 8 },
+    };
+    const container = renderCell({ models: [staleColored], trend: staleColored.trend, channel_url: '' });
+    const dimmed = dimmedGroups(container);
+    expect(dimmed).toHaveLength(1);
+    const style = dimmed[0].getAttribute('style') ?? '';
+    expect(style).toContain('saturate');
+    expect(style).toContain('opacity');
+    // 历史真彩点仍在（非灰、非空）：证明是「发暗」而非「清零灰」。
+    const colouredCircles = Array.from(dimmed[0].querySelectorAll('circle')).filter(
+      (c) => c.getAttribute('fill') !== UNAVAILABLE_COLOR,
+    );
+    expect(colouredCircles.length).toBeGreaterThan(0);
+  });
+
+  it('does NOT dim a failed model（failed 优先于 no_recent，走既有灰逻辑）', () => {
+    // 同时置 no_recent_attempts + failed：dim = no_recent && !failed 必须判 false，
+    // 真正验证 `&& !failed` 闸（去掉它此用例即变红）。
+    const failedModel: RpdiagModelScore = {
+      model: 'sonnet',
+      model_key: 'sonnet',
+      no_recent_attempts: true,
+      failed: true,
+      trend: { avg_30d: 80, avg_7d: 80, recent_attempts: [null], n_7d: 1, n_30d: 5 },
+    };
+    const container = renderCell({ models: [failedModel], trend: failedModel.trend, channel_url: '' });
+    expect(dimmedGroups(container)).toHaveLength(0);
+  });
+
+  it('does NOT dim a normal healthy model', () => {
+    const healthy: RpdiagModelScore = {
+      model: 'sonnet',
+      model_key: 'sonnet',
+      trend: { avg_30d: 95, avg_7d: 96, recent_scores: [94, 97], n_7d: 3, n_30d: 12 },
+    };
+    const container = renderCell({ models: [healthy], trend: healthy.trend, channel_url: '' });
+    expect(dimmedGroups(container)).toHaveLength(0);
+  });
+
+  it('unavailable + no_recent + 有历史 → 不追加灰代表点覆盖降饱和历史（spec §③）', () => {
+    // 历史只占 30d/7d 槽位（slot 0/1），**不**占最新槽位（slot 4）——正是原逻辑会补一个
+    // 贴底灰代表点到 slot 4 的场景。no_recent 抑制后：series 只保留 2 个真实彩点、无灰点。
+    const bothWithHistory: RpdiagModelScore = {
+      model: 'sonnet',
+      model_key: 'sonnet',
+      unavailable: true,
+      no_recent_attempts: true,
+      trend: { avg_30d: 91, avg_7d: 90, recent_attempts: [], n_7d: 0, n_30d: 8 },
+    };
+    const container = renderCell({ models: [bothWithHistory], trend: bothWithHistory.trend, channel_url: '' });
+    const dimmed = dimmedGroups(container);
+    expect(dimmed).toHaveLength(1); // series 被降饱和
+    const circles = Array.from(dimmed[0].querySelectorAll('circle'));
+    // 恰好 2 个真实历史点（30d/7d），未新增灰代表点。
+    expect(circles).toHaveLength(2);
+    const greyCircles = circles.filter((c) => c.getAttribute('fill') === UNAVAILABLE_COLOR);
+    expect(greyCircles).toHaveLength(0);
+  });
+
+  it('multi-model cell dims only the flagged series', () => {
+    const normal: RpdiagModelScore = {
+      model: 'haiku',
+      model_key: 'haiku',
+      trend: { avg_30d: 95, avg_7d: 96, recent_scores: [94, 97], n_7d: 3, n_30d: 12 },
+    };
+    const stale: RpdiagModelScore = {
+      model: 'sonnet',
+      model_key: 'sonnet',
+      no_recent_attempts: true,
+      trend: { avg_30d: 91, avg_7d: 90, recent_scores: [85, 88], n_7d: 0, n_30d: 8 },
+    };
+    const container = renderCell({ models: [normal, stale], trend: normal.trend, channel_url: '' });
+    // 两条 series 都渲染，但只有 no_recent 那条降饱和。
+    expect(container.querySelectorAll('svg > g').length).toBeGreaterThanOrEqual(2);
+    expect(dimmedGroups(container)).toHaveLength(1);
+  });
+});

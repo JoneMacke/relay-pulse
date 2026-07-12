@@ -243,6 +243,10 @@ export function QualityScoreCell({ score, compact = false }: { score?: RpdiagSco
     .map((m) => {
       const t = m.trend;
       const failed = m.failed === true;
+      // no_recent_attempts（近7天无终态评测）且非 hard-fail：整条 series 降饱和展示，
+      // 保留真实历史色相「只发暗」，区别于 failed/unavailable 的清零灰。failed 优先，
+      // 不降饱和（走既有灰逻辑）。
+      const dim = m.no_recent_attempts === true && !failed;
 
       // 收集"有数据"的槽位点。slot 0/1 永远是 30d / 7d 窗口均值：有打分样本才画、
       // 无则留空——绝不涂灰（均值是分数的平均，没有分就没有均值，涂灰会把"无数据"
@@ -295,7 +299,11 @@ export function QualityScoreCell({ score, compact = false }: { score?: RpdiagSco
       // 回退成 `-`。
       if (m.unavailable === true) {
         const hasLatestSlot = points.some((p) => p.slot === NUM_SLOTS - 1);
-        if (!hasLatestSlot) {
+        // no_recent_attempts 展示优先于 unavailable（spec §③ 行109/152-153）：不追加灰
+        // 代表点去盖住降饱和的真实历史；仅当该 model 毫无历史点时才兜底一个灰点，避免
+        // 整格塌成 '-'。
+        const suppressGreyForNoRecent = m.no_recent_attempts === true && points.length > 0;
+        if (!hasLatestSlot && !suppressGreyForNoRecent) {
           points.push({ slot: NUM_SLOTS - 1, value: 0, unavailable: true });
         }
       }
@@ -327,10 +335,10 @@ export function QualityScoreCell({ score, compact = false }: { score?: RpdiagSco
         offset: (n.xPct - x0) / span,
         color: n.color,
       }));
-      return { nodes, stops };
+      return { nodes, stops, dim };
     })
     .filter(
-      (s): s is { nodes: SparkNode[]; stops: SparkStop[] } => s !== null,
+      (s): s is { nodes: SparkNode[]; stops: SparkStop[]; dim: boolean } => s !== null,
     );
 
   if (series.length === 0) {
@@ -385,7 +393,13 @@ export function QualityScoreCell({ score, compact = false }: { score?: RpdiagSco
           />
         ))}
         {series.map((s, i) => (
-          <g key={i}>
+          <g
+            key={i}
+            // no_recent_attempts series 降饱和：保留真实历史色相只发暗。saturate/opacity
+            // 经 playwright 在真实暗底 44×36 尺寸目测微调（此处是唯一调参点）——更低值
+            // 会让小尺寸色相糊成近灰、读不出趋势。
+            style={s.dim ? { filter: 'saturate(0.55)', opacity: 0.6 } : undefined}
+          >
             {/* 折线拆成逐段 <line>（x 用百分比；polyline 的 points 不支持百分比单位）。
                 每段共用本 series 的 userSpaceOnUse 渐变、按绝对 x 采样 → 颜色与单条
                 polyline 时完全一致；round linecap + 顶点处的圆点盖住接缝。 */}
