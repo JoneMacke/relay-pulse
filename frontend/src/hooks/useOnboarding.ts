@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import { apiGet, apiPost, ApiError } from '../utils/apiClient';
+import { normalizeDisplayName } from '../utils/displayName';
 import type {
   OnboardingMeta,
   OnboardingFormData,
@@ -197,7 +198,7 @@ export function useOnboarding() {
 
     try {
       const req: SubmitOnboardingRequest = {
-        provider_name: formData.providerName,
+        provider_name: normalizeDisplayName(formData.providerName),
         website_url: ensureUrl(formData.websiteUrl),
         category: formData.category,
         service_type: formData.serviceType,
@@ -206,7 +207,7 @@ export function useOnboarding() {
         channel_type: formData.channelType,
         channel_source: formData.channelSource,
         channel_group: formData.channelGroup.trim() || 'main',
-        channel_name: formData.channelName.trim(),
+        channel_name: normalizeDisplayName(formData.channelName),
         base_url: ensureUrl(formData.baseUrl),
         api_key: formData.apiKey,
         test_proof: testProof,

@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { ChevronRight } from 'lucide-react';
 import type { OnboardingFormData, OnboardingMeta, ChannelSourceOption } from '../../types/onboarding';
 import { inputClass, selectClass, labelClass, hintClass, primaryButtonClass } from './controls';
+import { isProviderNameValid, isChannelNameValid, normalizeDisplayName, CHANNEL_NAME_MAX } from '../../utils/displayName';
 
 interface ProviderInfoStepProps {
   formData: OnboardingFormData;
@@ -13,17 +14,6 @@ interface ProviderInfoStepProps {
 
 /** 通道分组代号：1-8 位小写字母或数字。 */
 const GROUP_PATTERN = /^[a-z0-9]{1,8}$/;
-/** 通道显示名称长度上限，与后端 channelNameMaxRunes 一致（Array.from 按 Unicode code point 计数）。 */
-const CHANNEL_NAME_MAX = 40;
-/** 服务商展示名称长度上限，与后端 providerNameMaxRunes 一致（Array.from 按 Unicode code point 计数）。 */
-const PROVIDER_NAME_MAX = 100;
-/**
- * 展示名称（服务商名称 / 通道显示名称）共用的拒绝策略，与后端
- * validateProviderName / validateChannelName 的拒绝集对应：
- * 控制字符(Cc)、格式字符(Cf，含零宽字符/双向控制符)、行/段分隔符(Zl/Zp)。
- */
-const DISPLAY_NAME_DISALLOWED = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
-
 /** Step 1: Provider information and channel configuration. */
 export function ProviderInfoStep({ formData, updateField, meta, onNext }: ProviderInfoStepProps) {
   const { t } = useTranslation();
@@ -66,20 +56,14 @@ export function ProviderInfoStep({ formData, updateField, meta, onNext }: Provid
 
   // 服务商名校验仅在失焦后暴露错误，避免输入中途逐键闪红（inline-validation：validate on blur）。
   const [providerNameTouched, setProviderNameTouched] = useState(false);
-  const providerName = formData.providerName.trim();
-  const providerNameValid =
-    providerName.length > 0 &&
-    Array.from(providerName).length <= PROVIDER_NAME_MAX &&
-    !DISPLAY_NAME_DISALLOWED.test(providerName);
-  const providerNameError = providerNameTouched && providerName.length > 0 && !providerNameValid;
+  const providerNameNormalized = normalizeDisplayName(formData.providerName);
+  const providerNameValid = isProviderNameValid(formData.providerName);
+  const providerNameError = providerNameTouched && providerNameNormalized.length > 0 && !providerNameValid;
 
   const groupValid = formData.channelGroup === '' || GROUP_PATTERN.test(formData.channelGroup);
 
   // 通道显示名称可选；校验剪除首尾空白后的值（粘贴带入的尾部换行不误判）
-  const channelNameTrimmed = formData.channelName.trim();
-  const channelNameValid =
-    Array.from(channelNameTrimmed).length <= CHANNEL_NAME_MAX &&
-    !DISPLAY_NAME_DISALLOWED.test(channelNameTrimmed);
+  const channelNameValid = isChannelNameValid(formData.channelName);
 
   // 通道标识预览：显示层大写（type-source），分组原样；存储层由后端统一小写
   const channelCode = useMemo(() => {
