@@ -392,7 +392,7 @@
       "customSource": "自定义...",
       "customSourcePlaceholder": "输入自定义来源",
       "channelSourceCustomPlaceholder": "输入来源名称（大写字母/数字）",
-      "providerNameHint": "仅支持英文/数字/符号，不能包含中文",
+      "providerNameHint": "服务商展示名称，支持中文等任意语言（最长 100 字符）；若含非英文字符，用于网址的英文代号将由我们分配。",
       "channelSourcePlaceholder": "请选择接入来源",
       "channelSourceHint": "没有合适的来源？请联系运营补充（QQ:18058344）",
       "channelName": "通道显示名称",

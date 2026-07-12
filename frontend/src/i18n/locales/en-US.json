@@ -389,7 +389,7 @@
       "customSource": "Custom...",
       "customSourcePlaceholder": "Enter custom source",
       "channelSourceCustomPlaceholder": "Enter source name (uppercase/digits)",
-      "providerNameHint": "ASCII only (letters/digits/symbols); Chinese is not allowed",
+      "providerNameHint": "Your provider's display name. Any language, including Chinese, is supported (up to 100 characters). If it contains non-English characters, we will assign an English slug for URLs.",
       "channelSourcePlaceholder": "Select an access source",
       "channelSourceHint": "No suitable source? Contact ops to add one (QQ:18058344)",
       "channelName": "Channel Display Name",

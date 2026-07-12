@@ -224,4 +224,26 @@ describe('ProviderInfoStep 通道命名字段（step1）', () => {
     expect(bad).toContain('不能包含控制字符或零宽字符');
     expect(bad).toContain('role="alert"');
   });
+
+  /** 从渲染出的 innerHTML 中取出「下一步」提交按钮片段，判断其是否带 disabled 属性。 */
+  const nextButtonDisabled = (out: string) => {
+    const match = out.match(/<button type="submit"[\s\S]*?<\/button>/);
+    if (!match) throw new Error('未找到「下一步」提交按钮');
+    return match[0].includes('disabled=""');
+  };
+
+  it('服务商名称放开为 Unicode 展示名：中文名不再被拒绝，下一步按钮可点击', () => {
+    const out = html({ providerName: '赛博AI' });
+    expect(nextButtonDisabled(out)).toBe(false);
+  });
+
+  it('服务商名称含零宽字符（不可见格式字符）时下一步按钮禁用', () => {
+    const out = html({ providerName: 'Sai\u200bAI' });
+    expect(nextButtonDisabled(out)).toBe(true);
+  });
+
+  it('服务商名称超过 100 个 Unicode 码位时下一步按钮禁用', () => {
+    const out = html({ providerName: '赛'.repeat(101) });
+    expect(nextButtonDisabled(out)).toBe(true);
+  });
 });

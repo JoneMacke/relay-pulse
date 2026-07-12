@@ -382,7 +382,7 @@
       },
       "channelSource": "チャネルソース", "customSource": "カスタム...", "customSourcePlaceholder": "カスタムソースを入力",
       "channelSourceCustomPlaceholder": "ソース名を入力（大文字/数字）",
-      "providerNameHint": "英数字・記号のみ対応、中国語は使用できません",
+      "providerNameHint": "プロバイダーの表示名です。中国語を含む任意の言語に対応（最大100文字）。英字以外の文字を含む場合、URL用の英字コードは運営側で割り当てます。",
       "channelSourcePlaceholder": "アクセスソースを選択",
       "channelSourceHint": "適切なソースがない場合は運営までご連絡ください（QQ:18058344）",
       "channelName": "チャネル表示名",
