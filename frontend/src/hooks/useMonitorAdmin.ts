@@ -13,6 +13,8 @@ import type {
 /** 父通道在按 target 分桶的 probe 状态里使用的固定 key。 */
 export const PARENT_TARGET_KEY = '';
 
+const SEARCH_DEBOUNCE_MS = 300;
+
 export interface ProbeResult {
   probeId: string;
   probeStatus: number;
@@ -36,7 +38,10 @@ export function useMonitorAdmin(token: string) {
   // Filters
   const [boardFilter, setBoardFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  // searchQuery 跟随输入即时更新（供受控输入框回显），debouncedSearchQuery 才驱动请求。
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
+  const listAbortRef = useRef<AbortController | null>(null);
 
   // Detail
   const [selectedMonitor, setSelectedMonitor] = useState<MonitorFile | null>(null);
@@ -57,9 +62,23 @@ export function useMonitorAdmin(token: string) {
     Authorization: `Bearer ${token}`,
   }), [token]);
 
+  // 输入做 debounce：稳定 300ms 后才更新驱动请求的值（与 useAdmin 的申请列表同规格），
+  // 避免每个键入都打一次列表接口。
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery.trim());
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
   // Fetch list
   const fetchList = useCallback(async () => {
     if (!token) return;
+    // 中止上一条在途列表请求：宽关键词（匹配多、后端要批量注入探测快照）比窄关键词慢，
+    // 不中止会让迟到的旧响应覆盖新筛选结果（表现为输入后列表纹丝不动，需手动刷新）。
+    listAbortRef.current?.abort();
+    const ac = new AbortController();
+    listAbortRef.current = ac;
     setIsLoading(true);
     setError(null);
 
@@ -67,21 +86,50 @@ export function useMonitorAdmin(token: string) {
       const params = new URLSearchParams();
       if (boardFilter) params.set('board', boardFilter);
       if (statusFilter) params.set('status', statusFilter);
-      if (searchQuery) params.set('q', searchQuery);
+      if (debouncedSearchQuery) params.set('q', debouncedSearchQuery);
 
       const qs = params.toString();
       const resp = await apiGet<AdminMonitorListResponse>(
         `/api/admin/monitors${qs ? '?' + qs : ''}`,
-        { headers: authHeaders() },
+        { headers: authHeaders(), signal: ac.signal },
       );
+      if (ac.signal.aborted) return;
       setMonitors(resp.monitors || []);
       setTotal(resp.total);
     } catch (e) {
+      if (ac.signal.aborted || (e instanceof DOMException && e.name === 'AbortError')) return;
       setError(e instanceof ApiError ? e.message : '加载失败');
     } finally {
-      setIsLoading(false);
+      // 只有仍是当前请求时才收起加载态，被后续请求顶掉的旧请求不碰
+      if (listAbortRef.current === ac) setIsLoading(false);
     }
-  }, [token, boardFilter, statusFilter, searchQuery, authHeaders]);
+  }, [token, boardFilter, statusFilter, debouncedSearchQuery, authHeaders]);
+
+  // 写操作（create/update/delete/toggle）成功后的列表刷新必须用最新筛选参数：
+  // 它们 await 期间用户可能已改搜索词，闭包捕获的旧 fetchList 会按过期条件取数、
+  // 还会反过来中止在途的新搜索，故经 ref 始终调用最新版本。
+  const fetchListRef = useRef(fetchList);
+  useEffect(() => {
+    fetchListRef.current = fetchList;
+  }, [fetchList]);
+
+  // 卸载时中止在途列表请求，并把写后刷新降级为 no-op：在途写操作若在卸载后才返回，
+  // 不应再为已离开的页面发起新的列表查询（后端要跑批量快照注入，不便宜）。
+  useEffect(() => () => {
+    fetchListRef.current = async () => {};
+    listAbortRef.current?.abort();
+  }, []);
+
+  // 手动刷新：立即按输入框现值取数，不等防抖窗口。关键词有变时更新防抖值、
+  // 由取数 effect 接手发请求；无变时直接重拉一次。
+  const refreshList = useCallback(() => {
+    const q = searchQuery.trim();
+    if (q !== debouncedSearchQuery) {
+      setDebouncedSearchQuery(q);
+    } else {
+      fetchList();
+    }
+  }, [searchQuery, debouncedSearchQuery, fetchList]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- 挂载即取数：fetchList 在 await 前同步置 loading/清错误为有意，非派生 state
@@ -152,13 +200,13 @@ export function useMonitorAdmin(token: string) {
         file,
         { headers: authHeaders() },
       );
-      fetchList();
+      fetchListRef.current();
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : '创建失败';
       setError(msg);
       throw e;
     }
-  }, [token, authHeaders, fetchList]);
+  }, [token, authHeaders]);
 
   // Update
   const updateMonitor = useCallback(async (key: string, file: MonitorFile, revision: number) => {
@@ -171,7 +219,7 @@ export function useMonitorAdmin(token: string) {
         { revision, monitor: file },
         { headers: authHeaders() },
       );
-      fetchList();
+      fetchListRef.current();
       // 重新拉详情：刷新 probe_targets（保存可能改了子通道 model/template）并清空旧探测结果，
       // 避免查看态用陈旧 target 测到已不存在的 model。
       await fetchDetail(key);
@@ -180,7 +228,7 @@ export function useMonitorAdmin(token: string) {
       setError(msg);
       throw e;
     }
-  }, [token, authHeaders, fetchList, fetchDetail]);
+  }, [token, authHeaders, fetchDetail]);
 
   // Delete
   const deleteMonitor = useCallback(async (key: string) => {
@@ -191,11 +239,11 @@ export function useMonitorAdmin(token: string) {
       await apiDelete(`/api/admin/monitors/${key}`, { headers: authHeaders() });
       setSelectedMonitor(null);
       setSelectedKey(null);
-      fetchList();
+      fetchListRef.current();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : '删除失败');
     }
-  }, [token, authHeaders, fetchList]);
+  }, [token, authHeaders]);
 
   // Toggle
   const toggleMonitor = useCallback(async (key: string, field: 'disabled' | 'hidden', value: boolean) => {
@@ -209,11 +257,11 @@ export function useMonitorAdmin(token: string) {
         { headers: authHeaders() },
       );
       setSelectedMonitor(resp.monitor);
-      fetchList();
+      fetchListRef.current();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : '切换失败');
     }
-  }, [token, authHeaders, fetchList]);
+  }, [token, authHeaders]);
 
   const probeMonitor = useCallback(async (
     key: string,
@@ -300,7 +348,7 @@ export function useMonitorAdmin(token: string) {
     setStatusFilter,
     searchQuery,
     setSearchQuery,
-    fetchList,
+    refreshList,
 
     selectedMonitor,
     selectedKey,

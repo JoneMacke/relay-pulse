@@ -204,7 +204,7 @@ export default function AdminPage() {
                       searchQuery={monitor.searchQuery}
                       setSearchQuery={monitor.setSearchQuery}
                       onSelect={(key) => monitor.fetchDetail(key)}
-                      onRefresh={monitor.fetchList}
+                      onRefresh={monitor.refreshList}
                     />
                   </div>
                 )
