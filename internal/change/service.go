@@ -16,6 +16,7 @@ import (
 
 	"monitor/internal/apikey"
 	"monitor/internal/config"
+	"monitor/internal/displayname"
 	"monitor/internal/logger"
 )
 
@@ -154,6 +155,26 @@ func (s *Service) Submit(ctx context.Context, req *SubmitRequest, clientIP strin
 	for field := range req.ProposedChanges {
 		if !allowedFields[field] {
 			return nil, fmt.Errorf("字段 %q 不允许自助变更", field)
+		}
+	}
+
+	// 展示名安全校验（与 onboarding 同一叶子包 internal/displayname）：拒不可见字符欺骗，并把
+	// **规范值写回** proposed_changes——使管理员只读 diff / Apply / 落盘看到同一干净字符串（否则
+	// 首尾隐藏字符仍会进入只读 diff，Apply 再规范化已太晚）。provider_name 必填、channel_name 可空。
+	for field, value := range req.ProposedChanges {
+		switch field {
+		case "provider_name":
+			canonical, err := displayname.ValidateProviderName(value)
+			if err != nil {
+				return nil, err
+			}
+			req.ProposedChanges[field] = canonical
+		case "channel_name":
+			canonical, err := displayname.ValidateChannelName(value)
+			if err != nil {
+				return nil, err
+			}
+			req.ProposedChanges[field] = canonical
 		}
 	}
 
@@ -555,11 +576,21 @@ func (s *Service) AdminApply(ctx context.Context, publicID string) error {
 	for field, value := range changes {
 		switch field {
 		case "provider_name":
-			m.ProviderName = value
+			// 防御闸：即便 Submit 已校验，历史脏数据 / 直改 DB 仍可能带入不可见字符——
+			// 此处再校验并取规范值，fail-closed 早于循环后的 AtomicWrite。
+			canonical, err := displayname.ValidateProviderName(value)
+			if err != nil {
+				return fmt.Errorf("变更内容的服务商展示名非法: %w", err)
+			}
+			m.ProviderName = canonical
 		case "provider_url":
 			m.ProviderURL = value
 		case "channel_name":
-			m.ChannelName = value
+			canonical, err := displayname.ValidateChannelName(value)
+			if err != nil {
+				return fmt.Errorf("变更内容的通道展示名非法: %w", err)
+			}
+			m.ChannelName = canonical
 		case "category":
 			m.Category = value
 		case "sponsor_level":

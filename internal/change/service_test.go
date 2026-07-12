@@ -1187,3 +1187,97 @@ func TestAdminUpdate_MixedFields_Rejected(t *testing.T) {
 		t.Fatalf("proposed_changes 不应被改，实际『%s』", changes["provider_name"])
 	}
 }
+
+// --- item -16: 变更请求展示名 Unicode 校验（Submit 闸 + Apply 防御闸）---
+
+// TestService_Submit_RejectsInvisibleCharInDisplayName 锁定 Submit 对展示名内部不可见字符 fail-fast，
+// 挡在存库前——否则 bidi/零宽会进管理员只读 diff 且随 Apply 落到公开状态页。
+func TestService_Submit_RejectsInvisibleCharInDisplayName(t *testing.T) {
+	svc, store := newTestService(t)
+	ctx := context.Background()
+
+	req := &SubmitRequest{
+		APIKey:          "sk-test-key-12345",
+		TargetKey:       "testprov--cc--vip",
+		ProposedChanges: map[string]string{"provider_name": "赛博\u200bAI"}, // 内部 ZWSP
+		Locale:          "zh-CN",
+	}
+	if _, err := svc.Submit(ctx, req, "127.0.0.1"); err == nil {
+		t.Fatal("内部零宽字符应被拒，实际 nil")
+	}
+	// 不应落库
+	if _, total, _ := store.List(ctx, "all", 10, 0); total != 0 {
+		t.Fatalf("被拒的提交不应落库，实际 total=%d", total)
+	}
+}
+
+// TestService_Submit_StripsEdgeBOMAndStoresCanonical 锁定 Submit 剥首尾不可见字符并把**规范值写回**
+// proposed_changes——保证管理员只读 diff / Apply / 落盘看到同一干净字符串。
+func TestService_Submit_StripsEdgeBOMAndStoresCanonical(t *testing.T) {
+	svc, store := newTestService(t)
+	ctx := context.Background()
+
+	req := &SubmitRequest{
+		APIKey:          "sk-test-key-12345",
+		TargetKey:       "testprov--cc--vip",
+		ProposedChanges: map[string]string{"provider_name": "\ufeff赛博AI\ufeff"}, // 首尾 BOM
+		Locale:          "zh-CN",
+	}
+	resp, err := svc.Submit(ctx, req, "127.0.0.1")
+	if err != nil {
+		t.Fatalf("首尾 BOM 应被剥除后通过，实际 err=%v", err)
+	}
+	saved, _ := store.GetByPublicID(ctx, resp.PublicID)
+	var pc map[string]string
+	if err := json.Unmarshal([]byte(saved.ProposedChanges), &pc); err != nil {
+		t.Fatalf("unmarshal proposed_changes: %v", err)
+	}
+	if pc["provider_name"] != "赛博AI" {
+		t.Fatalf("落库 proposed provider_name=%q，期望规范值 赛博AI（无 BOM）", pc["provider_name"])
+	}
+}
+
+// TestService_Submit_RejectsEmptyProviderName 锁定 provider_name 收紧为必填（空值拒）——仅直连 API
+// 可达（前端 updateChange 对空值 delete）。channel_name 仍可空。
+func TestService_Submit_RejectsEmptyProviderName(t *testing.T) {
+	svc, _ := newTestService(t)
+	req := &SubmitRequest{
+		APIKey:          "sk-test-key-12345",
+		TargetKey:       "testprov--cc--vip",
+		ProposedChanges: map[string]string{"provider_name": ""},
+		Locale:          "zh-CN",
+	}
+	if _, err := svc.Submit(context.Background(), req, "127.0.0.1"); err == nil {
+		t.Fatal("空 provider_name 应被拒（必填），实际 nil")
+	}
+}
+
+// TestApply_HistoricalDirtyDisplayName_FailsClosed 锁定 Apply 防御闸：即便 Submit 已过，历史脏
+// proposed_changes（直改 DB / 旧版本落库）在 Apply 时仍被校验拦下，fail-closed 不写盘、不改状态。
+func TestApply_HistoricalDirtyDisplayName_FailsClosed(t *testing.T) {
+	svc, store, ms := newApplyTestService(t)
+	seedMonitorFile(t, ms, "prov--cc--chan", config.ServiceConfig{
+		ProviderName: "原名", BaseURL: "https://live.example.com",
+	})
+	cr := seedAutoChangeRequest(t, store, "prov--cc--chan", map[string]string{
+		"provider_name": "赛博\u202eAI", // 内部 RLO，绕过 Submit 直接构造的脏数据
+	})
+
+	if err := svc.AdminApply(context.Background(), cr.PublicID); err == nil {
+		t.Fatal("历史脏展示名应 fail-closed，实际 nil")
+	}
+
+	// monitors.d/ 未被写：provider_name 仍为原名
+	mf, err := ms.Get("prov--cc--chan")
+	if err != nil {
+		t.Fatalf("ms.Get: %v", err)
+	}
+	if got := config.RootMonitor(mf).ProviderName; got != "原名" {
+		t.Fatalf("monitor provider_name=%q，期望未变更的 原名", got)
+	}
+	// CR 状态仍为 pending（未 applied）
+	saved, _ := store.GetByPublicID(context.Background(), cr.PublicID)
+	if saved.Status == StatusApplied {
+		t.Fatal("fail-closed 后 CR 状态不应变为 applied")
+	}
+}
