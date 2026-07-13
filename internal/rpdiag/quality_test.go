@@ -244,3 +244,38 @@ func TestBuildQualitySignals_HealthyModel_Recovered(t *testing.T) {
 		t.Fatalf("TriggerModels = %v, want empty", got.TriggerModels)
 	}
 }
+
+func TestQualitySnapshot_Lookup_CidPriorityThenTriple(t *testing.T) {
+	snap := QualitySnapshot{
+		Fresh: true,
+		ByBucket: map[string]ChannelQualitySignal{
+			cidBucketKey("O-123"):                    {State: QualityHardFail, TriggerModels: []string{"m"}},
+			ScoreKey("acme", "anthropic", "acme-cc"): {State: QualityRecovered},
+		},
+	}
+	// cid hit takes priority (trim only, case-sensitive)
+	if got := snap.Lookup([]string{"whatever"}, "anthropic", "ignored", " O-123 "); got.State != QualityHardFail {
+		t.Fatalf("cid lookup state = %v, want HardFail", got.State)
+	}
+	// empty cid -> triple (canonical trim+lower); provider candidates tried in order
+	if got := snap.Lookup([]string{"Acme"}, "Anthropic", "ACME-CC", ""); got.State != QualityRecovered {
+		t.Fatalf("triple lookup state = %v, want Recovered", got.State)
+	}
+	// second candidate wins when first is blank/miss
+	if got := snap.Lookup([]string{"", "Acme"}, "anthropic", "acme-cc", ""); got.State != QualityRecovered {
+		t.Fatalf("candidate-order lookup state = %v, want Recovered", got.State)
+	}
+	// cid provided but absent -> falls through to the triple match
+	if got := snap.Lookup([]string{"Acme"}, "anthropic", "acme-cc", "O-DOES-NOT-EXIST"); got.State != QualityRecovered {
+		t.Fatalf("cid-miss fallback state = %v, want Recovered", got.State)
+	}
+	// total miss -> Unknown
+	if got := snap.Lookup([]string{"nobody"}, "anthropic", "nope", ""); got.State != QualityUnknown {
+		t.Fatalf("miss state = %v, want Unknown", got.State)
+	}
+	// nil ByBucket -> Unknown (no panic)
+	var empty QualitySnapshot
+	if got := empty.Lookup([]string{"a"}, "b", "c", ""); got.State != QualityUnknown {
+		t.Fatalf("nil-map lookup state = %v, want Unknown", got.State)
+	}
+}

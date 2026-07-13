@@ -117,6 +117,44 @@ func buildQualitySignalsAt(rows []rankingRow, now time.Time) map[string]ChannelQ
 	return out
 }
 
+// QualitySnapshot is the quality projection of one cached refresh. Generation
+// identifies which cache produced it; Fresh means the local cache is unexpired
+// AND the last refresh succeeded. ByBucket keys match buildQualitySignalsAt's
+// bucketing ("cid:"+id or a legacy provider|service|channel triple).
+type QualitySnapshot struct {
+	Generation uint64
+	Fresh      bool
+	ByBucket   map[string]ChannelQualitySignal
+}
+
+// Lookup mirrors the frontend lookupRpdiagScore join: a non-empty channelID tries
+// the cid bucket first (trim only, case-sensitive — cid is opaque); otherwise/on
+// miss it tries each provider candidate against the canonical (trim+lower)
+// provider|service|channel triple, skipping blank candidates. Total miss returns
+// QualityUnknown; a nil ByBucket is safe and also returns QualityUnknown.
+func (s QualitySnapshot) Lookup(providerCandidates []string, service, channel, channelID string) ChannelQualitySignal {
+	if s.ByBucket == nil {
+		return ChannelQualitySignal{State: QualityUnknown}
+	}
+	if cid := strings.TrimSpace(channelID); cid != "" {
+		if sig, ok := s.ByBucket[cidBucketKey(cid)]; ok {
+			return sig
+		}
+	}
+	// No empty-segment early-out is needed: buildScoreRowView drops rows whose
+	// provider/service/channel is blank, so no ByBucket key has an empty segment;
+	// a blank-segment lookup simply misses -> Unknown (matches frontend behavior).
+	for _, p := range providerCandidates {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		if sig, ok := s.ByBucket[ScoreKey(p, service, channel)]; ok {
+			return sig
+		}
+	}
+	return ChannelQualitySignal{State: QualityUnknown}
+}
+
 // isTailThreeHardFail reports whether the row's three most-recent attempts are
 // all hard-fail (nil) AND rpdiag currently marks the row hard-fail-active. Fewer
 // than three attempts (cold start / thin history) is never enough evidence.
