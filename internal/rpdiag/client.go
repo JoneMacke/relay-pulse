@@ -155,9 +155,18 @@ type Client struct {
 	// staleness gate (scoreStaleWindow) and cache expiry deterministically.
 	nowFn func() time.Time
 
-	mu        sync.RWMutex
-	cache     map[string]Score
-	expiresAt time.Time
+	mu    sync.RWMutex
+	cache map[string]Score
+	// qualityByBucket is the quality projection of the SAME refresh that produced
+	// cache: both are written together under mu in refresh so Scores and
+	// QualitySignals never observe a torn (scores-from-refresh-N,
+	// signals-from-refresh-M) pair. Keyed like buildQualitySignalsAt.
+	qualityByBucket map[string]ChannelQualitySignal
+	// generation counts successful refreshes; it is bumped exactly once per
+	// refresh (under mu, alongside the two projections) so QualitySignals'
+	// consumers can detect a new load without inflating on cache hits.
+	generation uint64
+	expiresAt  time.Time
 
 	sf singleflight.Group
 }
@@ -277,36 +286,84 @@ func (c *Client) Scores(ctx context.Context) (map[string]Score, error) {
 	if c == nil {
 		return map[string]Score{}, nil
 	}
-	if snap, ok := c.freshSnapshot(c.now()); ok {
-		return snap, nil
+	if err := c.ensureRefreshed(ctx); err != nil {
+		return nil, err
 	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.cache == nil {
+		return map[string]Score{}, nil
+	}
+	return cloneScores(c.cache), nil
+}
 
-	v, err, _ := c.sf.Do("scores", func() (interface{}, error) {
-		if snap, ok := c.freshSnapshot(c.now()); ok {
-			return snap, nil
+// QualitySignals returns the quality projection of the current cache, refreshing
+// through the SAME singleflight-guarded path Scores uses (so one refresh feeds
+// both projections and bumps generation once). It is fail-open: it never returns
+// a non-nil error. When every refresh fails and no prior snapshot exists it
+// serves an empty projection with Fresh=false; when a stale snapshot exists it
+// serves that with Fresh=false. Fresh=false is the freeze signal automove treats
+// as "don't move anything".
+func (c *Client) QualitySignals(ctx context.Context) (QualitySnapshot, error) {
+	if c == nil {
+		return QualitySnapshot{}, nil
+	}
+	// Deliberately ignore the refresh error: unlike Scores (which surfaces a
+	// first-ever-load failure), QualitySignals always degrades to a stale/empty
+	// projection with Fresh=false rather than erroring, so a transient upstream
+	// blip freezes automove instead of failing it.
+	_ = c.ensureRefreshed(ctx)
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	fresh := c.cache != nil && !c.now().After(c.expiresAt)
+	bucket := make(map[string]ChannelQualitySignal, len(c.qualityByBucket))
+	for k, v := range c.qualityByBucket {
+		// Deep-copy TriggerModels: a shallow struct copy would leave the returned
+		// slice aliasing the cached backing array, so a caller mutating it (or a
+		// concurrent reader) would corrupt/race the cache. Mirrors cloneScores.
+		if v.TriggerModels != nil {
+			models := make([]string, len(v.TriggerModels))
+			copy(models, v.TriggerModels)
+			v.TriggerModels = models
 		}
-		fresh, refreshErr := c.refresh(ctx)
-		if refreshErr != nil {
-			if stale, ok := c.staleSnapshot(); ok {
-				return stale, nil
+		bucket[k] = v
+	}
+	return QualitySnapshot{Generation: c.generation, Fresh: fresh, ByBucket: bucket}, nil
+}
+
+// ensureRefreshed shares one singleflight across Scores and QualitySignals so a
+// single refresh populates both projections and bumps generation once. It returns
+// nil when a usable snapshot exists after the call (fresh, or stale after a failed
+// refresh) and returns the refresh error only when refresh failed AND no prior
+// snapshot exists. The neutral "refresh" key (not "scores") reflects that the
+// refresh now feeds more than the score index.
+func (c *Client) ensureRefreshed(ctx context.Context) error {
+	if c.isFresh(c.now()) {
+		return nil
+	}
+	_, err, _ := c.sf.Do("refresh", func() (interface{}, error) {
+		if c.isFresh(c.now()) {
+			return nil, nil
+		}
+		if _, refreshErr := c.refresh(ctx); refreshErr != nil {
+			if _, ok := c.staleSnapshot(); ok {
+				return nil, nil // fail-open: the last good snapshot is still usable
 			}
 			return nil, refreshErr
 		}
-		return fresh, nil
+		return nil, nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	return v.(map[string]Score), nil
+	return err
 }
 
-func (c *Client) freshSnapshot(now time.Time) (map[string]Score, bool) {
+// isFresh reports whether the cache holds a usable, unexpired snapshot. It is a
+// bool check so ensureRefreshed and QualitySignals can test freshness without
+// cloning the whole score index.
+func (c *Client) isFresh(now time.Time) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.cache == nil || now.After(c.expiresAt) {
-		return nil, false
-	}
-	return cloneScores(c.cache), true
+	return c.cache != nil && !now.After(c.expiresAt)
 }
 
 func (c *Client) staleSnapshot() (map[string]Score, bool) {
@@ -399,9 +456,16 @@ func (c *Client) refresh(ctx context.Context) (map[string]Score, error) {
 
 	now := c.now()
 	scores := c.buildScoresAt(rows, now)
+	signals := buildQualitySignalsAt(rows, now)
 
+	// One lock, one writeback: the score index, the quality projection, the
+	// generation bump, and the expiry all become visible together. This is the
+	// invariant that lets Scores and QualitySignals share a single refresh path
+	// without ever exposing a half-updated cache.
 	c.mu.Lock()
 	c.cache = scores
+	c.qualityByBucket = signals
+	c.generation++
 	c.expiresAt = now.Add(c.ttl)
 	c.mu.Unlock()
 

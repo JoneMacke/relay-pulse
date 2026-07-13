@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -1543,5 +1544,166 @@ func TestExportWireCarriesAttempts7D(t *testing.T) {
 	got := payload.Items[0].Attempts7D
 	if got == nil || *got != 12 {
 		t.Errorf("Attempts7D = %v, want 12 (wire contract regression?)", got)
+	}
+}
+
+func qualityKeysOf(m map[string]ChannelQualitySignal) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+// TestQualitySignals_GenerationBumpsOnRefresh_FreshDerived proves QualitySignals
+// derives a fresh projection on the first call (Fresh, Generation>0, populated
+// ByBucket) and that a second call served from the unexpired cache neither
+// refetches nor inflates Generation — a single refresh bumps generation exactly
+// once.
+func TestQualitySignals_GenerationBumpsOnRefresh_FreshDerived(t *testing.T) {
+	fresh := *freshAt()
+	claude := `{"schema_version":"ranking-export.v5.6","items":[` +
+		`{"channel_name":"O-Max","relaypulse_channel_key":"max","provider_name":"SAIAi",` +
+		`"service_cli_command":"claude","model":"claude-opus-4-8","model_key":"claude-opus-4-8",` +
+		`"score_trend":{"latest":97.0,"latest_at":"` + fresh + `"}}]}`
+
+	var fetches int32
+	srv := singleBoardServer(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&fetches, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintln(w, claude)
+	})
+	defer srv.Close()
+
+	client := NewClient(nil, srv.URL, DefaultTTL, true)
+	client.nowFn = fixedClock
+
+	snap, err := client.QualitySignals(context.Background())
+	if err != nil {
+		t.Fatalf("first QualitySignals returned error: %v", err)
+	}
+	if !snap.Fresh {
+		t.Errorf("first snapshot Fresh = false, want true")
+	}
+	if snap.Generation == 0 {
+		t.Errorf("first snapshot Generation = 0, want > 0")
+	}
+	if _, ok := snap.ByBucket["saiai|cc|o-max"]; !ok {
+		t.Errorf("ByBucket missing saiai|cc|o-max, got keys %v", qualityKeysOf(snap.ByBucket))
+	}
+
+	snap2, err := client.QualitySignals(context.Background())
+	if err != nil {
+		t.Fatalf("second QualitySignals returned error: %v", err)
+	}
+	if snap2.Generation != snap.Generation {
+		t.Errorf("Generation inflated on cached read: first=%d second=%d", snap.Generation, snap2.Generation)
+	}
+	if got := atomic.LoadInt32(&fetches); got != 1 {
+		t.Errorf("base board fetched %d times, want 1 (unexpired cache must serve the second call)", got)
+	}
+}
+
+// TestQualitySignals_StaleAfterExpiry_NotFresh proves the fail-open contract: once
+// the cache expires and every upstream fetch fails, QualitySignals returns no error
+// (never propagates the refresh failure), reports Fresh==false (the freeze signal
+// automove treats as "don't move anything"), and still exposes the last-known
+// ByBucket projection.
+func TestQualitySignals_StaleAfterExpiry_NotFresh(t *testing.T) {
+	fresh := *freshAt()
+	claude := `{"schema_version":"ranking-export.v5.6","items":[` +
+		`{"channel_name":"O-Max","relaypulse_channel_key":"max","provider_name":"SAIAi",` +
+		`"service_cli_command":"claude","model":"claude-opus-4-8","model_key":"claude-opus-4-8",` +
+		`"score_trend":{"latest":97.0,"latest_at":"` + fresh + `"}}]}`
+
+	srv := singleBoardServer(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintln(w, claude)
+	})
+
+	clock := testNow
+	client := NewClient(nil, srv.URL, time.Minute, true)
+	client.nowFn = func() time.Time { return clock }
+
+	snap, err := client.QualitySignals(context.Background())
+	if err != nil {
+		t.Fatalf("first QualitySignals returned error: %v", err)
+	}
+	if !snap.Fresh {
+		t.Fatalf("first snapshot Fresh = false, want true")
+	}
+	if _, ok := snap.ByBucket["saiai|cc|o-max"]; !ok {
+		t.Fatalf("ByBucket missing saiai|cc|o-max after first load, got %v", qualityKeysOf(snap.ByBucket))
+	}
+
+	// Kill upstream and advance past the TTL so the next call must refresh, fail,
+	// and fail-open to the stale projection.
+	srv.Close()
+	clock = clock.Add(2 * time.Minute)
+
+	stale, err := client.QualitySignals(context.Background())
+	if err != nil {
+		t.Fatalf("QualitySignals after expiry+fetch failure returned error, want nil (fail-open): %v", err)
+	}
+	if stale.Fresh {
+		t.Errorf("stale snapshot Fresh = true, want false (freeze signal)")
+	}
+	if _, ok := stale.ByBucket["saiai|cc|o-max"]; !ok {
+		t.Errorf("stale snapshot dropped last-known bucket saiai|cc|o-max, got %v", qualityKeysOf(stale.ByBucket))
+	}
+}
+
+// TestQualitySignals_TriggerModelsNotAliasedIntoCache proves the returned
+// snapshot's TriggerModels slice does not share a backing array with the cached
+// projection: mutating the returned slice must not corrupt what a later read
+// observes. This mirrors the deep-copy discipline in cloneScores /
+// normalizeHardFailTrend — the cache is handed to concurrent readers, so a
+// caller-visible slice aliasing into it is a data-race / corruption hazard.
+func TestQualitySignals_TriggerModelsNotAliasedIntoCache(t *testing.T) {
+	// O-Trigger is hard-fail-active with a tail-three all-null attempts history;
+	// O-Healthy carries a fresh sample for the same (service, model) so that model
+	// counts as globally active, which is the precondition for O-Trigger to emit a
+	// HardFail signal with a non-empty TriggerModels.
+	claude := `{"schema_version":"ranking-export.v5.6","items":[` +
+		`{"channel_name":"O-Trigger","provider_name":"SAIAi","service_cli_command":"claude",` +
+		`"model":"claude-opus-4-8","model_key":"claude-opus-4-8","hard_fail_active":true,` +
+		`"score_trend":{"recent_attempts":[null,null,null]}},` +
+		`{"channel_name":"O-Healthy","provider_name":"SAIAi","service_cli_command":"claude",` +
+		`"model":"claude-opus-4-8","model_key":"claude-opus-4-8",` +
+		`"score_trend":{"latest":95.0,"latest_at":"` + *freshAt() + `"}}]}`
+
+	srv := singleBoardServer(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintln(w, claude)
+	})
+	defer srv.Close()
+
+	client := NewClient(nil, srv.URL, DefaultTTL, true)
+	client.nowFn = fixedClock
+
+	const key = "saiai|cc|o-trigger"
+	snap, err := client.QualitySignals(context.Background())
+	if err != nil {
+		t.Fatalf("QualitySignals returned error: %v", err)
+	}
+	sig, ok := snap.ByBucket[key]
+	if !ok || sig.State != QualityHardFail || len(sig.TriggerModels) == 0 {
+		t.Fatalf("want hard-fail bucket %q with non-empty TriggerModels, got %+v (keys %v)",
+			key, sig, qualityKeysOf(snap.ByBucket))
+	}
+	original := sig.TriggerModels[0]
+
+	// Mutate the returned slice in place; the cache must not observe it.
+	snap.ByBucket[key].TriggerModels[0] = "mutated-by-caller"
+
+	// Cache is unexpired, so the second read is served from c.qualityByBucket
+	// without a refetch — it must still carry the original, unmutated name.
+	snap2, err := client.QualitySignals(context.Background())
+	if err != nil {
+		t.Fatalf("second QualitySignals returned error: %v", err)
+	}
+	if got := snap2.ByBucket[key].TriggerModels[0]; got != original {
+		t.Errorf("TriggerModels aliased into cache: after caller mutation, second read sees %q, want %q",
+			got, original)
 	}
 }
