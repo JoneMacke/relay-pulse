@@ -1915,3 +1915,35 @@ func TestEvaluate_ExpiredStickyNotExempt_ColdWithLevelDowngrade(t *testing.T) {
 		t.Errorf("expired sticky-cold channel must get SponsorLevel=pulse, got %s", ov.SponsorLevel)
 	}
 }
+
+func TestMonitorOverride_QualityFields_EqualityByValue(t *testing.T) {
+	a := MonitorOverride{Board: "secondary", BoardReason: "quality_hardfail", QualityLatched: true, QualityTriggerModels: "m1,m2"}
+	b := a
+	am := map[storage.MonitorKey]MonitorOverride{{Provider: "p"}: a}
+	bm := map[storage.MonitorKey]MonitorOverride{{Provider: "p"}: b}
+	if !overridesEqual(am, bm) {
+		t.Fatalf("identical overrides must be equal")
+	}
+	b.QualityRecoveryCount = 1
+	bm2 := map[storage.MonitorKey]MonitorOverride{{Provider: "p"}: b}
+	if overridesEqual(am, bm2) {
+		t.Fatalf("differing recovery count must be unequal")
+	}
+}
+
+func TestOverrideRecordMapping_QualityRoundTrip(t *testing.T) {
+	key := storage.MonitorKey{Provider: "Acme", Service: "cc", Channel: "Acme-CC", Model: "m"}
+	ov := MonitorOverride{
+		Board: "secondary", ColdReason: "", SponsorLevel: config.SponsorLevelPulse,
+		BoardReason: "quality_hardfail", QualityLatched: true, QualityRecoveryCount: 2,
+		QualityTriggerModels: "claude-opus", QualityLastGeneration: 7, AvailabilityLatched: false,
+	}
+	recs := overridesToRecords(map[storage.MonitorKey]MonitorOverride{key: ov})
+	if len(recs) != 1 {
+		t.Fatalf("want 1 record, got %d", len(recs))
+	}
+	back := recordsToOverrides(recs)
+	if back[key] != ov {
+		t.Fatalf("round-trip mismatch: %+v != %+v", back[key], ov)
+	}
+}

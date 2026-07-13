@@ -19,6 +19,15 @@ type MonitorOverride struct {
 	Board        string              // 板块覆盖（"hot"/"secondary"/"cold"）
 	ColdReason   string              // 冷板原因（仅 Board=="cold" 时有值）
 	SponsorLevel config.SponsorLevel // 赞助等级覆盖（空值表示不覆盖）
+
+	// —— 质量移板状态机字段（Task 5）——
+	// 全部为可比较类型：overridesEqual 用整体 != 比较 override，含 slice/map 会导致该函数无法编译。
+	BoardReason           string // 移板机器码，如 "quality_hardfail"
+	QualityLatched        bool   // 质量驱动移板已闩锁
+	QualityRecoveryCount  int    // 质量恢复评估计数
+	QualityTriggerModels  string // 触发质量移板的模型名（规范化逗号连接；必须保持 string，overridesEqual 用 !=）
+	QualityLastGeneration uint64 // 上次质量评估代次
+	AvailabilityLatched   bool   // 可用率驱动移板已闩锁
 }
 
 // Service 自动移板服务。
@@ -32,6 +41,11 @@ type Service struct {
 
 	callbackMu       sync.RWMutex
 	onOverrideChange func() // override 变更时通知 scheduler/events 刷新
+
+	// qualitySource 是 automove 对 rpdiag 的最小依赖（一份质量快照）。
+	// 在启动期（评估循环开始前）经 SetQualitySource 注入一次，之后只读，故无需加锁。
+	// nil 表示从未注入 → evaluate 视质量为"无新鲜信号"（冻结，不清除既有闩锁）。
+	qualitySource qualitySource
 
 	// 原子指针替换：evaluate 生成新 map → Store；Handler 读取 → Load。
 	// nil 表示无 override（auto_move 未启用或无需移板）。
@@ -438,10 +452,16 @@ func overridesToRecords(overrides map[storage.MonitorKey]MonitorOverride) []stor
 	records := make([]storage.MonitorOverrideRecord, 0, len(overrides))
 	for key, ov := range overrides {
 		records = append(records, storage.MonitorOverrideRecord{
-			Key:          key,
-			Board:        ov.Board,
-			ColdReason:   ov.ColdReason,
-			SponsorLevel: string(ov.SponsorLevel),
+			Key:                   key,
+			Board:                 ov.Board,
+			ColdReason:            ov.ColdReason,
+			SponsorLevel:          string(ov.SponsorLevel),
+			BoardReason:           ov.BoardReason,
+			QualityLatched:        ov.QualityLatched,
+			QualityRecoveryCount:  ov.QualityRecoveryCount,
+			QualityTriggerModels:  ov.QualityTriggerModels,
+			QualityLastGeneration: ov.QualityLastGeneration,
+			AvailabilityLatched:   ov.AvailabilityLatched,
 		})
 	}
 	return records
@@ -454,9 +474,15 @@ func recordsToOverrides(records []storage.MonitorOverrideRecord) map[storage.Mon
 	overrides := make(map[storage.MonitorKey]MonitorOverride, len(records))
 	for _, r := range records {
 		overrides[r.Key] = MonitorOverride{
-			Board:        r.Board,
-			ColdReason:   r.ColdReason,
-			SponsorLevel: config.SponsorLevel(r.SponsorLevel),
+			Board:                 r.Board,
+			ColdReason:            r.ColdReason,
+			SponsorLevel:          config.SponsorLevel(r.SponsorLevel),
+			BoardReason:           r.BoardReason,
+			QualityLatched:        r.QualityLatched,
+			QualityRecoveryCount:  r.QualityRecoveryCount,
+			QualityTriggerModels:  r.QualityTriggerModels,
+			QualityLastGeneration: r.QualityLastGeneration,
+			AvailabilityLatched:   r.AvailabilityLatched,
 		}
 	}
 	return overrides
