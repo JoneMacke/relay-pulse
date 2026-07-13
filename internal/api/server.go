@@ -76,7 +76,8 @@ type Server struct {
 
 // NewServer 创建服务器
 // autoMover 可为 nil（未启用自动移板时）
-func NewServer(store storage.Storage, cfg *config.AppConfig, port string, autoMover *automove.Service) *Server {
+// rpdiagClient 可为 nil（未启用 rpdiag 质量列时）：此时 handler 的 rpdiagEnabled() 保持 false
+func NewServer(store storage.Storage, cfg *config.AppConfig, port string, autoMover *automove.Service, rpdiagClient *rpdiag.Client) *Server {
 	// 设置gin模式
 	gin.SetMode(gin.ReleaseMode)
 
@@ -187,7 +188,7 @@ func NewServer(store storage.Storage, cfg *config.AppConfig, port string, autoMo
 
 	// 创建处理器
 	handler := NewHandler(store, cfg, autoMover)
-	handler.SetRpdiagClient(rpdiag.NewClientFromEnv())
+	handler.SetRpdiagClient(rpdiagClient)
 
 	// 旧 /detect 专题页已下线，内容由 rpdiag 站点（diag.relaypulse.top）的 SSR 页面承接，
 	// 四语言路径统一 301 过去。仅对启用 rpdiag 的部署生效：私有部署不跳转，

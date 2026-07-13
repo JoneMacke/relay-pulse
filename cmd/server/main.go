@@ -21,6 +21,7 @@ import (
 	"monitor/internal/logger"
 	"monitor/internal/onboarding"
 	"monitor/internal/probe"
+	"monitor/internal/rpdiag"
 	"monitor/internal/scheduler"
 	"monitor/internal/storage"
 )
@@ -220,7 +221,15 @@ func main() {
 	// 创建自动移板服务（始终创建，内部根据 enabled 决定是否实际评估）
 	// 先从 DB 恢复持久化 override，再基于历史做首次评估，
 	// 避免重启后丢失 sticky cold 状态，导致 scheduler 首轮调度到本应停探的通道。
+	// 单例 rpdiag 客户端：automove（质量信号）与 API handler（质量列渲染）共用同一实例。
+	// 必须在 Restore()/Evaluate() 之前构造并注入，否则重启后首次评估拿不到质量信号。
+	// NewClientFromEnv 在未启用（opt-in env 未设）时返回 nil；此处以显式 nil 守卫避免
+	// 把 typed-nil 指针塞进 qualitySource 接口（那会让接口非 nil，误判质量源已就绪）。
+	rpdiagClient := rpdiag.NewClientFromEnv()
 	autoMover := automove.NewService(store, cfg)
+	if rpdiagClient != nil {
+		autoMover.SetQualitySource(rpdiagClient)
+	}
 	if err := autoMover.Restore(); err != nil {
 		logger.Error("main", "恢复自动移板 override 失败", "error", err)
 		os.Exit(1)
@@ -277,7 +286,7 @@ func main() {
 	if httpPort == "" {
 		httpPort = "8080"
 	}
-	server := api.NewServer(store, cfg, httpPort, autoMover)
+	server := api.NewServer(store, cfg, httpPort, autoMover, rpdiagClient)
 	server.GetHandler().SetMonitorStore(monitorStore)
 
 	// runtimeMu 保护热更新回调与关闭序列之间对 mutable 组件实例的并发访问
