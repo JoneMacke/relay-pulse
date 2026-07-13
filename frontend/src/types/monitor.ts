@@ -65,6 +65,8 @@ export interface MonitorConfig {
   auto_move_exempt?: boolean;
   board?: string;
   cold_reason?: string;
+  board_reason?: string;
+  board_reason_models?: string;
   retry?: number | null;
   retry_base_delay?: string;
   retry_max_delay?: string;

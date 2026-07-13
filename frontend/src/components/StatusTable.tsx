@@ -45,13 +45,16 @@ interface ChannelCellProps {
   probeUrl?: string;
   templateName?: string;
   coldReason?: string;
+  boardReason?: string;
+  boardReasonModels?: string;
   className?: string;
 }
 
-function ChannelCell({ channel, probeUrl, templateName, coldReason, className = '' }: ChannelCellProps) {
+function ChannelCell({ channel, probeUrl, templateName, coldReason, boardReason, boardReasonModels, className = '' }: ChannelCellProps) {
   const { t } = useTranslation();
   const channelType = parseChannelType(channel);
-  const hasTooltip = !!(channelType || probeUrl || templateName || coldReason);
+  const isQualityHardFail = boardReason === 'quality_hardfail';
+  const hasTooltip = !!(channelType || probeUrl || templateName || coldReason || isQualityHardFail);
 
   const channelContent = (
     <>
@@ -93,6 +96,16 @@ function ChannelCell({ channel, probeUrl, templateName, coldReason, className = 
             <span className="flex flex-col">
               <span className="text-muted text-[10px]">{t('table.channelTooltip.coldReason', '冷板原因')}</span>
               <span className="text-warning text-[11px] break-all">{coldReason}</span>
+            </span>
+          )}
+          {isQualityHardFail && (
+            <span className="flex flex-col">
+              <span className="text-muted text-[10px]">{t('table.channelTooltip.qualityHardFail.label', '质量移板')}</span>
+              <span className="text-warning text-[11px] break-all">
+                {boardReasonModels
+                  ? t('table.channelTooltip.qualityHardFail.text', '{{models}} 近3次评测均未取得可评分响应，已暂移备用板', { models: boardReasonModels })
+                  : t('table.channelTooltip.qualityHardFail.textNoModels', '近3次评测均未取得可评分响应，已暂移备用板')}
+              </span>
             </span>
           )}
         </span>
@@ -760,6 +773,8 @@ function MobileListItem({
                   probeUrl={item.probeUrl}
                   templateName={item.templateName}
                   coldReason={item.coldReason}
+                  boardReason={item.boardReason}
+                  boardReasonModels={item.boardReasonModels}
                   className="text-muted truncate"
                 />
               )}
@@ -1265,6 +1280,8 @@ function StatusTableComponent({
                   probeUrl={item.probeUrl}
                   templateName={item.templateName}
                   coldReason={item.coldReason}
+                  boardReason={item.boardReason}
+                  boardReasonModels={item.boardReasonModels}
                   className="max-w-[10rem]"
                 />
               </td>

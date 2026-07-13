@@ -342,6 +342,16 @@ func applyOverrideToMonitor(m *config.ServiceConfig, ov MonitorOverride, annotat
 		} else {
 			m.ColdReason = ""
 		}
+		// 质量移板机器码与触发模型名随板位注入。触发模型名只在确有质量移板原因时暴露：
+		// cold override 为保留质量闩锁状态会留存 QualityTriggerModels（BoardReason 为空），
+		// 若无条件注入会让响应出现"孤立"的 board_reason_models（有模型名却无 board_reason），
+		// 故与 BoardReason 绑定——二者要么同时非空、要么同时为空，契约保持一致。
+		m.BoardReason = ov.BoardReason
+		if ov.BoardReason != "" {
+			m.BoardReasonModels = ov.QualityTriggerModels
+		} else {
+			m.BoardReasonModels = ""
+		}
 	}
 	if ov.SponsorLevel != "" {
 		m.SponsorLevel = ov.SponsorLevel

@@ -207,7 +207,12 @@
       "channelType": "Channel Type",
       "probeUrl": "Probe URL",
       "template": "Body Template",
-      "coldReason": "Cold Reason"
+      "coldReason": "Cold Reason",
+      "qualityHardFail": {
+        "label": "Quality Demotion",
+        "text": "{{models}} returned no scorable response in the last 3 evaluations; moved to the backup board",
+        "textNoModels": "No scorable response in the last 3 evaluations; moved to the backup board"
+      }
     },
     "filterByProvider": "Filter by this provider"
   },

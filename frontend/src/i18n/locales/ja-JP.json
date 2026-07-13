@@ -207,7 +207,12 @@
       "channelType": "チャネルタイプ",
       "probeUrl": "探測URL",
       "template": "リクエストテンプレート",
-      "coldReason": "コールド理由"
+      "coldReason": "コールド理由",
+      "qualityHardFail": {
+        "label": "品質による移動",
+        "text": "{{models}} は直近3回の評価で採点可能な応答が得られず、予備ボードへ移動しました",
+        "textNoModels": "直近3回の評価で採点可能な応答が得られず、予備ボードへ移動しました"
+      }
     },
     "filterByProvider": "このプロバイダーでフィルター"
   },

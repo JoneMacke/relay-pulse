@@ -363,33 +363,35 @@ type CurrentStatus struct {
 
 // MonitorResult API返回结构
 type MonitorResult struct {
-	Provider      string              `json:"provider"`
-	ProviderName  string              `json:"provider_name,omitempty"` // Provider 显示名称
-	ProviderSlug  string              `json:"provider_slug"`           // URL slug（用于生成专属页面链接）
-	ProviderURL   string              `json:"provider_url"`            // 服务商官网链接
-	Service       string              `json:"service"`
-	ServiceName   string              `json:"service_name,omitempty"`  // Service 显示名称
-	Category      string              `json:"category"`                // 分类：commercial（商业站）或 public（公益站）
-	Sponsor       string              `json:"sponsor"`                 // 赞助者
-	SponsorURL    string              `json:"sponsor_url"`             // 赞助者链接
-	SponsorLevel  config.SponsorLevel `json:"sponsor_level,omitempty"` // 赞助等级（事实字段，不受 enable_annotations 影响）
-	Annotations   []config.Annotation `json:"annotations,omitempty"`   // 统一注解数组（受 enable_annotations 开关控制）
-	PriceMin      *float64            `json:"price_min,omitempty"`     // 参考倍率下限
-	PriceMax      *float64            `json:"price_max,omitempty"`     // 参考倍率
-	ListedDays    *int                `json:"listed_days,omitempty"`   // 收录天数（从 listed_since 计算）
-	Channel       string              `json:"channel"`                 // 业务通道标识
-	ChannelID     string              `json:"channel_id,omitempty"`    // 通道稳定 id（跨产品 join 锚，供 rpdiag sampler 发现）
-	ChannelName   string              `json:"channel_name,omitempty"`  // Channel 显示名称
-	Model         string              `json:"model,omitempty"`         // 模型展示名
-	RequestModel  string              `json:"request_model,omitempty"` // 实际请求模型 ID
-	Board         string              `json:"board"`                   // 板块：hot/cold
-	ColdReason    string              `json:"cold_reason,omitempty"`   // 冷板原因（仅 cold 有值）
-	ProbeURL      string              `json:"probe_url,omitempty"`     // 探测端点 URL（脱敏后）
-	TemplateName  string              `json:"template_name,omitempty"` // 请求体模板名称（如有）
-	IntervalMs    int64               `json:"interval_ms"`             // 监测间隔（毫秒）
-	SlowLatencyMs int64               `json:"slow_latency_ms"`         // 慢请求阈值（毫秒）
-	Current       *CurrentStatus      `json:"current_status"`
-	Timeline      []storage.TimePoint `json:"timeline"`
+	Provider          string              `json:"provider"`
+	ProviderName      string              `json:"provider_name,omitempty"` // Provider 显示名称
+	ProviderSlug      string              `json:"provider_slug"`           // URL slug（用于生成专属页面链接）
+	ProviderURL       string              `json:"provider_url"`            // 服务商官网链接
+	Service           string              `json:"service"`
+	ServiceName       string              `json:"service_name,omitempty"`        // Service 显示名称
+	Category          string              `json:"category"`                      // 分类：commercial（商业站）或 public（公益站）
+	Sponsor           string              `json:"sponsor"`                       // 赞助者
+	SponsorURL        string              `json:"sponsor_url"`                   // 赞助者链接
+	SponsorLevel      config.SponsorLevel `json:"sponsor_level,omitempty"`       // 赞助等级（事实字段，不受 enable_annotations 影响）
+	Annotations       []config.Annotation `json:"annotations,omitempty"`         // 统一注解数组（受 enable_annotations 开关控制）
+	PriceMin          *float64            `json:"price_min,omitempty"`           // 参考倍率下限
+	PriceMax          *float64            `json:"price_max,omitempty"`           // 参考倍率
+	ListedDays        *int                `json:"listed_days,omitempty"`         // 收录天数（从 listed_since 计算）
+	Channel           string              `json:"channel"`                       // 业务通道标识
+	ChannelID         string              `json:"channel_id,omitempty"`          // 通道稳定 id（跨产品 join 锚，供 rpdiag sampler 发现）
+	ChannelName       string              `json:"channel_name,omitempty"`        // Channel 显示名称
+	Model             string              `json:"model,omitempty"`               // 模型展示名
+	RequestModel      string              `json:"request_model,omitempty"`       // 实际请求模型 ID
+	Board             string              `json:"board"`                         // 板块：hot/cold
+	ColdReason        string              `json:"cold_reason,omitempty"`         // 冷板原因（仅 cold 有值）
+	BoardReason       string              `json:"board_reason,omitempty"`        // 移板机器码（如 "quality_hardfail"），前端本地化
+	BoardReasonModels string              `json:"board_reason_models,omitempty"` // 触发质量移板的模型名（逗号连接）
+	ProbeURL          string              `json:"probe_url,omitempty"`           // 探测端点 URL（脱敏后）
+	TemplateName      string              `json:"template_name,omitempty"`       // 请求体模板名称（如有）
+	IntervalMs        int64               `json:"interval_ms"`                   // 监测间隔（毫秒）
+	SlowLatencyMs     int64               `json:"slow_latency_ms"`               // 慢请求阈值（毫秒）
+	Current           *CurrentStatus      `json:"current_status"`
+	Timeline          []storage.TimePoint `json:"timeline"`
 }
 
 // GetStatus 获取监测状态

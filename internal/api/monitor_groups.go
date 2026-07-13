@@ -28,29 +28,31 @@ type MonitorLayer struct {
 
 // MonitorGroup 监测组（父子/多模型结构的聚合单元）
 type MonitorGroup struct {
-	Provider      string              `json:"provider"`
-	ProviderName  string              `json:"provider_name,omitempty"`
-	ProviderSlug  string              `json:"provider_slug"`
-	ProviderURL   string              `json:"provider_url"`
-	Service       string              `json:"service"`
-	ServiceName   string              `json:"service_name,omitempty"`
-	Category      string              `json:"category"`
-	Sponsor       string              `json:"sponsor"`
-	SponsorURL    string              `json:"sponsor_url"`
-	SponsorLevel  config.SponsorLevel `json:"sponsor_level,omitempty"`
-	Annotations   []config.Annotation `json:"annotations,omitempty"`
-	PriceMin      *float64            `json:"price_min,omitempty"`
-	PriceMax      *float64            `json:"price_max,omitempty"`
-	ListedDays    *int                `json:"listed_days,omitempty"`
-	Channel       string              `json:"channel"`
-	ChannelID     string              `json:"channel_id,omitempty"` // 通道稳定 id（跨产品 join 锚，运行时注入，组级；旧后端缺失）
-	ChannelName   string              `json:"channel_name,omitempty"`
-	Board         string              `json:"board"`
-	ColdReason    string              `json:"cold_reason,omitempty"`
-	ProbeURL      string              `json:"probe_url,omitempty"`
-	TemplateName  string              `json:"template_name,omitempty"`
-	IntervalMs    int64               `json:"interval_ms"`
-	SlowLatencyMs int64               `json:"slow_latency_ms"`
+	Provider          string              `json:"provider"`
+	ProviderName      string              `json:"provider_name,omitempty"`
+	ProviderSlug      string              `json:"provider_slug"`
+	ProviderURL       string              `json:"provider_url"`
+	Service           string              `json:"service"`
+	ServiceName       string              `json:"service_name,omitempty"`
+	Category          string              `json:"category"`
+	Sponsor           string              `json:"sponsor"`
+	SponsorURL        string              `json:"sponsor_url"`
+	SponsorLevel      config.SponsorLevel `json:"sponsor_level,omitempty"`
+	Annotations       []config.Annotation `json:"annotations,omitempty"`
+	PriceMin          *float64            `json:"price_min,omitempty"`
+	PriceMax          *float64            `json:"price_max,omitempty"`
+	ListedDays        *int                `json:"listed_days,omitempty"`
+	Channel           string              `json:"channel"`
+	ChannelID         string              `json:"channel_id,omitempty"` // 通道稳定 id（跨产品 join 锚，运行时注入，组级；旧后端缺失）
+	ChannelName       string              `json:"channel_name,omitempty"`
+	Board             string              `json:"board"`
+	ColdReason        string              `json:"cold_reason,omitempty"`
+	BoardReason       string              `json:"board_reason,omitempty"`        // 移板机器码（如 "quality_hardfail"），前端本地化
+	BoardReasonModels string              `json:"board_reason_models,omitempty"` // 触发质量移板的模型名（逗号连接）
+	ProbeURL          string              `json:"probe_url,omitempty"`
+	TemplateName      string              `json:"template_name,omitempty"`
+	IntervalMs        int64               `json:"interval_ms"`
+	SlowLatencyMs     int64               `json:"slow_latency_ms"`
 
 	CurrentStatus int            `json:"current_status"` // 组级最差状态：0>2>1>-1
 	Layers        []MonitorLayer `json:"layers"`
@@ -167,31 +169,33 @@ func buildMonitorGroupFromParent(parent config.ServiceConfig, enableAnnotations 
 	}
 
 	return MonitorGroup{
-		Provider:      parent.Provider,
-		ProviderName:  parent.ProviderName,
-		ProviderSlug:  slug,
-		ProviderURL:   parent.ProviderURL,
-		Service:       parent.Service,
-		ServiceName:   parent.ServiceName,
-		Category:      parent.Category,
-		Sponsor:       parent.Sponsor,
-		SponsorURL:    parent.SponsorURL,
-		SponsorLevel:  parent.SponsorLevel,
-		Annotations:   annotations,
-		PriceMin:      parent.PriceMin,
-		PriceMax:      parent.PriceMax,
-		ListedDays:    listedDays,
-		Channel:       parent.Channel,
-		ChannelID:     parent.ChannelID,
-		ChannelName:   parent.ChannelName,
-		Board:         parent.Board,
-		ColdReason:    parent.ColdReason,
-		ProbeURL:      probeURL,
-		TemplateName:  templateName,
-		IntervalMs:    parent.IntervalDuration.Milliseconds(),
-		SlowLatencyMs: parent.SlowLatencyDuration.Milliseconds(),
-		CurrentStatus: -1,
-		Layers:        make([]MonitorLayer, 0),
+		Provider:          parent.Provider,
+		ProviderName:      parent.ProviderName,
+		ProviderSlug:      slug,
+		ProviderURL:       parent.ProviderURL,
+		Service:           parent.Service,
+		ServiceName:       parent.ServiceName,
+		Category:          parent.Category,
+		Sponsor:           parent.Sponsor,
+		SponsorURL:        parent.SponsorURL,
+		SponsorLevel:      parent.SponsorLevel,
+		Annotations:       annotations,
+		PriceMin:          parent.PriceMin,
+		PriceMax:          parent.PriceMax,
+		ListedDays:        listedDays,
+		Channel:           parent.Channel,
+		ChannelID:         parent.ChannelID,
+		ChannelName:       parent.ChannelName,
+		Board:             parent.Board,
+		ColdReason:        parent.ColdReason,
+		BoardReason:       parent.BoardReason,
+		BoardReasonModels: parent.BoardReasonModels,
+		ProbeURL:          probeURL,
+		TemplateName:      templateName,
+		IntervalMs:        parent.IntervalDuration.Milliseconds(),
+		SlowLatencyMs:     parent.SlowLatencyDuration.Milliseconds(),
+		CurrentStatus:     -1,
+		Layers:            make([]MonitorLayer, 0),
 	}
 }
 

@@ -207,7 +207,12 @@
       "channelType": "通道类型",
       "probeUrl": "探测地址",
       "template": "请求体模板",
-      "coldReason": "冷板原因"
+      "coldReason": "冷板原因",
+      "qualityHardFail": {
+        "label": "质量移板",
+        "text": "{{models}} 近3次评测均未取得可评分响应，已暂移备用板",
+        "textNoModels": "近3次评测均未取得可评分响应，已暂移备用板"
+      }
     },
     "filterByProvider": "按此服务商筛选"
   },

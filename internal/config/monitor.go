@@ -78,6 +78,10 @@ type ServiceConfig struct {
 	Board      string `yaml:"board,omitempty" json:"board"`
 	ColdReason string `yaml:"cold_reason" json:"cold_reason,omitempty"` // 冷板原因（可选）
 
+	// 质量移板运行时字段（yaml:"-" 不持久化到 monitors.d，由 automove 在运行时注入）。
+	BoardReason       string `yaml:"-" json:"board_reason,omitempty"`        // 移板机器码（如 "quality_hardfail"），前端本地化；运行时注入
+	BoardReasonModels string `yaml:"-" json:"board_reason_models,omitempty"` // 触发质量移板的模型名（逗号连接）；运行时注入
+
 	// AutoColdExempt 手动解除自动冷板。
 	// 设为 true 时会清除 runtime cold override，并在保持为 true 期间不再自动移入冷板。
 	AutoColdExempt bool `yaml:"auto_cold_exempt" json:"auto_cold_exempt,omitempty"`

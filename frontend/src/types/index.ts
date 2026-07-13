@@ -114,6 +114,8 @@ export interface MonitorResult {
   request_model?: string;              // 实际请求模型 ID（可选）
   board: BoardValue;                   // 板块：hot/secondary/cold
   cold_reason?: string;                // 冷板原因（仅 cold 有值）
+  board_reason?: string;               // 移板机器码（如 "quality_hardfail"），前端本地化
+  board_reason_models?: string;        // 触发质量移板的模型名（逗号连接）
   probe_url?: string;                  // 探测端点 URL（脱敏后）
   template_name?: string;              // 请求体模板名称（如有）
   interval_ms?: number;                // 监测间隔（毫秒，可选兼容旧版本）
@@ -180,6 +182,8 @@ export interface ProcessedMonitorData {
   channelId?: string;                  // 通道稳定 id（跨产品 join 锚，Plan A 经 /api/status 暴露；旧后端/inline 缺失）
   board: BoardValue;                   // 板块：hot/secondary/cold
   coldReason?: string;                 // 冷板原因（仅 cold 有值）
+  boardReason?: string;                // 移板机器码（如 "quality_hardfail"），前端本地化
+  boardReasonModels?: string;          // 触发质量移板的模型名（逗号连接）
   probeUrl?: string;                   // 探测端点 URL（脱敏后）
   templateName?: string;               // 请求体模板名称（如有）
   intervalMs?: number;                 // 监测间隔（毫秒，可选）
@@ -324,6 +328,8 @@ export interface MonitorGroup {
   channel_name?: string;
   board: BoardValue;
   cold_reason?: string;
+  board_reason?: string;
+  board_reason_models?: string;
   probe_url?: string;
   template_name?: string;
   interval_ms?: number;

@@ -636,6 +636,37 @@ func TestApplyBoardOverrides_ColdReasonPropagation(t *testing.T) {
 	}
 }
 
+// TestApplyBoardOverrides_BoardReasonPropagation 测试质量移板机器码与触发模型名传播到 root 和子模型
+func TestApplyBoardOverrides_BoardReasonPropagation(t *testing.T) {
+	svc := automove.NewService(nil, &config.AppConfig{})
+	svc.SetOverrides(map[storage.MonitorKey]automove.MonitorOverride{
+		{Provider: "acme", Service: "cc", Channel: "vip", Model: ""}: {
+			Board:                "secondary",
+			BoardReason:          "quality_hardfail",
+			QualityTriggerModels: "claude-opus",
+		},
+	})
+
+	h := &Handler{
+		config:    &config.AppConfig{},
+		autoMover: svc,
+	}
+
+	monitors := []config.ServiceConfig{
+		{Provider: "acme", Service: "cc", Channel: "vip", Board: "hot"},
+		{Provider: "acme", Service: "cc", Channel: "vip", Model: "gpt-4o", Parent: "acme/cc/vip", Board: "hot"},
+	}
+
+	result := h.applyBoardOverrides(monitors, nil, 0)
+
+	if result[0].Board != "secondary" || result[0].BoardReason != "quality_hardfail" || result[0].BoardReasonModels != "claude-opus" {
+		t.Fatalf("root: board=%s board_reason=%q board_reason_models=%q", result[0].Board, result[0].BoardReason, result[0].BoardReasonModels)
+	}
+	if result[1].BoardReason != "quality_hardfail" || result[1].BoardReasonModels != "claude-opus" {
+		t.Fatalf("child: board_reason=%q board_reason_models=%q (expected same as root)", result[1].BoardReason, result[1].BoardReasonModels)
+	}
+}
+
 // TestApplyBoardOverrides_ClearsColdReasonOnNonCold 测试非冷板 override 清除旧 ColdReason
 func TestApplyBoardOverrides_ClearsColdReasonOnNonCold(t *testing.T) {
 	svc := automove.NewService(nil, &config.AppConfig{})

@@ -1800,6 +1800,58 @@ func TestApplyOverrides_ColdReasonPropagation(t *testing.T) {
 	}
 }
 
+// TestApplyOverrides_ColdOverrideWithLatchedModelsHidesBoardReasonModels 验证契约互斥：
+// cold override 为保留质量闩锁会留存 QualityTriggerModels，但 BoardReason 为空——注入到
+// ServiceConfig 时 BoardReasonModels 必须一并置空，避免响应出现"孤立"的 board_reason_models。
+func TestApplyOverrides_ColdOverrideWithLatchedModelsHidesBoardReasonModels(t *testing.T) {
+	overrides := map[storage.MonitorKey]MonitorOverride{
+		{Provider: "p", Service: "s", Channel: "c"}: {
+			Board:                "cold",
+			ColdReason:           "auto cold test",
+			QualityLatched:       true,
+			QualityTriggerModels: "claude-opus", // 闩锁状态留存，但不应作为展示原因泄漏
+		},
+	}
+
+	monitors := []config.ServiceConfig{
+		{Provider: "p", Service: "s", Channel: "c", Board: "hot"},
+	}
+
+	result := ApplyOverrides(monitors, overrides, nil, 0)
+
+	if result[0].BoardReason != "" {
+		t.Fatalf("board_reason=%q, want empty (cold, no quality reason)", result[0].BoardReason)
+	}
+	if result[0].BoardReasonModels != "" {
+		t.Fatalf("board_reason_models=%q, want empty (must not leak without board_reason)", result[0].BoardReasonModels)
+	}
+}
+
+// TestApplyOverrides_QualityBoardReasonPropagation 验证质量移板原因+模型名正常传播（含子通道）。
+func TestApplyOverrides_QualityBoardReasonPropagation(t *testing.T) {
+	overrides := map[storage.MonitorKey]MonitorOverride{
+		{Provider: "p", Service: "s", Channel: "c"}: {
+			Board:                "secondary",
+			BoardReason:          "quality_hardfail",
+			QualityTriggerModels: "claude-opus",
+			QualityLatched:       true,
+		},
+	}
+
+	monitors := []config.ServiceConfig{
+		{Provider: "p", Service: "s", Channel: "c", Board: "hot"},
+		{Provider: "p", Service: "s", Channel: "c", Model: "gpt-4o", Parent: "p/s/c", Board: "hot"},
+	}
+
+	result := ApplyOverrides(monitors, overrides, nil, 0)
+
+	for i, r := range result {
+		if r.Board != "secondary" || r.BoardReason != "quality_hardfail" || r.BoardReasonModels != "claude-opus" {
+			t.Fatalf("row %d: board=%s board_reason=%q models=%q", i, r.Board, r.BoardReason, r.BoardReasonModels)
+		}
+	}
+}
+
 func TestApplyOverrides_ClearsColdReasonOnNonCold(t *testing.T) {
 	overrides := map[storage.MonitorKey]MonitorOverride{
 		{Provider: "p", Service: "s", Channel: "c"}: {Board: "secondary"},
