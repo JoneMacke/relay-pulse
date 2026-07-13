@@ -21,6 +21,7 @@ import (
 	"monitor/internal/buildinfo"
 	"monitor/internal/config"
 	"monitor/internal/logger"
+	"monitor/internal/reloadstatus"
 	"monitor/internal/rpdiag"
 	"monitor/internal/storage"
 )
@@ -63,6 +64,35 @@ func redirectLegacyDetect(handler *Handler) gin.HandlerFunc {
 	}
 }
 
+// buildReadyHandler 构造就绪探针处理器：先查存储连通性（不通仍返 503，行为不变），
+// 连通后正常返回 {"status":"ok"}；若 recorder 记录过热更新被 fail-closed 闸跳过，
+// 则在 body 追加 config_reload 信息段（时间戳/错误/累计次数）。这是**信息化**暴露，
+// 绝不因配置问题翻 HTTP 状态码——翻 503 会让 LB 摘除节点、编排触发重启循环，
+// 把配置问题误当存活问题。recorder 可为 nil（未接入时不暴露该段）。
+func buildReadyHandler(store storage.Storage, recorder *reloadstatus.Recorder) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+		defer cancel()
+		if err := store.WithContext(ctx).Ping(); err != nil {
+			logger.Warn("api", "readiness check failed", "error", err)
+			apiError(c, http.StatusServiceUnavailable, ErrCodeServiceUnavailable, "storage not ready")
+			return
+		}
+
+		body := gin.H{"status": "ok"}
+		if recorder != nil {
+			if status, skipped := recorder.Snapshot(); skipped {
+				body["config_reload"] = gin.H{
+					"last_skipped_at": status.LastSkipAt.UTC().Format(time.RFC3339),
+					"last_error":      status.LastSkipError,
+					"skipped_count":   status.SkipCount,
+				}
+			}
+		}
+		c.JSON(http.StatusOK, body)
+	}
+}
+
 // Server HTTP服务器
 type Server struct {
 	handler    *Handler
@@ -77,7 +107,8 @@ type Server struct {
 // NewServer 创建服务器
 // autoMover 可为 nil（未启用自动移板时）
 // rpdiagClient 可为 nil（未启用 rpdiag 质量列时）：此时 handler 的 rpdiagEnabled() 保持 false
-func NewServer(store storage.Storage, cfg *config.AppConfig, port string, autoMover *automove.Service, rpdiagClient *rpdiag.Client) *Server {
+// recorder 可为 nil（未接入热更新跳过记录时）：此时 /ready 不暴露 config_reload 段
+func NewServer(store storage.Storage, cfg *config.AppConfig, port string, autoMover *automove.Service, rpdiagClient *rpdiag.Client, recorder *reloadstatus.Recorder) *Server {
 	// 设置gin模式
 	gin.SetMode(gin.ReleaseMode)
 
@@ -266,17 +297,8 @@ func NewServer(store storage.Storage, cfg *config.AppConfig, port string, autoMo
 	router.GET("/health", healthHandler)
 	router.HEAD("/health", healthHandler)
 
-	// 就绪探针（readiness）— 检查存储连通性
-	readyHandler := func(c *gin.Context) {
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
-		defer cancel()
-		if err := store.WithContext(ctx).Ping(); err != nil {
-			logger.Warn("api", "readiness check failed", "error", err)
-			apiError(c, http.StatusServiceUnavailable, ErrCodeServiceUnavailable, "storage not ready")
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
-	}
+	// 就绪探针（readiness）— 检查存储连通性 + 信息化暴露热更新跳过状态
+	readyHandler := buildReadyHandler(store, recorder)
 	router.GET("/ready", readyHandler)
 	router.HEAD("/ready", readyHandler)
 

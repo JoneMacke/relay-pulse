@@ -787,7 +787,7 @@ vim config.yaml
 | POST | `/api/admin/monitors/:key/toggle` | 管理：切换 disabled/hidden |
 | POST | `/api/admin/monitors/:key/probe` | 管理：手动探测（走完整 ServiceConfig，与 scheduler 字段级一致） |
 | GET | `/api/admin/monitors/:key/logs` | 管理：探测历史日志（since/limit/model 查询，含 error_detail） |
-| GET/HEAD | `/ready` | 就绪检查（含存储连通性） |
+| GET/HEAD | `/ready` | 就绪检查（含存储连通性；热更新被 fail-closed 闸跳过时 GET body 附 `config_reload{last_skipped_at,last_error,skipped_count}` 信息化，HTTP 状态恒不因此翻 503） |
 | GET | `/sitemap.xml` | 动态站点地图 |
 | GET | `/robots.txt` | 爬虫规则 |
 

@@ -21,6 +21,7 @@ import (
 	"monitor/internal/logger"
 	"monitor/internal/onboarding"
 	"monitor/internal/probe"
+	"monitor/internal/reloadstatus"
 	"monitor/internal/rpdiag"
 	"monitor/internal/scheduler"
 	"monitor/internal/storage"
@@ -286,7 +287,10 @@ func main() {
 	if httpPort == "" {
 		httpPort = "8080"
 	}
-	server := api.NewServer(store, cfg, httpPort, autoMover, rpdiagClient)
+	// reloadRecorder 记录热更新被 fail-closed 闸静默跳过的状态，经 /ready body 信息化暴露。
+	// 生产恒非 nil，注入 api 与热更新回调，让「admin 保存 200 但运行态没变」这类静默事故留下可查痕迹。
+	reloadRecorder := reloadstatus.New()
+	server := api.NewServer(store, cfg, httpPort, autoMover, rpdiagClient, reloadRecorder)
 	server.GetHandler().SetMonitorStore(monitorStore)
 
 	// runtimeMu 保护热更新回调与关闭序列之间对 mutable 组件实例的并发访问
@@ -466,6 +470,7 @@ func main() {
 		// fail-closed：热更新带入缺 model_id 的监测行则跳过本次重载（保留旧配置），避免线上历史不可见
 		if err := config.CheckRuntimeModelIDs(newCfg.Monitors); err != nil {
 			logger.Error("main", "热更新配置缺少 model_id，跳过本次重载", "error", err)
+			reloadRecorder.RecordSkip(err)
 			return
 		}
 
