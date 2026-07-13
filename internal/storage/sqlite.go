@@ -150,6 +150,10 @@ func (s *SQLiteStorage) Init() error {
 	if err := s.initOverrideTables(ctx); err != nil {
 		return err
 	}
+	// 质量移板机器字段迁移（幂等 + 一次性 secondary 回填）
+	if err := s.ensureOverrideQualityColumns(); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -1848,11 +1852,73 @@ func (s *SQLiteStorage) initOverrideTables(ctx context.Context) error {
 	return nil
 }
 
+// ensureOverrideQualityColumns 在既有 monitor_overrides 表上补齐质量移板列
+// （幂等，参照 ensureSubStatusColumn）。当 availability_latched 列本次新增时，
+// 一次性把既有 secondary 行回填为可用率闩锁：本功能上线前，任何 secondary
+// 都必然是可用率驱动降板；不回填的话 Restore 会误判为「从未降板」并在临界可用率
+// 时错误地把它升回主板。回填以「本次是否新增该列」为守卫，绝不无条件每次 Init
+// 都跑（否则将来质量驱动的 secondary 会被误标成可用率闩锁）。
+func (s *SQLiteStorage) ensureOverrideQualityColumns() error {
+	ctx := s.effectiveCtx()
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(monitor_overrides)`)
+	if err != nil {
+		return fmt.Errorf("查询 monitor_overrides 表结构失败: %w", err)
+	}
+	existing := map[string]bool{}
+	for rows.Next() {
+		var (
+			cid     int
+			name    string
+			colType string
+			notNull int
+			dflt    sql.NullString
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			rows.Close()
+			return fmt.Errorf("扫描 monitor_overrides 表结构失败: %w", err)
+		}
+		existing[name] = true
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("遍历 monitor_overrides 表结构失败: %w", err)
+	}
+
+	addCols := []struct{ name, ddl string }{
+		{"board_reason", `ALTER TABLE monitor_overrides ADD COLUMN board_reason TEXT NOT NULL DEFAULT ''`},
+		{"quality_latched", `ALTER TABLE monitor_overrides ADD COLUMN quality_latched INTEGER NOT NULL DEFAULT 0`},
+		{"quality_recovery_count", `ALTER TABLE monitor_overrides ADD COLUMN quality_recovery_count INTEGER NOT NULL DEFAULT 0`},
+		{"quality_trigger_models", `ALTER TABLE monitor_overrides ADD COLUMN quality_trigger_models TEXT NOT NULL DEFAULT ''`},
+		{"quality_last_generation", `ALTER TABLE monitor_overrides ADD COLUMN quality_last_generation INTEGER NOT NULL DEFAULT 0`},
+		{"availability_latched", `ALTER TABLE monitor_overrides ADD COLUMN availability_latched INTEGER NOT NULL DEFAULT 0`},
+	}
+	availabilityLatchedExisted := existing["availability_latched"]
+	for _, c := range addCols {
+		if existing[c.name] {
+			continue
+		}
+		if _, err := s.db.ExecContext(ctx, c.ddl); err != nil {
+			return fmt.Errorf("添加 monitor_overrides 列 %s 失败: %w", c.name, err)
+		}
+	}
+	if !availabilityLatchedExisted {
+		if _, err := s.db.ExecContext(ctx, `UPDATE monitor_overrides SET availability_latched = 1 WHERE board = 'secondary'`); err != nil {
+			return fmt.Errorf("回填 availability_latched 失败: %w", err)
+		}
+		logger.Info("storage", "已为 monitor_overrides 表补齐质量移板列并回填 secondary 可用率闩锁")
+	}
+	return nil
+}
+
 // ListMonitorOverrides 加载全部 override 快照。
 func (s *SQLiteStorage) ListMonitorOverrides() ([]MonitorOverrideRecord, error) {
 	ctx := s.effectiveCtx()
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT provider, service, channel, model, board, cold_reason, sponsor_level, created_at, updated_at
+		SELECT provider, service, channel, model, board, cold_reason, sponsor_level,
+		       board_reason, quality_latched, quality_recovery_count,
+		       quality_trigger_models, quality_last_generation, availability_latched,
+		       created_at, updated_at
 		FROM monitor_overrides
 		ORDER BY provider, service, channel, model
 	`)
@@ -1864,13 +1930,21 @@ func (s *SQLiteStorage) ListMonitorOverrides() ([]MonitorOverrideRecord, error) 
 	var records []MonitorOverrideRecord
 	for rows.Next() {
 		var r MonitorOverrideRecord
+		// SQLite 无 bool 类型：闩锁列以 INTEGER 0/1 存，代次以 int64 存
+		var qLatched, availLatched int
+		var qGen int64
 		if err := rows.Scan(
 			&r.Key.Provider, &r.Key.Service, &r.Key.Channel, &r.Key.Model,
 			&r.Board, &r.ColdReason, &r.SponsorLevel,
+			&r.BoardReason, &qLatched, &r.QualityRecoveryCount,
+			&r.QualityTriggerModels, &qGen, &availLatched,
 			&r.CreatedAt, &r.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("扫描 monitor_overrides 失败: %w", err)
 		}
+		r.QualityLatched = qLatched != 0
+		r.AvailabilityLatched = availLatched != 0
+		r.QualityLastGeneration = uint64(qGen)
 		records = append(records, r)
 	}
 	return records, rows.Err()
@@ -1913,8 +1987,11 @@ func (s *SQLiteStorage) ReplaceMonitorOverrides(records []MonitorOverrideRecord)
 	if len(records) > 0 {
 		stmt, err := tx.PrepareContext(ctx, `
 			INSERT INTO monitor_overrides (
-				provider, service, channel, model, board, cold_reason, sponsor_level, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+				provider, service, channel, model, board, cold_reason, sponsor_level,
+				board_reason, quality_latched, quality_recovery_count,
+				quality_trigger_models, quality_last_generation, availability_latched,
+				created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`)
 		if err != nil {
 			return fmt.Errorf("预编译 monitor_overrides 插入语句失败: %w", err)
@@ -1935,7 +2012,10 @@ func (s *SQLiteStorage) ReplaceMonitorOverrides(records []MonitorOverrideRecord)
 
 			if _, err := stmt.ExecContext(ctx,
 				r.Key.Provider, r.Key.Service, r.Key.Channel, r.Key.Model,
-				r.Board, r.ColdReason, r.SponsorLevel, createdAt, updatedAt,
+				r.Board, r.ColdReason, r.SponsorLevel,
+				r.BoardReason, b2i(r.QualityLatched), r.QualityRecoveryCount,
+				r.QualityTriggerModels, int64(r.QualityLastGeneration), b2i(r.AvailabilityLatched),
+				createdAt, updatedAt,
 			); err != nil {
 				return fmt.Errorf("写入 monitor_overrides 失败: %w", err)
 			}

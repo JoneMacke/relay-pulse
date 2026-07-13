@@ -108,8 +108,15 @@ type MonitorOverrideRecord struct {
 	Board        string
 	ColdReason   string
 	SponsorLevel string // config.SponsorLevel 的字符串表示，避免 storage → config 依赖
-	CreatedAt    int64
-	UpdatedAt    int64
+	// —— 质量移板机器字段（Task 4）——
+	BoardReason           string // 移板机器码，如 quality_hardfail
+	QualityLatched        bool   // 质量驱动移板已闩锁
+	QualityRecoveryCount  int    // 质量恢复评估计数
+	QualityTriggerModels  string // 触发质量移板的模型名（逗号连接）
+	QualityLastGeneration uint64 // 上次质量评估代次（存 int64/BIGINT，真实值不超 2^63）
+	AvailabilityLatched   bool   // 可用率驱动移板已闩锁
+	CreatedAt             int64
+	UpdatedAt             int64
 }
 
 // ===== 状态订阅通知（事件）相关类型 =====

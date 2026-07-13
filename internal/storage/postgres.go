@@ -192,6 +192,10 @@ func (s *PostgresStorage) Init() error {
 	if err := s.initOverrideTables(ctx); err != nil {
 		return err
 	}
+	// 质量移板机器字段迁移（幂等 + 一次性 secondary 回填）
+	if err := s.ensureOverrideQualityColumns(); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -2401,11 +2405,48 @@ func (s *PostgresStorage) initOverrideTables(ctx context.Context) error {
 	return nil
 }
 
+// ensureOverrideQualityColumns 补齐质量移板列（幂等，SQLite 版的 PG 孪生）。
+// availability_latched 列本次新增时一次性回填既有 secondary 行为可用率闩锁——
+// 理由与守卫同 SQLite 版：本功能上线前 secondary 必为可用率驱动降板，不回填会被
+// Restore 误升板；以「本次是否新增该列」为守卫，绝不无条件每次 Init 都跑。
+func (s *PostgresStorage) ensureOverrideQualityColumns() error {
+	ctx := s.effectiveCtx()
+	var availabilityLatchedExisted bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name='monitor_overrides' AND column_name='availability_latched')`,
+	).Scan(&availabilityLatchedExisted); err != nil {
+		return fmt.Errorf("查询 monitor_overrides 列是否存在失败 (PostgreSQL): %w", err)
+	}
+	migrations := []string{
+		`ALTER TABLE monitor_overrides ADD COLUMN IF NOT EXISTS board_reason TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE monitor_overrides ADD COLUMN IF NOT EXISTS quality_latched BOOLEAN NOT NULL DEFAULT FALSE`,
+		`ALTER TABLE monitor_overrides ADD COLUMN IF NOT EXISTS quality_recovery_count INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE monitor_overrides ADD COLUMN IF NOT EXISTS quality_trigger_models TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE monitor_overrides ADD COLUMN IF NOT EXISTS quality_last_generation BIGINT NOT NULL DEFAULT 0`,
+		`ALTER TABLE monitor_overrides ADD COLUMN IF NOT EXISTS availability_latched BOOLEAN NOT NULL DEFAULT FALSE`,
+	}
+	for _, m := range migrations {
+		if _, err := s.pool.Exec(ctx, m); err != nil {
+			return fmt.Errorf("迁移 monitor_overrides 失败 (PostgreSQL): %w", err)
+		}
+	}
+	if !availabilityLatchedExisted {
+		if _, err := s.pool.Exec(ctx, `UPDATE monitor_overrides SET availability_latched = TRUE WHERE board = 'secondary'`); err != nil {
+			return fmt.Errorf("回填 availability_latched 失败 (PostgreSQL): %w", err)
+		}
+		logger.Info("storage", "已为 monitor_overrides 表补齐质量移板列并回填 secondary 可用率闩锁 (PostgreSQL)")
+	}
+	return nil
+}
+
 // ListMonitorOverrides 加载全部 override 快照。
 func (s *PostgresStorage) ListMonitorOverrides() ([]MonitorOverrideRecord, error) {
 	ctx := s.effectiveCtx()
 	rows, err := s.pool.Query(ctx, `
-		SELECT provider, service, channel, model, board, cold_reason, sponsor_level, created_at, updated_at
+		SELECT provider, service, channel, model, board, cold_reason, sponsor_level,
+		       board_reason, quality_latched, quality_recovery_count,
+		       quality_trigger_models, quality_last_generation, availability_latched,
+		       created_at, updated_at
 		FROM monitor_overrides
 		ORDER BY provider, service, channel, model
 	`)
@@ -2417,13 +2458,18 @@ func (s *PostgresStorage) ListMonitorOverrides() ([]MonitorOverrideRecord, error
 	var records []MonitorOverrideRecord
 	for rows.Next() {
 		var r MonitorOverrideRecord
+		// PG BIGINT 扫进 int64 再转 uint64（真实代次值不超 2^63）
+		var qGen int64
 		if err := rows.Scan(
 			&r.Key.Provider, &r.Key.Service, &r.Key.Channel, &r.Key.Model,
 			&r.Board, &r.ColdReason, &r.SponsorLevel,
+			&r.BoardReason, &r.QualityLatched, &r.QualityRecoveryCount,
+			&r.QualityTriggerModels, &qGen, &r.AvailabilityLatched,
 			&r.CreatedAt, &r.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("扫描 monitor_overrides 失败 (PostgreSQL): %w", err)
 		}
+		r.QualityLastGeneration = uint64(qGen)
 		records = append(records, r)
 	}
 	if err := rows.Err(); err != nil {
@@ -2468,8 +2514,11 @@ func (s *PostgresStorage) ReplaceMonitorOverrides(records []MonitorOverrideRecor
 	if len(records) > 0 {
 		const insertSQL = `
 			INSERT INTO monitor_overrides (
-				provider, service, channel, model, board, cold_reason, sponsor_level, created_at, updated_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+				provider, service, channel, model, board, cold_reason, sponsor_level,
+				board_reason, quality_latched, quality_recovery_count,
+				quality_trigger_models, quality_last_generation, availability_latched,
+				created_at, updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		`
 		now := time.Now().Unix()
 		for _, r := range records {
@@ -2485,7 +2534,10 @@ func (s *PostgresStorage) ReplaceMonitorOverrides(records []MonitorOverrideRecor
 
 			if _, err := tx.Exec(ctx, insertSQL,
 				r.Key.Provider, r.Key.Service, r.Key.Channel, r.Key.Model,
-				r.Board, r.ColdReason, r.SponsorLevel, createdAt, updatedAt,
+				r.Board, r.ColdReason, r.SponsorLevel,
+				r.BoardReason, r.QualityLatched, r.QualityRecoveryCount,
+				r.QualityTriggerModels, int64(r.QualityLastGeneration), r.AvailabilityLatched,
+				createdAt, updatedAt,
 			); err != nil {
 				return fmt.Errorf("写入 monitor_overrides 失败 (PostgreSQL): %w", err)
 			}

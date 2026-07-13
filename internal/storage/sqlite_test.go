@@ -892,3 +892,96 @@ func TestBackfillRejectsAmbiguousMapping(t *testing.T) {
 	}
 	// and it must NOT have written anything
 }
+
+// openStoreAt 在给定路径打开一个真实 *SQLiteStorage 并跑完 Init（含迁移），
+// 用于对预置的旧版 schema 做迁移测试（newTestStore 用随机临时路径、无法预置）。
+func openStoreAt(t *testing.T, path string) *SQLiteStorage {
+	t.Helper()
+	store, err := NewSQLiteStorage(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteStorage: %v", err)
+	}
+	if err := store.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return store
+}
+
+func TestSQLite_MonitorOverride_QualityFieldsRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	rec := MonitorOverrideRecord{
+		Key:                   MonitorKey{Provider: "Acme", Service: "cc", Channel: "Acme-CC", Model: "claude-opus"},
+		Board:                 "secondary",
+		BoardReason:           "quality_hardfail",
+		QualityLatched:        true,
+		QualityRecoveryCount:  2,
+		QualityTriggerModels:  "claude-opus,claude-sonnet",
+		QualityLastGeneration: 42,
+		AvailabilityLatched:   false,
+	}
+	if err := s.ReplaceMonitorOverrides([]MonitorOverrideRecord{rec}); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	got, err := s.ListMonitorOverrides()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	g := got[0]
+	if g.BoardReason != "quality_hardfail" || !g.QualityLatched || g.QualityRecoveryCount != 2 ||
+		g.QualityTriggerModels != "claude-opus,claude-sonnet" || g.QualityLastGeneration != 42 || g.AvailabilityLatched {
+		t.Fatalf("round-trip mismatch: %+v", g)
+	}
+}
+
+func TestSQLite_OverrideMigration_AddsColumnsIdempotentAndBackfills(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mig.db")
+	// build the OLD (pre-feature) schema by hand, insert legacy rows
+	raw, err := sql.Open("sqlite", "file:"+path+"?_journal_mode=WAL")
+	if err != nil {
+		t.Fatalf("open raw: %v", err)
+	}
+	mustExecRaw := func(q string) {
+		if _, err := raw.Exec(q); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExecRaw(`CREATE TABLE monitor_overrides (
+		provider TEXT NOT NULL, service TEXT NOT NULL, channel TEXT NOT NULL DEFAULT '',
+		model TEXT NOT NULL DEFAULT '', board TEXT NOT NULL DEFAULT '', cold_reason TEXT NOT NULL DEFAULT '',
+		sponsor_level TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+		PRIMARY KEY (provider, service, channel, model))`)
+	mustExecRaw(`INSERT INTO monitor_overrides VALUES ('Acme','cc','Acme-CC','m','secondary','','',1,1)`)
+	mustExecRaw(`INSERT INTO monitor_overrides VALUES ('Beta','cc','Beta-CC','m','cold','低可用率','',1,1)`)
+	raw.Close()
+
+	// open via the real storage path -> triggers migration + one-time backfill
+	s := openStoreAt(t, path)
+	got, err := s.ListMonitorOverrides()
+	if err != nil {
+		t.Fatalf("list after migration: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("legacy rows lost: %+v", got)
+	}
+	for _, r := range got {
+		switch r.Board {
+		case "secondary":
+			if !r.AvailabilityLatched {
+				t.Fatalf("secondary must backfill availability_latched=true: %+v", r)
+			}
+		case "cold":
+			if r.AvailabilityLatched {
+				t.Fatalf("cold must NOT be availability_latched: %+v", r)
+			}
+		}
+	}
+	// second open is idempotent (no duplicate-column error, backfill not re-run)
+	s2 := openStoreAt(t, path)
+	if _, err := s2.ListMonitorOverrides(); err != nil {
+		t.Fatalf("second init not idempotent: %v", err)
+	}
+}
