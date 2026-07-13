@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"monitor/internal/config"
+	"monitor/internal/rpdiag"
 	"monitor/internal/storage"
 )
 
@@ -1945,5 +1946,455 @@ func TestOverrideRecordMapping_QualityRoundTrip(t *testing.T) {
 	back := recordsToOverrides(recs)
 	if back[key] != ov {
 		t.Fatalf("round-trip mismatch: %+v != %+v", back[key], ov)
+	}
+}
+
+// ============================================================================
+// Task 6: 双闩锁（可用率 + 质量）复合评估测试。
+// fakeQuality 是 qualitySource 的测试替身；qsnap 构造一份 Fresh 快照，
+// 单通道按 canonical 三元组键（ScoreKey）落桶。
+// ============================================================================
+
+type fakeQuality struct {
+	snap rpdiag.QualitySnapshot
+	err  error
+}
+
+func (f fakeQuality) QualitySignals(context.Context) (rpdiag.QualitySnapshot, error) {
+	return f.snap, f.err
+}
+
+// qsnap 构造一份 Fresh=true 的质量快照，单通道信号按三元组落桶。
+func qsnap(gen uint64, provider, service, channel string, sig rpdiag.ChannelQualitySignal) rpdiag.QualitySnapshot {
+	return rpdiag.QualitySnapshot{
+		Generation: gen,
+		Fresh:      true,
+		ByBucket:   map[string]rpdiag.ChannelQualitySignal{rpdiag.ScoreKey(provider, service, channel): sig},
+	}
+}
+
+// 场景 1：hot + 可用率健康 + 质量 HardFail → secondary、BoardReason quality_hardfail、QualityLatched。
+func TestEvaluate_HardFail_MovesHotToSecondary(t *testing.T) {
+	store := newMockStorage()
+	key := storage.MonitorKey{Provider: "q1", Service: "cc", Channel: "vip"}
+	store.history[key] = makeRecords(1, 20) // 100% 健康
+	cfg := expiredAutoMoveCfg(config.ServiceConfig{Provider: "q1", Service: "cc", Channel: "vip", Board: "hot"})
+	svc := NewService(store, cfg)
+	svc.SetQualitySource(fakeQuality{snap: qsnap(1, "q1", "cc", "vip",
+		rpdiag.ChannelQualitySignal{State: rpdiag.QualityHardFail, TriggerModels: []string{"claude-opus"}})})
+	svc.Evaluate(context.Background())
+
+	ov, ok := svc.GetBoardOverride(key)
+	if !ok {
+		t.Fatal("expected override for quality hard-fail channel")
+	}
+	if ov.Board != "secondary" {
+		t.Errorf("board=%s, want secondary", ov.Board)
+	}
+	if ov.BoardReason != "quality_hardfail" {
+		t.Errorf("BoardReason=%q, want quality_hardfail", ov.BoardReason)
+	}
+	if !ov.QualityLatched {
+		t.Error("want QualityLatched=true")
+	}
+	if ov.QualityTriggerModels != "claude-opus" {
+		t.Errorf("QualityTriggerModels=%q, want claude-opus", ov.QualityTriggerModels)
+	}
+}
+
+// 场景 2：闩锁后需要 K 个代次互异的 Recovered 才升板。
+func TestEvaluate_RecoveryDebounce_NeedsKDistinctGenerations(t *testing.T) {
+	store := newMockStorage()
+	key := storage.MonitorKey{Provider: "q2", Service: "cc", Channel: "vip"}
+	store.history[key] = makeRecords(1, 20)
+	cfg := expiredAutoMoveCfg(config.ServiceConfig{Provider: "q2", Service: "cc", Channel: "vip", Board: "hot"})
+	svc := NewService(store, cfg)
+
+	// HardFail gen=5 建立闩锁
+	svc.SetQualitySource(fakeQuality{snap: qsnap(5, "q2", "cc", "vip",
+		rpdiag.ChannelQualitySignal{State: rpdiag.QualityHardFail, TriggerModels: []string{"m"}})})
+	svc.Evaluate(context.Background())
+	if ov, ok := svc.GetBoardOverride(key); !ok || ov.Board != "secondary" || !ov.QualityLatched {
+		t.Fatalf("hardfail 后应为闩锁 secondary，得到 ok=%v %+v", ok, ov)
+	}
+
+	// Recovered gen=6 → count 1，仍 secondary
+	svc.SetQualitySource(fakeQuality{snap: qsnap(6, "q2", "cc", "vip",
+		rpdiag.ChannelQualitySignal{State: rpdiag.QualityRecovered})})
+	svc.Evaluate(context.Background())
+	ov, ok := svc.GetBoardOverride(key)
+	if !ok || ov.Board != "secondary" {
+		t.Fatalf("gen6 应仍 secondary，得到 ok=%v %+v", ok, ov)
+	}
+	if ov.QualityRecoveryCount != 1 {
+		t.Fatalf("gen6 应 count=1，得到 %d", ov.QualityRecoveryCount)
+	}
+
+	// Recovered gen=6 同一代次 → count 保持 1
+	svc.SetQualitySource(fakeQuality{snap: qsnap(6, "q2", "cc", "vip",
+		rpdiag.ChannelQualitySignal{State: rpdiag.QualityRecovered})})
+	svc.Evaluate(context.Background())
+	ov, ok = svc.GetBoardOverride(key)
+	if !ok || ov.Board != "secondary" {
+		t.Fatalf("同代次应仍 secondary，得到 ok=%v %+v", ok, ov)
+	}
+	if ov.QualityRecoveryCount != 1 {
+		t.Fatalf("同代次不得重复计数，得到 count=%d", ov.QualityRecoveryCount)
+	}
+
+	// Recovered gen=7 → count 2 → 升板 hot（无 override）
+	svc.SetQualitySource(fakeQuality{snap: qsnap(7, "q2", "cc", "vip",
+		rpdiag.ChannelQualitySignal{State: rpdiag.QualityRecovered})})
+	svc.Evaluate(context.Background())
+	if ov, ok := svc.GetBoardOverride(key); ok {
+		t.Fatalf("debounce 达标应升板 hot（无 override），得到 %+v", ov)
+	}
+}
+
+// 场景 3：闩锁 secondary，Fresh=false → 板块与全部质量字段逐字节冻结。
+func TestEvaluate_FeedNotFresh_FreezesLatch(t *testing.T) {
+	store := newMockStorage()
+	key := storage.MonitorKey{Provider: "q3", Service: "cc", Channel: "vip"}
+	store.history[key] = makeRecords(1, 20)
+	cfg := expiredAutoMoveCfg(config.ServiceConfig{Provider: "q3", Service: "cc", Channel: "vip", Board: "hot"})
+	svc := NewService(store, cfg)
+	prior := MonitorOverride{
+		Board: "secondary", BoardReason: "quality_hardfail",
+		QualityLatched: true, QualityRecoveryCount: 1,
+		QualityTriggerModels: "claude-opus,claude-sonnet", QualityLastGeneration: 42,
+		AvailabilityLatched: false,
+	}
+	svc.SetOverrides(map[storage.MonitorKey]MonitorOverride{key: prior})
+	// Fresh=false → 冻结
+	svc.SetQualitySource(fakeQuality{snap: rpdiag.QualitySnapshot{Generation: 99, Fresh: false}})
+	svc.Evaluate(context.Background())
+
+	ov, ok := svc.GetBoardOverride(key)
+	if !ok {
+		t.Fatal("expected frozen override")
+	}
+	if ov != prior {
+		t.Fatalf("非新鲜信号必须逐字节冻结\n got %+v\nwant %+v", ov, prior)
+	}
+}
+
+// 场景 4：未注入 qualitySource → 已有闩锁保持 secondary（冻结而非升板）。
+func TestEvaluate_NilQualitySource_FreezesNotClears(t *testing.T) {
+	store := newMockStorage()
+	key := storage.MonitorKey{Provider: "q4", Service: "cc", Channel: "vip"}
+	store.history[key] = makeRecords(1, 20)
+	cfg := expiredAutoMoveCfg(config.ServiceConfig{Provider: "q4", Service: "cc", Channel: "vip", Board: "hot"})
+	svc := NewService(store, cfg)
+	svc.SetOverrides(map[storage.MonitorKey]MonitorOverride{key: {
+		Board: "secondary", BoardReason: "quality_hardfail",
+		QualityLatched: true, QualityTriggerModels: "m", QualityLastGeneration: 3,
+	}})
+	// 不调用 SetQualitySource → qualitySource==nil → 冻结
+	svc.Evaluate(context.Background())
+
+	ov, ok := svc.GetBoardOverride(key)
+	if !ok || ov.Board != "secondary" {
+		t.Fatalf("nil 源必须冻结闩锁为 secondary，得到 ok=%v %+v", ok, ov)
+	}
+	if !ov.QualityLatched || ov.BoardReason != "quality_hardfail" {
+		t.Fatalf("nil 源不得清除闩锁，得到 %+v", ov)
+	}
+}
+
+// 场景 5：52% 可用率自身应留 hot；质量短暂降板再恢复(>=K) → 板块回 hot
+// （可用率闩锁独立判定，绝不因质量降板被卡在 secondary）。
+func TestEvaluate_DualLatch_QualityDoesNotPolluteAvailability(t *testing.T) {
+	store := newMockStorage()
+	key := storage.MonitorKey{Provider: "q5", Service: "cc", Channel: "vip"}
+	ts := time.Now().UTC().Unix()
+	records := make([]*storage.ProbeRecord, 100)
+	for i := 0; i < 52; i++ {
+		records[i] = &storage.ProbeRecord{Status: 1, Timestamp: ts}
+	}
+	for i := 52; i < 100; i++ {
+		records[i] = &storage.ProbeRecord{Status: 0, Timestamp: ts}
+	}
+	store.history[key] = records
+	cfg := expiredAutoMoveCfg(config.ServiceConfig{Provider: "q5", Service: "cc", Channel: "vip", Board: "hot"})
+	svc := NewService(store, cfg)
+
+	// 基线：52% 无质量信号（nil 源）留 hot（自身可用率闩锁不闭合）。
+	svc.Evaluate(context.Background())
+	if _, ok := svc.GetBoardOverride(key); ok {
+		t.Fatal("52% 无质量信号应留 hot（无 override）")
+	}
+
+	// 质量 HardFail gen=1 → 仅质量降板 secondary；可用率闩锁必须仍 false。
+	svc.SetQualitySource(fakeQuality{snap: qsnap(1, "q5", "cc", "vip",
+		rpdiag.ChannelQualitySignal{State: rpdiag.QualityHardFail, TriggerModels: []string{"m"}})})
+	svc.Evaluate(context.Background())
+	ov, ok := svc.GetBoardOverride(key)
+	if !ok || ov.Board != "secondary" {
+		t.Fatalf("质量 hardfail 应降板，得到 ok=%v %+v", ok, ov)
+	}
+	if ov.AvailabilityLatched {
+		t.Fatal("52% 处可用率闩锁绝不能闭合（质量不得污染可用率闩锁）")
+	}
+
+	// Recovered gen=2（count 1）再 gen=3（count 2 → 升板）。
+	svc.SetQualitySource(fakeQuality{snap: qsnap(2, "q5", "cc", "vip", rpdiag.ChannelQualitySignal{State: rpdiag.QualityRecovered})})
+	svc.Evaluate(context.Background())
+	svc.SetQualitySource(fakeQuality{snap: qsnap(3, "q5", "cc", "vip", rpdiag.ChannelQualitySignal{State: rpdiag.QualityRecovered})})
+	svc.Evaluate(context.Background())
+
+	// 板块必须回 hot——可用率闩锁独立判定（52% 从未闭合它）。
+	if ov, ok := svc.GetBoardOverride(key); ok {
+		t.Fatalf("质量恢复 >=K 应回 hot（可用率闩锁独立），得到 %+v", ov)
+	}
+}
+
+// 场景 6：sticky cold 通道，质量 Recovered → 仍 cold（质量不解 cold）。
+func TestEvaluate_StickyCold_QualityDoesNotUnstick(t *testing.T) {
+	store := newMockStorage()
+	key := storage.MonitorKey{Provider: "q6", Service: "cc", Channel: "vip"}
+	store.history[key] = makeRecords(1, 20)
+	cfg := expiredAutoMoveCfg(config.ServiceConfig{Provider: "q6", Service: "cc", Channel: "vip", Board: "hot"})
+	svc := NewService(store, cfg)
+	svc.SetOverrides(map[storage.MonitorKey]MonitorOverride{key: {Board: "cold", ColdReason: "prior auto cold"}})
+	svc.SetQualitySource(fakeQuality{snap: qsnap(1, "q6", "cc", "vip", rpdiag.ChannelQualitySignal{State: rpdiag.QualityRecovered})})
+	svc.Evaluate(context.Background())
+
+	ov, ok := svc.GetBoardOverride(key)
+	if !ok || ov.Board != "cold" {
+		t.Fatalf("sticky cold 应持续（质量恢复不解 cold），得到 ok=%v %+v", ok, ov)
+	}
+}
+
+// 场景 7：auto_move_exempt 通道 + 质量 HardFail → 不移板。
+func TestEvaluate_AutoMoveExempt_SkipsQualityDemotion(t *testing.T) {
+	store := newMockStorage()
+	key := storage.MonitorKey{Provider: "q7", Service: "cc", Channel: "vip"}
+	store.history[key] = makeRecords(1, 20)
+	cfg := expiredAutoMoveCfg(config.ServiceConfig{Provider: "q7", Service: "cc", Channel: "vip", Board: "hot", AutoMoveExempt: true})
+	svc := NewService(store, cfg)
+	svc.SetQualitySource(fakeQuality{snap: qsnap(1, "q7", "cc", "vip",
+		rpdiag.ChannelQualitySignal{State: rpdiag.QualityHardFail, TriggerModels: []string{"m"}})})
+	svc.Evaluate(context.Background())
+
+	if _, ok := svc.GetBoardOverride(key); ok {
+		t.Fatal("auto_move_exempt 应跳过质量降板（无 override）")
+	}
+}
+
+// 场景 8：auto_cold_exempt（仅冷板豁免）+ 质量 HardFail → 降板 secondary。
+func TestEvaluate_AutoColdExempt_StillQualitySecondary(t *testing.T) {
+	store := newMockStorage()
+	key := storage.MonitorKey{Provider: "q8", Service: "cc", Channel: "vip"}
+	store.history[key] = makeRecords(1, 20)
+	cfg := expiredAutoMoveCfg(config.ServiceConfig{Provider: "q8", Service: "cc", Channel: "vip", Board: "hot", AutoColdExempt: true})
+	svc := NewService(store, cfg)
+	svc.SetQualitySource(fakeQuality{snap: qsnap(1, "q8", "cc", "vip",
+		rpdiag.ChannelQualitySignal{State: rpdiag.QualityHardFail, TriggerModels: []string{"m"}})})
+	svc.Evaluate(context.Background())
+
+	ov, ok := svc.GetBoardOverride(key)
+	if !ok || ov.Board != "secondary" {
+		t.Fatalf("auto_cold_exempt + 质量 hardfail 应降板 secondary，得到 ok=%v %+v", ok, ov)
+	}
+	if ov.BoardReason != "quality_hardfail" {
+		t.Errorf("BoardReason=%q, want quality_hardfail", ov.BoardReason)
+	}
+}
+
+// 场景 9：configBoard=secondary + 质量 HardFail → 保持 secondary 且 BoardReason ""
+// （已在备板，质量未造成实际移板，不作虚假"因质量移板"声明）。
+func TestEvaluate_ConfigSecondary_NoQualityOverride(t *testing.T) {
+	store := newMockStorage()
+	key := storage.MonitorKey{Provider: "q9", Service: "cc", Channel: "vip"}
+	store.history[key] = makeRecords(1, 20)
+	cfg := expiredAutoMoveCfg(config.ServiceConfig{Provider: "q9", Service: "cc", Channel: "vip", Board: "secondary"})
+	svc := NewService(store, cfg)
+	svc.SetQualitySource(fakeQuality{snap: qsnap(1, "q9", "cc", "vip",
+		rpdiag.ChannelQualitySignal{State: rpdiag.QualityHardFail, TriggerModels: []string{"m"}})})
+	svc.Evaluate(context.Background())
+
+	ov, ok := svc.GetBoardOverride(key)
+	if ok && ov.BoardReason != "" {
+		t.Fatalf("config secondary + 质量不得声明质量移板，BoardReason=%q", ov.BoardReason)
+	}
+	if ok && ov.Board != "secondary" {
+		t.Fatalf("config secondary 必须保持 secondary，得到 %s", ov.Board)
+	}
+}
+
+// 场景 10：HardFail→Recovered(count1)→Unknown(count 保持1，代次推进)→Recovered(count2→升板)。
+func TestEvaluate_Recovered_UnknownDoesNotConsumeCount(t *testing.T) {
+	store := newMockStorage()
+	key := storage.MonitorKey{Provider: "q10", Service: "cc", Channel: "vip"}
+	store.history[key] = makeRecords(1, 20)
+	cfg := expiredAutoMoveCfg(config.ServiceConfig{Provider: "q10", Service: "cc", Channel: "vip", Board: "hot"})
+	svc := NewService(store, cfg)
+
+	svc.SetQualitySource(fakeQuality{snap: qsnap(10, "q10", "cc", "vip",
+		rpdiag.ChannelQualitySignal{State: rpdiag.QualityHardFail, TriggerModels: []string{"m"}})})
+	svc.Evaluate(context.Background())
+
+	svc.SetQualitySource(fakeQuality{snap: qsnap(11, "q10", "cc", "vip", rpdiag.ChannelQualitySignal{State: rpdiag.QualityRecovered})})
+	svc.Evaluate(context.Background())
+	if ov, _ := svc.GetBoardOverride(key); ov.QualityRecoveryCount != 1 {
+		t.Fatalf("首个 Recovered 应 count=1，得到 %d", ov.QualityRecoveryCount)
+	}
+
+	// Unknown 必须保持：不动计数、不清闩锁、推进代次。
+	svc.SetQualitySource(fakeQuality{snap: qsnap(12, "q10", "cc", "vip", rpdiag.ChannelQualitySignal{State: rpdiag.QualityUnknown})})
+	svc.Evaluate(context.Background())
+	ov, ok := svc.GetBoardOverride(key)
+	if !ok || ov.Board != "secondary" {
+		t.Fatalf("Unknown 应保持闩锁 secondary，得到 ok=%v %+v", ok, ov)
+	}
+	if ov.QualityRecoveryCount != 1 {
+		t.Fatalf("Unknown 不得消耗计数，得到 %d", ov.QualityRecoveryCount)
+	}
+	if ov.QualityLastGeneration != 12 {
+		t.Fatalf("Unknown 应推进代次到 12，得到 %d", ov.QualityLastGeneration)
+	}
+
+	// 新代次 Recovered → count 2 → 升板。
+	svc.SetQualitySource(fakeQuality{snap: qsnap(13, "q10", "cc", "vip", rpdiag.ChannelQualitySignal{State: rpdiag.QualityRecovered})})
+	svc.Evaluate(context.Background())
+	if ov, ok := svc.GetBoardOverride(key); ok {
+		t.Fatalf("第二个代次互异的 Recovered 应升板 hot，得到 %+v", ov)
+	}
+}
+
+// 场景 11：质量 HardFail secondary + 赞助到期 → 二者共存（board secondary、
+// BoardReason quality_hardfail、SponsorLevel 降级）。
+func TestEvaluate_HardFailAndSponsorExpiry_MergeNotClobber(t *testing.T) {
+	store := newMockStorage()
+	key := storage.MonitorKey{Provider: "q11", Service: "cc", Channel: "vip"}
+	store.history[key] = makeRecords(1, 20) // 健康：板块移动纯由质量驱动
+	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	cfg := expiredAutoMoveCfg(config.ServiceConfig{
+		Provider: "q11", Service: "cc", Channel: "vip", Board: "hot",
+		SponsorLevel: config.SponsorLevelBackbone, ExpiresAt: yesterday,
+	})
+	svc := NewService(store, cfg)
+	svc.SetQualitySource(fakeQuality{snap: qsnap(1, "q11", "cc", "vip",
+		rpdiag.ChannelQualitySignal{State: rpdiag.QualityHardFail, TriggerModels: []string{"claude-opus"}})})
+	svc.Evaluate(context.Background())
+
+	ov, ok := svc.GetBoardOverride(key)
+	if !ok {
+		t.Fatal("expected override")
+	}
+	if ov.Board != "secondary" {
+		t.Errorf("board=%s, want secondary", ov.Board)
+	}
+	if ov.BoardReason != "quality_hardfail" {
+		t.Errorf("BoardReason=%q, want quality_hardfail", ov.BoardReason)
+	}
+	if !ov.QualityLatched {
+		t.Error("want QualityLatched=true")
+	}
+	if ov.SponsorLevel != config.SponsorLevelPulse {
+		t.Errorf("SponsorLevel=%s, want pulse", ov.SponsorLevel)
+	}
+}
+
+// 场景 12：历史查询失败 → 冻结可用率但仍应用质量决策（fresh HardFail 把 hot 降板 secondary）。
+func TestEvaluate_HistoryQueryFails_FreezesAvailabilityButAppliesQuality(t *testing.T) {
+	store := newMockStorage()
+	store.batchErr = errors.New("db unavailable")
+	key := storage.MonitorKey{Provider: "q12", Service: "cc", Channel: "vip"}
+	cfg := expiredAutoMoveCfg(config.ServiceConfig{Provider: "q12", Service: "cc", Channel: "vip", Board: "hot"})
+	svc := NewService(store, cfg)
+	svc.SetQualitySource(fakeQuality{snap: qsnap(1, "q12", "cc", "vip",
+		rpdiag.ChannelQualitySignal{State: rpdiag.QualityHardFail, TriggerModels: []string{"m"}})})
+	svc.Evaluate(context.Background())
+
+	ov, ok := svc.GetBoardOverride(key)
+	if !ok {
+		t.Fatal("DB 失败仍应应用质量降板")
+	}
+	if ov.Board != "secondary" {
+		t.Errorf("board=%s, want secondary（质量在可用率冻结时仍能上限压 secondary）", ov.Board)
+	}
+	if ov.BoardReason != "quality_hardfail" || !ov.QualityLatched {
+		t.Errorf("DB 失败时质量闩锁必须应用，得到 %+v", ov)
+	}
+}
+
+// ============================================================================
+// 代码质量复审修复（Fix 1 + Fix 2）回归测试。
+// ============================================================================
+
+// Fix 1：computeQualityLatch 冻结时必须逐字节沿用 prev.BoardReason，绝不"发明"
+// reason。config-secondary 通道被持久化为 QualityLatched=true 且 BoardReason=""，
+// 冻结必须保持 ""（不能凭 QualityLatched 反推 "quality_hardfail"）。
+func TestComputeQualityLatch_FreezeReasonVerbatim(t *testing.T) {
+	prev := MonitorOverride{Board: "secondary", QualityLatched: true, BoardReason: ""}
+	d := computeQualityLatch(prev, false, 7, rpdiag.ChannelQualitySignal{})
+	if d.reason != "" {
+		t.Fatalf("冻结不得发明 reason（应逐字节沿用 prev.BoardReason=%q），得到 %q", prev.BoardReason, d.reason)
+	}
+	if !d.latched {
+		t.Fatal("冻结应保持闩锁")
+	}
+
+	// 反向：prev 带 reason 时冻结必须原样保留。
+	prev2 := MonitorOverride{Board: "secondary", QualityLatched: true, BoardReason: "quality_hardfail"}
+	if d2 := computeQualityLatch(prev2, false, 7, rpdiag.ChannelQualitySignal{}); d2.reason != "quality_hardfail" {
+		t.Fatalf("冻结应保留 prev.BoardReason=quality_hardfail，得到 %q", d2.reason)
+	}
+}
+
+// Fix 2：config-secondary 通道 + 历史查询失败 + fresh HardFail →
+// 冻结须对齐配置锚点 secondary，reason 保持 ""（不作虚假质量移板声明），QualityLatched=true。
+func TestEvaluate_ConfigSecondary_HistoryFails_FreezesToAnchorNoReason(t *testing.T) {
+	store := newMockStorage()
+	store.batchErr = errors.New("db unavailable")
+	key := storage.MonitorKey{Provider: "fs1", Service: "cc", Channel: "vip"}
+	cfg := expiredAutoMoveCfg(config.ServiceConfig{Provider: "fs1", Service: "cc", Channel: "vip", Board: "secondary"})
+	svc := NewService(store, cfg)
+	svc.SetQualitySource(fakeQuality{snap: qsnap(1, "fs1", "cc", "vip",
+		rpdiag.ChannelQualitySignal{State: rpdiag.QualityHardFail, TriggerModels: []string{"m"}})})
+	svc.Evaluate(context.Background())
+
+	ov, ok := svc.GetBoardOverride(key)
+	if !ok {
+		t.Fatal("config-secondary + DB 失败 + 质量闩锁应产生冻结 override")
+	}
+	if ov.Board != "secondary" {
+		t.Errorf("board=%s, want secondary（对齐配置锚点）", ov.Board)
+	}
+	if ov.BoardReason != "" {
+		t.Errorf("config-secondary 不得声明质量移板，BoardReason=%q want \"\"", ov.BoardReason)
+	}
+	if !ov.QualityLatched {
+		t.Error("want QualityLatched=true")
+	}
+}
+
+// Fix 2：auto_cold_exempt 通道其 prev override 为 cold + 历史查询失败 + fresh HardFail →
+// 冻结须对齐配置锚点 hot（而非沿用 prev 的 stale cold），质量把上限压到 secondary（不是 cold）。
+func TestEvaluate_AutoColdExemptStaleCold_HistoryFails_FreezesToSecondaryNotCold(t *testing.T) {
+	store := newMockStorage()
+	store.batchErr = errors.New("db unavailable")
+	key := storage.MonitorKey{Provider: "fs2", Service: "cc", Channel: "vip"}
+	cfg := expiredAutoMoveCfg(config.ServiceConfig{Provider: "fs2", Service: "cc", Channel: "vip", Board: "hot", AutoColdExempt: true})
+	svc := NewService(store, cfg)
+	// prev override 遗留 cold（auto_cold_exempt 会打破 sticky，进入候选正常评估）。
+	svc.SetOverrides(map[storage.MonitorKey]MonitorOverride{key: {Board: "cold", ColdReason: "prior auto cold"}})
+	svc.SetQualitySource(fakeQuality{snap: qsnap(1, "fs2", "cc", "vip",
+		rpdiag.ChannelQualitySignal{State: rpdiag.QualityHardFail, TriggerModels: []string{"m"}})})
+	svc.Evaluate(context.Background())
+
+	ov, ok := svc.GetBoardOverride(key)
+	if !ok {
+		t.Fatal("auto_cold_exempt + DB 失败 + 质量闩锁应产生冻结 override")
+	}
+	if ov.Board != "secondary" {
+		t.Errorf("board=%s, want secondary（对齐锚点 hot 后被质量压到 secondary，绝不沿用 stale cold）", ov.Board)
+	}
+	if ov.ColdReason != "" {
+		t.Errorf("冻结不得残留 ColdReason，得到 %q", ov.ColdReason)
+	}
+	if !ov.QualityLatched {
+		t.Error("want QualityLatched=true")
 	}
 }
