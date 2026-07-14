@@ -40,7 +40,7 @@ func (h *Handler) queryAndSerialize(ctx context.Context, period, align string, t
 	h.cfgMu.RUnlock()
 
 	// 应用自动移板 override（运行时覆盖 board/sponsor_level 字段，不修改配置；
-	// sponsor_level 覆盖会连带重算 annotations，见 automove.ApplyOverrides 注释）
+	// board 或 sponsor 任一覆盖会连带重算 annotations，见 automove.ApplyOverrides 注释）
 	monitors = h.applyBoardOverrides(monitors, annotationRules, globalInterval)
 
 	// 构建 slug -> provider 映射（slug作为provider的路由别名）
