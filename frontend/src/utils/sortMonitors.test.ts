@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { sortMonitors } from './sortMonitors';
-import type { ProcessedMonitorData, SortConfig } from '../types';
+import { sortMonitors, sortMonitorsWithPinning } from './sortMonitors';
+import type { ProcessedMonitorData, SortConfig, SponsorPinConfig } from '../types';
 
 // 创建测试用的 mock 数据
 function createMockData(overrides: Partial<ProcessedMonitorData>): ProcessedMonitorData {
@@ -637,3 +637,49 @@ describe('sortMonitors', () => {
     });
   });
 });
+
+describe('sortMonitorsWithPinning 质量移板排除', () => {
+  it('携带负向质量移板注解的赞助通道不参与置顶', () => {
+    const pinConfig: SponsorPinConfig = {
+      enabled: true,
+      max_pinned: 3,
+      min_uptime: 90,
+      min_level: 'pulse',
+    };
+    const clean = createPinCandidate('clean', []);
+    const demoted = createPinCandidate('demoted', [
+      {
+        id: 'quality_hardfail',
+        family: 'negative',
+        label: '质量移板',
+        priority: -1,
+        origin: 'system',
+      },
+    ]);
+    const sortConfig: SortConfig = { key: 'providerName', direction: 'asc' };
+
+    const result = sortMonitorsWithPinning([clean, demoted], sortConfig, pinConfig, true);
+    const cleanRow = result.find((d) => d.id === 'clean');
+    const demotedRow = result.find((d) => d.id === 'demoted');
+
+    // clean 满足全部置顶条件应被置顶；demoted 仅因携带负向注解被排除
+    // （不是两者都恰好落空），从而证明 meetsPinCriteria 的负向注解排除确实生效
+    expect(cleanRow?.pinned).toBe(true);
+    expect(demotedRow?.pinned).toBe(false);
+  });
+});
+
+/** 构造满足置顶其余条件（赞助级别/可用率）的候选项，annotations 单独可控 */
+function createPinCandidate(
+  id: string,
+  annotations: ProcessedMonitorData['annotations']
+): ProcessedMonitorData {
+  return createMockData({
+    id,
+    providerId: id,
+    sponsorLevel: 'beacon',
+    uptime: 99,
+    lastCheckLatency: 100,
+    annotations,
+  });
+}
