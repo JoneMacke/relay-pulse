@@ -2450,3 +2450,45 @@ func TestEvaluate_AutoColdExemptStaleCold_HistoryFails_FreezesToSecondaryNotCold
 		t.Error("want QualityLatched=true")
 	}
 }
+
+func hasAnn(items []config.Annotation, id string) bool {
+	for _, a := range items {
+		if a.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func TestApplyOverrideToMonitor_QualityBadgeWithoutSponsor(t *testing.T) {
+	m := &config.ServiceConfig{Provider: "p", Service: "cc", Channel: "c"}
+	ov := MonitorOverride{Board: "secondary", BoardReason: "quality_hardfail", QualityTriggerModels: "opus-4-8"}
+	applyOverrideToMonitor(m, ov, nil, 0)
+	if m.BoardReason != "quality_hardfail" {
+		t.Fatalf("BoardReason not injected: %q", m.BoardReason)
+	}
+	if !hasAnn(m.Annotations, "quality_hardfail") {
+		t.Error("expected quality_hardfail annotation on non-sponsor channel (recompute timing)")
+	}
+}
+
+func TestApplyOverrideToMonitor_BoardAndSponsor_RecomputesWithQuality(t *testing.T) {
+	m := &config.ServiceConfig{Provider: "p", Service: "cc", Channel: "c"}
+	ov := MonitorOverride{Board: "secondary", BoardReason: "quality_hardfail", QualityTriggerModels: "opus-4-8", SponsorLevel: config.SponsorLevelPulse}
+	applyOverrideToMonitor(m, ov, nil, 0)
+	if !hasAnn(m.Annotations, "quality_hardfail") {
+		t.Error("expected quality annotation when both board+sponsor overridden")
+	}
+	if !hasAnn(m.Annotations, "sponsor_pulse") {
+		t.Error("expected sponsor annotation recomputed with new level")
+	}
+}
+
+func TestApplyOverrideToMonitor_EmptyOverride_NoRecompute(t *testing.T) {
+	m := &config.ServiceConfig{Provider: "p", Service: "cc", Channel: "c",
+		Annotations: []config.Annotation{{ID: "sentinel"}}}
+	applyOverrideToMonitor(m, MonitorOverride{}, nil, 0)
+	if !hasAnn(m.Annotations, "sentinel") {
+		t.Error("empty override must not recompute/clobber annotations")
+	}
+}

@@ -293,8 +293,9 @@ func (s *Service) IsCold(key storage.MonitorKey) bool {
 
 // ApplyOverrides 将 override map 应用到监测项列表（静态函数，不依赖 Service 实例）。
 // exact match 作用于 root 监测项；PSC 回退仅作用于有 parent 的子模型。
-// Board/ColdReason/SponsorLevel 字段会被覆盖；SponsorLevel 覆盖后会用 annotationRules/globalInterval
-// 重算 annotations（否则 sponsor_* 徽标会停留在 config 热加载时算好的旧等级，与覆盖后的事实字段不一致）。
+// Board/ColdReason/SponsorLevel 字段会被覆盖；board 或 sponsor 任一被覆盖时会用
+// annotationRules/globalInterval 重算 annotations（否则 sponsor_* 徽标会停留在 config 热加载时
+// 算好的旧等级、质量移板徽章不会出现，均与覆盖后的事实字段不一致）。
 func ApplyOverrides(monitors []config.ServiceConfig, overrides map[storage.MonitorKey]MonitorOverride, annotationRules []config.AnnotationRule, globalInterval time.Duration) []config.ServiceConfig {
 	if len(overrides) == 0 {
 		return monitors
@@ -355,8 +356,11 @@ func applyOverrideToMonitor(m *config.ServiceConfig, ov MonitorOverride, annotat
 	}
 	if ov.SponsorLevel != "" {
 		m.SponsorLevel = ov.SponsorLevel
-		// 必须在 SponsorLevel 覆盖后（同一个 if 块内）重算，确保用的是覆盖后的有效等级，
-		// 否则 sponsor_* 徽标会用降级前的旧等级重算出同样错误的结果。
+	}
+	// board 或 sponsor 任一覆盖后，用覆盖后的有效字段（含 BoardReason 与 SponsorLevel）
+	// 重算完整注解集：sponsor 徽标按新等级、质量移板徽章按 BoardReason。此处必在两个
+	// 覆盖块之后，确保 ResolveAnnotations 读到的是覆盖后的 m。空 override 不重算（幂等省开销）。
+	if ov.Board != "" || ov.SponsorLevel != "" {
 		m.Annotations = config.ResolveAnnotations(*m, annotationRules, globalInterval)
 	}
 }
