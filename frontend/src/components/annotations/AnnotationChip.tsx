@@ -107,6 +107,23 @@ function RiskIcon() {
   );
 }
 
+/** 质量移板 — 向下箭头落入板层（黄色，negative 家族，形状区别于风险三角）*/
+function QualityDemoteIcon() {
+  return (
+    <svg className="w-4 h-4" viewBox="0 0 24 24" aria-hidden="true" focusable="false" data-icon="quality-demote">
+      <path
+        d="M12,3 L12,12 M8,8.5 L12,12.5 L16,8.5"
+        fill="none"
+        stroke="hsl(var(--warning))"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <rect x="4" y="16" width="16" height="4" rx="1" className="fill-warning/70" />
+    </svg>
+  );
+}
+
 /** 官方 API Key — 盾牌+勾号（蓝色，与旧 variant=info 一致）*/
 function OfficialKeyIcon() {
   return (
@@ -205,6 +222,8 @@ function renderIcon(annotation: Annotation): ReactNode {
       }
       return <FrequencyIcon opacity={getFrequencyOpacity(ms)} />;
     }
+    case 'quality_hardfail':
+      return <QualityDemoteIcon />;
   }
 
   // 规则注解：根据 icon 字段匹配
