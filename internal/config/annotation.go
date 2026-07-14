@@ -202,6 +202,27 @@ func deriveSystemAnnotations(task ServiceConfig, _ time.Duration) []Annotation {
 		result = append(result, ann)
 	}
 
+	// 质量移板：automove 因某活跃评测模型近 3 次 hard-fail 把通道移入备板时，
+	// 运行时把机器码注入 task.BoardReason（见 automove.applyOverrideToMonitor）。
+	// 派生一个 negative 徽章常驻显示原因，与风险同区、priority 低于风险排其后。
+	// 文案与前端 StatusTable ChannelCell 的 table.channelTooltip.qualityHardFail
+	// 中文原文逐字一致（无模型名时走 fallback——BoardReason 非空但 models 可空）。
+	if task.BoardReason == "quality_hardfail" {
+		tooltip := "近3次评测均未取得可评分响应，已暂移备用板"
+		if models := strings.TrimSpace(task.BoardReasonModels); models != "" {
+			tooltip = models + " 近3次评测均未取得可评分响应，已暂移备用板"
+		}
+		result = append(result, Annotation{
+			ID:       "quality_hardfail",
+			Family:   AnnotationFamilyNegative,
+			Icon:     "quality-demote",
+			Label:    "质量移板",
+			Tooltip:  tooltip,
+			Priority: 5,
+			Origin:   "system",
+		})
+	}
+
 	// 监测间隔：始终标注当前通道的监测间隔
 	if task.IntervalDuration > 0 {
 		result = append(result, Annotation{
