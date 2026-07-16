@@ -24,6 +24,7 @@ const AGREEMENT_CLAUSE_KEYS = [
   'clausePaid',
   'clauseApiKey',
   'clauseQuality',
+  'clauseNoCheat',
   'clauseLegit',
   'clauseNoEndorse',
 ] as const;

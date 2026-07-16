@@ -142,10 +142,44 @@ describe('ConfirmStep 摘要显示（step3）', () => {
     expect(html()).toContain('脉冲链路（pulse）');
   });
 
-  it('入驻须知 5 条逐条勾选渲染', () => {
+  it('入驻须知 6 条逐条勾选渲染', () => {
     const out = html();
     const checkboxCount = (out.match(/type="checkbox"/g) ?? []).length;
-    expect(checkboxCount).toBeGreaterThanOrEqual(5);
+    expect(checkboxCount).toBeGreaterThanOrEqual(6);
+  });
+
+  it('第 6 条「禁止监测作弊」条款渲染出来', () => {
+    expect(html()).toContain('针对平台的可用性监测或质量检测探针作弊');
+  });
+
+  it('反作弊条为必勾项：仅勾旧 5 条仍被门控，勾满 6 条才放行', () => {
+    const AGREEMENT_KEYS = [
+      'clausePaid', 'clauseApiKey', 'clauseQuality',
+      'clauseNoCheat', 'clauseLegit', 'clauseNoEndorse',
+    ] as const;
+    const HINT = '请勾选全部要点后再提交';
+    const renderWith = (checked: Record<string, boolean>) =>
+      renderHTML(
+        <ConfirmStep
+          formData={baseFormData}
+          updateField={updateField}
+          submitResult={null}
+          isSubmitting={false}
+          testPassedAt={null}
+          proofExpiresAt={null}
+          checkedClauses={checked}
+          onToggleClause={noop}
+          onSubmit={noop}
+          onBack={noop}
+          onReset={noop}
+        />,
+      );
+    const exceptNoCheat = Object.fromEntries(
+      AGREEMENT_KEYS.filter((k) => k !== 'clauseNoCheat').map((k) => [k, true]),
+    );
+    const all = Object.fromEntries(AGREEMENT_KEYS.map((k) => [k, true]));
+    expect(renderWith(exceptNoCheat)).toContain(HINT);
+    expect(renderWith(all)).not.toContain(HINT);
   });
 });
 
