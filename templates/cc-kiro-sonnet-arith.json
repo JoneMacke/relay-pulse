@@ -14,7 +14,7 @@
 		"stream": false,
 		"messages": [{
 			"role": "user",
-			"content": "What is the output of this Python code?\n\nprint({{ARITH_A}} + {{ARITH_B}})\n\nReply ONLY: {{EXPECTED_ANSWER}}"
+			"content": "{{PROMPT}}"
 		}]
 	},
 	"response": {
