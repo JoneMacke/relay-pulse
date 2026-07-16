@@ -207,7 +207,7 @@ type SubmitRequest struct {
 
 // AgreementVersion 标记当前《入驻须知与确认》(docs/user/sponsorship-agreement.md) 的生效版本。
 // 协议要点发生实质调整时 bump 此值，便于审计「用户当时同意的是哪一版」。
-const AgreementVersion = "2026-06-08"
+const AgreementVersion = "2026-07-16"
 
 // SubmitResponse 提交申请的响应
 type SubmitResponse struct {
